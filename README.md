@@ -242,96 +242,199 @@ cd gateway && cargo run
 
 ---
 
-### Phase 3 🔥 **立即推进（P0，预计 2-3 周）：数据融合第一块砖**
+### Phase 3 🔥 **立即推进（P0，预计 3-4 周）：自身功能完善**
 
-> 目标：**让"1 分钟发现"从口号变成事实**，值班员第一次真正觉得 MeridianOps 有用
+> 目标：**把 MeridianOps 自身功能做扎实**，不依赖外部系统对接，让平台自闭环可用
 
-- [ ] 🔗 **Eventide 告警接入**：
-  - gateway-config.toml 加 eventide 配置（base_url/token）
-  - 新建 `eventide_routes.rs`：GET `/api/alerts` 分页查询 / PATCH 确认 / POST 关闭（透传 Eventide）
-  - 全局告警 badge 接「未处理告警数」（MainLayout 右上角铃铛）
-- [ ] 🔗 **态势大屏填真数**：OverviewPage 告警分级卡片（firing/warning/resolved）+ 服务健康数（从 AxleOps）+ 最近告警列表从 Eventide 拉
-- [ ] 📊 **报表中心 MVP**：
-  - 新建 `report_routes.rs`：`GET /api/reports/monthly` 从 `audit_logs` + 告警数据生成 JSON
-  - 页面：告警分级统计图 + MTTR 统计 + 操作审计 TOP 10 + 导出 Excel（PDF 后续）
-- [ ] 🔗 **资产清单 MVP**：
-  - 迁移 `assets` / `business_systems` 表（主机/IP/业务系统/负责人/标签/环境）
-  - 资产 CRUD API + 页面替换 AssetsPage.vue mock
-  - 支持 **Excel 批量导入**（从行里老 CMDB 直接灌数据）
-- [ ] 🔍 **全局搜索 MVP**：
-  - `GET /api/search?q=` 搜资产（IP/主机名）+ 搜告警 + 搜用户
-  - 顶部搜索框回车 → 搜索结果页分 Tab 展示
+#### 🧭 个人工作台（Dashboard）—— 值班员首页
+- [ ] 后端：`GET /api/dashboard` 聚合接口（用户待办 + 最近审计 + 系统状态）
+- [ ] 前端：新建 `DashboardPage.vue`
+  - 快捷入口卡片：用户管理 / 角色 / 审计 / 系统设置
+  - 最近活动列表（从 audit_logs 拉最近 20 条）
+  - 系统状态概览（在线用户数 + 总用户数 + 今日操作数）
+- [ ] 路由：`/dashboard` 设为登录后默认跳转页
 
-**Phase 3 结束验收标准：** 值班员早上打开 MeridianOps，看到大屏红点数 = 昨夜未处理告警；搜某主机 IP，0.5 秒出来归属业务 + 负责人 + 最近告警。
+#### 📊 报表中心 MVP —— 给领导看成果
+- [ ] 后端：新建 `report_routes.rs`
+  - `GET /api/reports/overview`：平台使用概览（总用户数/登录次数/操作次数/按日统计）
+  - `GET /api/reports/audit-by-top`：审计操作 TOP 10（按用户/按类型）
+  - `GET /api/reports/login-stats`：登录统计（成功/失败次数/锁定次数）
+  - `GET /api/reports/export`：导出 Excel
+- [ ] 前端：新建 `ReportsPage.vue`
+  - 统计卡片：总用户 / 今日登录 / 今日操作 / 告警数（预留）
+  - 操作审计 TOP 10 表格
+  - 登录失败统计图表
+  - 导出 Excel 按钮
 
----
+#### 🔍 全局搜索 MVP —— 跨模块搜索
+- [ ] 后端：`GET /api/search?q=` 聚合搜索
+  - 搜用户（username/display_name/email）
+  - 搜角色（name/display_name）
+  - 搜部门（name）
+  - 搜审计日志（actor/action/target_id）
+  - 搜系统设置（setting_key）
+- [ ] 前端：顶部搜索框 → 回车跳搜索结果页（分 Tab 展示各组结果）
+- [ ] 新建 `SearchPage.vue` 搜索结果页
 
-### Phase 4 ⚡ **短期推进（P1，预计 4-6 周）：融合深度 + 体验升级**
+#### � 通知中心 MVP —— 站内信
+- [ ] 后端：新建 `notification_routes.rs`
+  - `GET /api/notifications`：当前用户通知列表（分页）
+  - `PUT /api/notifications/:id/read`：标记已读
+  - `PUT /api/notifications/read-all`：全部已读
+  - `POST /api/notifications`：创建通知（系统内部使用）
+  - 新建 `notifications` 表（id/user_id/type/title/content/is_read/created_at）
+- [ ] 前端：MainLayout 铃铛接真实数据
+  - 下拉显示最近 5 条通知 + 未读计数 badge
+  - 点击全部跳通知中心页
+  - 新建 `NotificationsPage.vue`：通知列表 + 已读/全部已读
+- [ ] 触发场景：登录成功/密码修改/用户创建/权限变更 → 自动生成通知
 
-> 目标：**让"5 分钟定位"成为可能**，值班员不用再切 5 个系统
+#### 🛡️ 合规补全（第一批）
+- [ ] 数据库：`users` 表加 `password_changed_at` + `must_change_password` 字段
+- [ ] 后端 auth.rs：密码过期校验（90 天）+ 首次登录强制改密拦截
+- [ ] 后端 main.rs：30 分钟无操作会话超时（JWT 过期 + 前端心跳判断）
+- [ ] 前端：密码过期/首次登录 → 强制跳改密页（无法跳过）
+- [ ] 迁移文件：`000009_add_password_expiry.sql`
 
-#### 数据融合深化
-- [ ] 告警详情上下文弹窗：
-  - 归属业务 / 负责人（从资产表）
-  - 关联服务 + 最近一次发布时间/人（从 AxleOps）
-  - 同一主机 1 小时内其他告警
-  - 快捷按钮：跳 ELK（按主机+时间窗拼 Kibana URL） / 跳指标图 / 开堡垒机
-- [ ] 外部系统 iframe 嵌入：ELK / AxleOps / Zabbix 深度操作在 MeridianOps 内用 iframe 无缝切换
-- [ ] 拓扑视图（最简版）：业务系统 → 主机两层拓扑图，告警主机高亮红点
-
-#### 智能分析 + 知识档案
-- [ ] 告警全闭环：`alerts` 状态机（firing → acknowledged → resolved）+ 处理人/处理时间/备注
-- [ ] MTTR/MTBF 自动计算 + 报表中心「按业务 TOP 10 MTTR」图表
-- [ ] 告警聚类折叠 UI：同一主机 5 分钟内的告警合并显示
-- [ ] 知识库 MVP：`knowledge_items` 表 + CRUD + 标签 + 全文检索 + 告警详情「关联知识」Tab（先按标签匹配）
-- [ ] 故障 → 知识一键沉淀：告警处理完毕后点「沉淀为知识」按钮自动填草稿
-
-#### 合规补充
-- [ ] 高危操作双人审批：用户删除/角色分配/系统配置修改 → 审批单 → 第二人批准后执行，审批单全留痕
-- [ ] 密码过期强制（90 天）+ 首次登录强制改密
-- [ ] 30 分钟无操作会话超时自动登出
-- [ ] 双因子登录（TOTP 可选：Google Authenticator / 行里统一认证）
-
-#### 自动化 + 体验
-- [ ] 作业剧本 MVP：5 个高频场景剧本（重启服务/清理磁盘/回滚/探活/配置同步）→ 调 AxleOps 执行
-- [ ] 告警详情 → 推荐剧本 → 一键执行
-- [ ] 个人工作台首页：待处理告警 + 待审批单 + 待办工单
-- [ ] 通知中心 MVP：站内信 + 飞书/钉钉/邮件 Webhook 配置
-
-**Phase 4 结束验收标准：** 一个告警弹出，值班员 5 分钟内能在同一个页面看到「这影响了哪个核心业务、负责人是谁、是不是刚刚发布导致的、以前怎么解决的、现在可以一键执行哪个剧本」—— 切其他系统次数 ≤ 1。
+**Phase 3 结束验收标准：** 值班员登录后看到个人工作台首页；能搜用户/审计/部门；能导出 Excel 报表；通知中心能收到操作提醒；密码过期会被强制改密。
 
 ---
 
-### Phase 5 🚧 **中期推进（P2，预计 2-3 个月）：智能化 + 自动化**
+### Phase 4 ⚡ **短期推进（P1，预计 4-6 周）：自身功能深化**
 
-> 目标：**让"10 分钟解决"不依赖老师傅**，新人也能按流程快速处理
+> 目标：让 MeridianOps 具备完整的「自我管理 + 知识沉淀 + 流程闭环」能力
+
+#### 📚 知识库 —— 知识沉淀 + 检索
+- [ ] 迁移：`knowledge_items` 表（id/title/category/tags/content/markdown/created_by/created_at/updated_at/version）
+- [ ] 后端：新建 `knowledge_routes.rs`
+  - CRUD：GET/POST/PUT/DELETE `/api/knowledge`
+  - 搜索：`GET /api/knowledge/search?q=` 全文检索
+  - 分类：`GET /api/knowledge/categories`
+  - 标签：`GET /api/knowledge/tags`
+- [ ] 前端：新建 `KnowledgePage.vue`
+  - 知识库列表（分类筛选 + 标签筛选 + 搜索）
+  - 富文本编辑器（Markdown）
+  - 知识详情页 + 版本历史
+- [ ] 种子数据：预置 10+ 条常见运维知识条目
+
+#### ⚡ 作业中心 —— 剧本库 + 执行
+- [ ] 迁移：`job_scripts` 表（id/name/description/category/steps_json/status/created_by/created_at）+ `job_executions` 表（id/script_id/triggered_by/params/status/result/started_at/finished_at）
+- [ ] 后端：完善 `job_routes.rs`
+  - 剧本 CRUD：GET/POST/PUT/DELETE `/api/jobs/scripts`
+  - 执行：POST `/api/jobs/scripts/:id/execute`（模拟执行 → 后续接 AxleOps）
+  - 执行历史：`GET /api/jobs/executions`
+- [ ] 前端：完善 `JobsPage.vue`
+  - 剧本列表 + 分类 + 状态
+  - 剧本详情 + 步骤编辑
+  - 执行按钮 + 执行日志
+  - 预置 5 个高频剧本：重启服务/清理磁盘/回滚/探活/配置同步
+
+#### 📋 工单系统 —— ITIL 流程
+- [ ] 迁移：`tickets` 表（id/title/type/priority/status/description/assignee/created_by/created_at/updated_at）+ `ticket_comments` 表
+- [ ] 后端：新建 `ticket_routes.rs`
+  - CRUD：GET/POST/PUT/DELETE `/api/tickets`
+  - 状态流转：POST `/api/tickets/:id/transition`（open → in_progress → resolved → closed）
+  - 指派：POST `/api/tickets/:id/assign`
+  - 评论：POST `/api/tickets/:id/comments`
+- [ ] 前端：完善 `TicketsPage.vue`
+  - 工单列表 + 状态看板
+  - 新建工单 + 编辑 + 详情
+  - 状态流转按钮 + 评论区
+
+#### ⚙️ 配置中心 —— Agent 配置管理
+- [ ] 迁移：`agent_configs` 表（id/config_key/config_value/agent/env/description/created_at/updated_at）+ `config_history` 表
+- [ ] 后端：完善 `config_routes.rs`
+  - CRUD：GET/POST/PUT/DELETE `/api/configs`
+  - 历史：`GET /api/configs/:key/history`
+  - 热更：POST `/api/configs/:key/reload`（模拟 → 后续接 Agent）
+- [ ] 前端：完善 `ConfigPage.vue`（替换 mock 数据）
+
+#### 🛡️ 合规补全（第二批）
+- [ ] 迁移：`approvals` 表（id/type/target_id/action/reason/status/requester/approver/created_at/approved_at）
+- [ ] 后端：审批中间件 `approval.rs`
+  - 高危操作（用户删除/角色分配/系统配置修改）→ 自动创建审批单 → 等待第二人批准
+  - `GET /api/approvals`：审批列表
+  - `POST /api/approvals/:id/approve`：批准
+  - `POST /api/approvals/:id/reject`：拒绝
+- [ ] 前端：审批页面 + 通知中心审批提醒
+- [ ] TOTP 双因子：`users` 表加 `totp_secret` + 绑定/验证流程
+
+**Phase 4 结束验收标准：** 知识库有 50+ 条；作业中心能执行剧本；工单能走完完整生命周期；高危操作必须双人审批。
+
+---
+
+### Phase 5 🚧 **中期推进（P2，预计 3-4 周）：剩余模块完善 + 融合准备**
+
+> 目标：完成所有自身功能模块，为对接外部系统做准备
+
+#### 📊 剩余模块完善
+- [ ] 态势中心 OverviewPage：接真实聚合 API（替换 mock 数据）
+- [ ] AIOps 诊断 AIOpsPage：接真实相似检索（基于审计/告警历史）
+- [ ] 日志中心 LogsPage：日志查询 UI（mock 数据 → 预留 ELK 接口）
+- [ ] 容器管理 ContainersPage：完善 mock 数据 + K8s 资源视图
+- [ ] DB 数据库 DatabasePage：数据库实例管理 + 连接测试
+- [ ] 费用中心 CostPage：成本统计数据模型 + 图表展示
+
+#### 📨 通知中心升级
+- [ ] 后端：Webhook 配置 API（`GET/POST /api/webhooks`）+ 站内信 + 邮件通知通道
+- [ ] 前端：Webhook 配置页（飞书/钉钉/邮件）
+
+#### 🔗 融合准备（为 Phase 6 铺路）
+- [ ] 后端：`system_routes.rs` 扩展（系统配置 + 健康检查接口）
+- [ ] 前端：系统状态监控页（已接入系统在线/离线状态）
+- [ ] 编写 Eventide / AxleOps / 优云 CMDB 对接 Adapter 骨架（mock 模式）
+
+**Phase 5 结束验收标准：** 所有 16 个功能模块全部可用（无空壳页面）；导航菜单无占位符。
+
+---
+
+### Phase 6 🌐 **融合对接（P3，预计 4-6 周）：接外部系统**
+
+> 目标：对接全行生态，实现 1-5-10 闭环
+
+#### 告警接入
+- [ ] Eventide 告警 API 对接：告警列表/详情/确认/关闭/分级统计
+- [ ] 告警 badge 接真实未处理数
+- [ ] 态势大屏告警卡片接真实数据
+
+#### 资产融合
+- [ ] 优云 CMDB API 对接：主机/业务系统/配置关系自动同步
+- [ ] 资产清单自动更新（+ Excel 手动导入兜底）
+
+#### 上游系统对接
+- [ ] 2oauth SSO 对接：登录认证 + 用户信息同步
+- [ ] 中国移动短信/邮件网关对接：告警/审批通知下发
+- [ ] 理想自动化批处理对接：作业执行通道
+- [ ] 优云 ITIL 工单对接：工单双向同步
+
+#### 深度融合
+- [ ] 告警详情上下文：归属业务 + 关联服务 + 发布历史
+- [ ] 拓扑视图：业务系统 → 主机两层拓扑（从 CMDB 自动构建）
+- [ ] 外部系统 iframe 嵌入：ELK / Eventide / AxleOps 深度操作无缝切换
+
+**Phase 6 结束验收标准：** 告警从 Eventide 实时同步；资产从 CMDB 自动更新；通知能通过短信/邮件发出；告警详情能看到归属业务 + 历史发布。
+
+---
+
+### Phase 7 � **长期展望（P4，预计 3 个月+）：智能化 + AI**
 
 #### 智能分析（真·AIOps）
-- [ ] 根因分析 RCA：拓扑 + 告警时序归因，高亮「最可能根因节点」+ 影响面拓扑图
-- [ ] 相似告警智能推荐知识：知识库 > 50 条后，用 TF-IDF / 向量相似度推 Top 3 历史方案
+- [ ] 根因分析 RCA：拓扑 + 告警时序归因，高亮「最可能根因节点」
+- [ ] 相似告警智能推荐知识：TF-IDF / 向量相似度推 Top 3 历史方案
 - [ ] 异常趋势检测：告警量 / MTTR 环比同比异常波动主动提醒
-- [ ] 报表中心升级：PDF 导出 + 邮件定时发送周报月报给行领导
+- [ ] 自动自愈：白名单告警触发自动执行剧本
+- [ ] 报表中心升级：PDF 导出 + 邮件定时发送周报月报
 
-#### 自动化
-- [ ] 自动自愈：白名单告警（磁盘满/进程挂/日志清理）触发自动执行剧本，结果回写通知
-- [ ] ITIL 工单系统：变更申请 → 审批 → 执行 → 验证 → 关闭 全流程，关联告警/资产/作业
-
-#### 融合能力
+#### 融合深化
 - [ ] 四层拓扑视图：网络层 → 主机层 → 应用层 → 业务层
-- [ ] 容器管理接 K8s API：集群状态 / Pod 列表 / 重启次数
-- [ ] 全链路追踪接入（Skywalking / Pinpoint）：服务调用链 + 慢查询
+- [ ] 容器管理接 K8s API：集群状态 / Pod 列表
+- [ ] 全链路追踪接入（Skywalking / Pinpoint）
 
-**Phase 5 结束验收标准：** 80% 的日常告警处理 ≤ 10 分钟；新人入职 1 周内能独立处理常见告警；自动自愈覆盖 50% 高频故障。
-
----
-
-### Phase 6 🔮 **长期展望（P3，预计 6 个月+）：AI + 成本优化**
-
-- [ ] AI 大模型运维助手：知识库 + 历史故障 + 资产数据喂向量库，聊天式问"这个告警怎么办""昨天核心支付系统 5xx 是什么原因"
-- [ ] 成本优化分析：费用中心 + 资源利用率，推荐缩容/降配/腾挪方案
-- [ ] 多数据中心/多地域统一视图切换
-- [ ] 移动门户 / 小程序：值班员手机看告警 + 审批 + 执行剧本
-- [ ] 高可用部署：Gateway 多实例 + Portal CDN + 主备切换
+#### AI + 成本优化
+- [ ] AI 大模型运维助手：聊天式问"这个告警怎么办""昨天 5xx 原因"
+- [ ] 成本优化分析：费用中心 + 资源利用率，推荐缩容方案
+- [ ] 多数据中心统一视图
+- [ ] 移动门户 / 小程序
 
 ---
 
@@ -409,9 +512,13 @@ Migrations 位于 `gateway/migrations/`，按文件名序号顺序执行：
 | 06 | 000006_seed_rbac_departments.sql | 3 内置角色 + 18 权限点 + 角色权限分配 + 根部门 + 用户回填 | ✅ |
 | 07 | 000007_add_login_lockout_fields.sql | users 加 failed_login_attempts + locked_until | ✅ |
 | 08 | 000008_create_system_settings.sql | 建 system_settings 表 + 密码策略/锁定参数种子 | ✅ |
-| 09 | _（下一个 Phase 3）_ | assets + business_systems | ⏳ Phase 3 |
-| 10 | _（下一个 Phase 3）_ | alerts 状态同步表 | ⏳ Phase 3 |
-| 11 | _（下一个 Phase 4）_ | knowledge_items + approvals | ⏳ Phase 4 |
+| 09 | 000009_add_password_expiry.sql | users 加 password_changed_at + must_change_password + totp_secret | ⏳ Phase 3 |
+| 10 | 000010_create_notifications.sql | 建 notifications 表 | ⏳ Phase 3 |
+| 11 | 000011_create_knowledge_items.sql | 建 knowledge_items 表 | ⏳ Phase 4 |
+| 12 | 000012_create_job_scripts.sql | 建 job_scripts + job_executions 表 | ⏳ Phase 4 |
+| 13 | 000013_create_tickets.sql | 建 tickets + ticket_comments 表 | ⏳ Phase 4 |
+| 14 | 000014_create_approvals.sql | 建 approvals 表（双人审批） | ⏳ Phase 4 |
+| 15 | 000015_create_agent_configs.sql | 建 agent_configs + config_history 表 | ⏳ Phase 4 |
 
 启动 Gateway 时 `sqlx::migrate!("./migrations").run(&pool)` 自动按顺序执行，幂等安全。
 
