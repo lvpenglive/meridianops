@@ -1,0 +1,36 @@
+# ===== Rust / Gateway =====
+gateway/target/
+gateway/Cargo.lock
+
+# ===== Vue / Portal =====
+portal/node_modules/
+portal/dist/
+portal/dist-ssr/
+portal/*.local
+
+# ===== 通用 =====
+*.log
+logs/
+node_modules/
+dist/
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ===== 环境配置 =====
+.env
+.env.local
+.env.*.local
+gateway/gateway-config.toml.local
+
+# ===== 系统临时文件 =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
