@@ -1,0 +1,58 @@
+# MeridianOps Gateway 配置文件
+# 复制此文件为 gateway-config.toml，填入实际部署环境的值
+# 敏感字段可通过环境变量覆盖（优先级高于配置文件）：
+#   MERIDIANOPS_DB_URL, MERIDIANOPS_JWT_SECRET, MERIDIANOPS_SERVER_BIND
+
+[server]
+bind = "0.0.0.0:8000"
+cors_origins = ["*"]
+
+# ===== 接入的下游系统（按需增加，MeridianOps Gateway 自动代理）=====
+# 每个系统配一个 [[systems]] 块，id 唯一
+# auth_type 支持：none / token / api_key / basic_auth / session
+
+[[systems]]
+id = "axleops"
+name = "AxleOps 服务管理"
+system_type = "service-mgmt"
+base_url = "http://axleops-admin:9000"
+auth_type = "session"
+status = "online"
+version = "v0.4.1"
+
+[[systems]]
+id = "eventide"
+name = "Eventide 告警中心"
+system_type = "alert-center"
+base_url = "http://eventide:8080"
+auth_type = "token"
+auth_token = "替换为 Eventide API Token"
+status = "online"
+version = "v0.3.0"
+
+# ===== 数据接入原则：Zabbix/Prometheus 仅通过 Eventide 间接接入，此处不直接配置 =====
+# 如需指标透传，可按需添加只读代理
+
+# [[systems]]
+# id = "elk"
+# name = "ELK 日志"
+# system_type = "logging"
+# base_url = "http://elk:5601"
+# auth_type = "basic_auth"
+# auth_username = "elastic"
+# auth_password = "changeme"
+# iframe_url = "http://elk:5601/app/kibana"
+
+[database]
+# 数据库连接串（敏感！生产环境用环境变量 MERIDIANOPS_DB_URL 覆盖）
+url = "mysql://root:REPLACE_ME@HOST:3306/meridianops"
+max_connections = 10
+min_connections = 1
+
+[auth]
+# JWT 签名密钥（敏感！生产环境必须用环境变量 MERIDIANOPS_JWT_SECRET 覆盖）
+jwt_secret = "REPLACE_WITH_A_LONG_RANDOM_STRING"
+token_ttl_hours = 24
+seed_username = "admin"
+seed_password = "CHANGE_ON_FIRST_LOGIN"
+enabled = true

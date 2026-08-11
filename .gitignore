@@ -27,6 +27,7 @@ dist/
 .env
 .env.local
 .env.*.local
+gateway/gateway-config.toml
 gateway/gateway-config.toml.local
 
 # ===== 系统临时文件 =====
