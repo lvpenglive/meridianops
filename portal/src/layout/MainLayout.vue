@@ -50,7 +50,7 @@
             <Expand v-else />
           </el-icon>
           <el-breadcrumb separator="/">
-            <el-breadcrumb-item :to="{ path: '/overview' }">首页</el-breadcrumb-item>
+            <el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item>
             <el-breadcrumb-item>{{ currentTitle }}</el-breadcrumb-item>
           </el-breadcrumb>
         </div>
@@ -114,6 +114,7 @@ type MenuGroup =
   | { type: 'sub'; title: string; icon: string; children: MenuItem[] }
 
 const allMenuGroups: MenuGroup[] = [
+  { type: 'item', path: '/dashboard', title: '个人工作台', icon: 'HomeFilled' },
   { type: 'item', path: '/overview', title: '态势中心', icon: 'Monitor' },
   {
     type: 'sub', title: '资产管理', icon: 'Server', children: [
@@ -181,6 +182,13 @@ onMounted(async () => {
     } catch {
       // 401 等错误由 request 拦截器统一处理
     }
+    // 启动会话 idle 计时（从 localStorage 恢复 sessionTimeoutMinutes）
+    userStore.startIdleTimer()
+    userStore.updateLastActivity()
+  }
+  // 密码过期强制跳改密页
+  if (userStore.passwordExpired && route.path !== '/profile') {
+    router.replace('/profile?forceChange=1')
   }
 })
 

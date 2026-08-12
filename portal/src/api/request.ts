@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 
 const TOKEN_KEY = 'meridianops_token'
 const USER_KEY = 'meridianops_user'
+const LAST_ACTIVITY_KEY = 'meridianops_last_activity'
 
 const request = axios.create({
   baseURL: '/api',
@@ -19,6 +20,8 @@ request.interceptors.request.use((config) => {
 
 request.interceptors.response.use(
   (response) => {
+    // 任何成功响应都刷新 lastActivity（用于 idle 计时）
+    localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()))
     // 后端统一响应：{ code: 0, data: ... } 成功；{ code: <non-zero>, message: "..." } 业务错误
     const body = response.data
     if (body && typeof body === 'object' && 'code' in body) {
@@ -46,7 +49,16 @@ request.interceptors.response.use(
       return Promise.reject(error)
     }
     if (status === 403) {
-      ElMessage.error(error.response?.data?.message || '无权限访问')
+      const msg = error.response?.data?.message || '无权限访问'
+      // 密码过期的 403 单独提示，引导用户去改密
+      if (msg.includes('密码已过期')) {
+        ElMessage.warning(msg)
+        if (window.location.pathname !== '/profile') {
+          window.location.href = '/profile?forceChange=1'
+        }
+      } else {
+        ElMessage.error(msg)
+      }
       return Promise.reject(error)
     }
     const msg = error.response?.data?.message || error.message || '请求失败'

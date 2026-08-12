@@ -84,6 +84,7 @@ pub struct UserInfo {
     pub department_id: Option<String>,
     pub enabled: bool,
     pub last_login_at: Option<String>,
+    pub password_changed_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -102,6 +103,7 @@ impl From<db::User> for UserInfo {
             department_id: u.department_id,
             enabled,
             last_login_at: u.last_login_at,
+            password_changed_at: u.password_changed_at,
             created_at: u.created_at,
             updated_at: u.updated_at,
         }
@@ -114,6 +116,11 @@ pub struct LoginResponse {
     pub token: String,
     pub expires_at: String,
     pub user: UserInfo,
+    /// 密码是否已过期。true 时 token 带 pwd_exp claim，仅能访问改密端点。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password_expired: Option<bool>,
+    /// 会话超时分钟数（0=不超时）。前端据此做客户端 idle 计时。
+    pub session_timeout_minutes: i64,
 }
 
 /// 登录：校验用户名密码，签发 JWT。
@@ -222,6 +229,16 @@ async fn login(
     let role = auth::Role::parse(&user.role).unwrap_or(auth::Role::Viewer);
     // 查询用户权限码列表（通过 role_id），写入 JWT claims
     let permissions = db::list_permission_codes_by_user(&state.db, user.role_id.as_deref()).await?;
+
+    // 合规检查：密码是否过期
+    let expiry_days = db::get_setting(&state.db, "password_expiry_days")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    let password_expired = is_password_expired(user.password_changed_at.as_deref(), expiry_days);
+
     let (token, expires_at) = auth::issue_token(
         &user.id,
         &user.username,
@@ -230,12 +247,13 @@ async fn login(
         permissions,
         &state.jwt_secret,
         state.jwt_ttl_hours,
+        password_expired,
     )?;
     // 登录成功：重置失败计数
     let _ = db::reset_failed_login(&state.db, &user.id).await;
     let _ = db::update_last_login(&state.db, &user.id).await;
     let user_info = UserInfo::from(user);
-    let detail = serde_json::json!({"role": role.as_str()});
+    let detail = serde_json::json!({"role": role.as_str(), "passwordExpired": password_expired});
     let _ = audit::log_async(
         &state.db,
         &auth::AuthUser::placeholder(user_info.username.clone()),
@@ -247,11 +265,41 @@ async fn login(
         "success",
     )
     .await;
-    tracing::info!(username = %user_info.username, "user logged in");
+    let session_timeout_minutes = db::get_setting(&state.db, "session_timeout_minutes")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    tracing::info!(username = %user_info.username, pwd_expired = password_expired, "user logged in");
     Ok(Json(serde_json::json!({
         "code": 0,
-        "data": LoginResponse { token, expires_at, user: user_info }
+        "data": LoginResponse {
+            token,
+            expires_at,
+            user: user_info,
+            password_expired: if password_expired { Some(true) } else { None },
+            session_timeout_minutes,
+        }
     })))
+}
+
+/// 判断密码是否已过期。
+/// expiry_days <= 0 视为不过期；password_changed_at 为 None 视为不过期（兼容旧数据）。
+fn is_password_expired(password_changed_at: Option<&str>, expiry_days: i64) -> bool {
+    if expiry_days <= 0 {
+        return false;
+    }
+    let changed = match password_changed_at {
+        Some(s) => s,
+        None => return false,
+    };
+    let changed_dt = match chrono::DateTime::parse_from_rfc3339(changed) {
+        Ok(t) => t.with_timezone(&chrono::Utc),
+        Err(_) => return false, // 时间格式异常不阻断登录
+    };
+    let now = chrono::Utc::now();
+    now.signed_duration_since(changed_dt).num_days() >= expiry_days
 }
 
 /// 当前登录用户信息。受 AuthUser 保护。

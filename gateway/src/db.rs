@@ -13,6 +13,7 @@ pub type DbPool = MySqlPool;
 /// last_login_at 可空（首次登录前为 None）。
 /// role_id / department_id 可空（迁移期间或未分配时为 None）。
 /// failed_login_attempts / locked_until 用于登录失败锁定策略。
+/// password_changed_at 用于密码过期判断（None 视为不过期，兼容旧数据）。
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
     pub id: String,
@@ -20,6 +21,7 @@ pub struct User {
     pub display_name: String,
     pub email: String,
     pub password_hash: String,
+    pub password_changed_at: Option<String>,
     pub role: String,
     pub role_id: Option<String>,
     pub department_id: Option<String>,
@@ -102,12 +104,13 @@ pub async fn seed_admin_if_empty(pool: &DbPool, cfg: &AuthConfig) -> anyhow::Res
     // 内置 admin 角色的固定 id（见 migration 000006）
     let admin_role_id = "00000000-0000-0000-0000-000000000001";
     sqlx::query(
-        "INSERT INTO users (id, username, display_name, email, password_hash, role, role_id, department_id, enabled, created_at, updated_at)
-         VALUES (?, ?, '管理员', '', ?, 'admin', ?, NULL, 1, ?, ?)",
+        "INSERT INTO users (id, username, display_name, email, password_hash, password_changed_at, role, role_id, department_id, enabled, created_at, updated_at)
+         VALUES (?, ?, '管理员', '', ?, ?, 'admin', ?, NULL, 1, ?, ?)",
     )
     .bind(&id)
     .bind(&cfg.seed_username)
     .bind(&hash)
+    .bind(&now)
     .bind(admin_role_id)
     .bind(&now)
     .bind(&now)
@@ -157,14 +160,15 @@ pub async fn create_user(
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO users (id, username, display_name, email, password_hash, role, role_id, department_id, enabled, last_login_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+        "INSERT INTO users (id, username, display_name, email, password_hash, password_changed_at, role, role_id, department_id, enabled, last_login_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
     )
     .bind(&id)
     .bind(username)
     .bind(display_name)
     .bind(email)
     .bind(password_hash)
+    .bind(&now)
     .bind(role)
     .bind(role_id)
     .bind(department_id)
@@ -224,11 +228,12 @@ pub async fn update_enabled(pool: &DbPool, id: &str, enabled: bool) -> anyhow::R
     Ok(())
 }
 
-/// 管理员重置密码：直接写入新 hash。
+/// 管理员重置密码：直接写入新 hash，并刷新 password_changed_at。
 pub async fn update_password(pool: &DbPool, id: &str, password_hash: &str) -> anyhow::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let affected = sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+    let affected = sqlx::query("UPDATE users SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?")
         .bind(password_hash)
+        .bind(&now)
         .bind(&now)
         .bind(id)
         .execute(pool)
@@ -869,4 +874,103 @@ pub async fn upsert_settings(
     }
     tx.commit().await?;
     Ok(())
+}
+
+// ============ Dashboard 聚合查询 ============
+
+/// 用户总数与启用用户数。返回 (total, enabled)。
+pub async fn count_users_summary(pool: &DbPool) -> anyhow::Result<(i64, i64)> {
+    // MySQL SUM() 返回 DECIMAL，需 CAST 为 SIGNED 才能与 i64 匹配
+    let row: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), CAST(COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0) AS SIGNED) FROM users",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// 角色总数。
+pub async fn count_roles_total(pool: &DbPool) -> anyhow::Result<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+/// 部门总数。
+pub async fn count_departments_total(pool: &DbPool) -> anyhow::Result<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM departments")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+/// 自指定时间以来（含）的审计日志条数。
+/// since 为 RFC3339 字符串；为 None 时返回全量条数。
+pub async fn count_audit_logs_since(pool: &DbPool, since: Option<&str>) -> anyhow::Result<i64> {
+    let n: i64 = match since {
+        Some(s) => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE created_at >= ?")
+                .bind(s)
+                .fetch_one(pool)
+                .await?
+        }
+        None => sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs")
+            .fetch_one(pool)
+            .await?,
+    };
+    Ok(n)
+}
+
+/// 自指定时间以来（含）的登录成功条数。
+pub async fn count_login_success_since(pool: &DbPool, since: Option<&str>) -> anyhow::Result<i64> {
+    let n: i64 = match since {
+        Some(s) => {
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM audit_logs WHERE action = 'login' AND status = 'success' AND created_at >= ?",
+            )
+            .bind(s)
+            .fetch_one(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM audit_logs WHERE action = 'login' AND status = 'success'",
+            )
+            .fetch_one(pool)
+            .await?
+        }
+    };
+    Ok(n)
+}
+
+/// 最近 N 条审计日志（全局）。按 id 倒序。
+pub async fn list_recent_audit_logs(pool: &DbPool, limit: i64) -> anyhow::Result<Vec<AuditLog>> {
+    let rows = sqlx::query_as::<_, AuditLog>(
+        "SELECT id, actor_username, action, target_type, target_id, \
+                CAST(detail AS CHAR) AS detail, ip, status, created_at \
+         FROM audit_logs ORDER BY id DESC LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 某操作人最近 N 条审计日志。按 id 倒序。
+pub async fn list_recent_audit_logs_by_actor(
+    pool: &DbPool,
+    actor: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<AuditLog>> {
+    let rows = sqlx::query_as::<_, AuditLog>(
+        "SELECT id, actor_username, action, target_type, target_id, \
+                CAST(detail AS CHAR) AS detail, ip, status, created_at \
+         FROM audit_logs WHERE actor_username = ? ORDER BY id DESC LIMIT ?",
+    )
+    .bind(actor)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }

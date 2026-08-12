@@ -12,8 +12,14 @@ const routes = [
   {
     path: '/',
     component: MainLayout,
-    redirect: '/overview',
+    redirect: '/dashboard',
     children: [
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
+        component: () => import('../views/dashboard/DashboardPage.vue'),
+        meta: { title: '个人工作台', icon: 'HomeFilled' }
+      },
       {
         path: 'overview',
         name: 'Overview',
@@ -124,7 +130,8 @@ router.beforeEach((to, _from, next) => {
   // 已登录访问 /login，重定向首页
   if (to.path === '/login') {
     if (userStore.isAuthenticated) {
-      next('/overview')
+      // 密码过期用户访问 /login 也跳改密页
+      next(userStore.passwordExpired ? '/profile?forceChange=1' : '/dashboard')
     } else {
       next()
     }
@@ -135,10 +142,15 @@ router.beforeEach((to, _from, next) => {
     next({ path: '/login', query: { redirect: to.fullPath } })
     return
   }
+  // 密码过期强制：已登录但密码过期，除 /profile 外全部拦截到改密页
+  if (userStore.isAuthenticated && userStore.passwordExpired && to.path !== '/profile') {
+    next('/profile?forceChange=1')
+    return
+  }
   // 路由级权限校验：meta.permission 存在时检查是否拥有该权限码
   const perm = to.meta.permission as string | undefined
   if (perm && userStore.isAuthenticated && !userStore.hasPermission(perm)) {
-    next('/overview')
+    next('/dashboard')
     return
   }
   next()

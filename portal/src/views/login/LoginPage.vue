@@ -54,8 +54,14 @@ async function handleLogin() {
     loading.value = true
     try {
       await userStore.login({ username: form.username, password: form.password })
+      // 密码过期：强制跳改密页，不允许访问其他页面
+      if (userStore.passwordExpired) {
+        ElMessage.warning('密码已过期，请先修改密码')
+        router.push('/profile?forceChange=1')
+        return
+      }
       ElMessage.success('登录成功')
-      const redirect = (route.query.redirect as string) || '/overview'
+      const redirect = (route.query.redirect as string) || '/dashboard'
       router.push(redirect)
     } catch {
       // 错误提示由 request 拦截器统一处理（如"用户名或密码错误"）

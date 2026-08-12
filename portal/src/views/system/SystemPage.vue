@@ -66,6 +66,33 @@
             </el-form>
           </div>
 
+          <el-divider />
+
+          <!-- 合规策略 -->
+          <div class="settings-group">
+            <div class="group-title">合规策略</div>
+            <el-form label-width="140px" class="settings-form">
+              <el-form-item label="密码过期天数">
+                <el-input-number
+                  v-model="form.password_expiry_days"
+                  :min="0"
+                  :max="365"
+                  :disabled="!canUpdate"
+                />
+                <span class="form-hint">密码达到此天数后过期，登录时强制改密（0=不过期）</span>
+              </el-form-item>
+              <el-form-item label="会话超时(分钟)">
+                <el-input-number
+                  v-model="form.session_timeout_minutes"
+                  :min="0"
+                  :max="1440"
+                  :disabled="!canUpdate"
+                />
+                <span class="form-hint">无操作超过此时长自动登出（0=不超时）</span>
+              </el-form-item>
+            </el-form>
+          </div>
+
           <div class="settings-actions" v-if="canUpdate">
             <el-button type="primary" :loading="saving" @click="handleSave">保存配置</el-button>
             <el-button @click="loadSettings">重置</el-button>
@@ -129,6 +156,8 @@ const form = reactive({
   password_require_special: false,
   login_max_attempts: 5,
   login_lockout_minutes: 15,
+  password_expiry_days: 90,
+  session_timeout_minutes: 60,
 })
 
 // 配置项元数据：key → 类型，用于把后端字符串还原为表单值
@@ -140,6 +169,8 @@ const SETTING_KEYS: { key: keyof typeof form; type: 'number' | 'bool' }[] = [
   { key: 'password_require_special', type: 'bool' },
   { key: 'login_max_attempts', type: 'number' },
   { key: 'login_lockout_minutes', type: 'number' },
+  { key: 'password_expiry_days', type: 'number' },
+  { key: 'session_timeout_minutes', type: 'number' },
 ]
 
 async function loadSettings() {

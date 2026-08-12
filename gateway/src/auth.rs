@@ -55,6 +55,7 @@ impl fmt::Display for Role {
 
 /// JWT Claims。sub=username, uid=user_id, role=角色, permissions=权限码列表。
 /// permissions 含 "*" 表示通配（开发模式匿名用户）。
+/// pwd_exp=true 表示密码已过期，仅放行改密相关端点（合规强制）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
@@ -66,6 +67,8 @@ pub struct Claims {
     pub permissions: Vec<String>,
     pub iat: usize,
     pub exp: usize,
+    #[serde(default)]
+    pub pwd_exp: bool,
 }
 
 /// argon2 密码哈希。
@@ -89,6 +92,7 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
 }
 
 /// 签发 JWT。返回 `(token, expires_at_rfc3339)`。
+/// pwd_exp=true 时签发的 token 仅可用于改密相关端点（合规强制）。
 pub fn issue_token(
     uid: &str,
     username: &str,
@@ -97,6 +101,7 @@ pub fn issue_token(
     permissions: Vec<String>,
     secret: &str,
     ttl_hours: u64,
+    pwd_exp: bool,
 ) -> anyhow::Result<(String, String)> {
     let now = Utc::now();
     let exp = now + Duration::hours(ttl_hours as i64);
@@ -108,6 +113,7 @@ pub fn issue_token(
         permissions,
         iat: now.timestamp() as usize,
         exp: exp.timestamp() as usize,
+        pwd_exp,
     };
     let token = encode(
         &Header::default(),
@@ -134,6 +140,7 @@ impl AuthUser {
             permissions: Vec::new(),
             iat: 0,
             exp: 0,
+            pwd_exp: false,
         })
     }
 
@@ -147,6 +154,14 @@ impl AuthUser {
         self.0.permissions.iter().any(|p| p == code || p == "*")
     }
 }
+
+/// 密码过期 token 允许访问的路径白名单（合规强制：过期后只能改密/查自己/登出）。
+const PWD_EXPIRED_ALLOWLIST: &[&str] = &[
+    "/api/auth/change-password",
+    "/api/auth/me",
+    "/api/auth/logout",
+    "/api/system/password-policy",
+];
 
 #[async_trait]
 impl FromRequestParts<Arc<AppState>> for AuthUser {
@@ -165,6 +180,7 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
                 permissions: vec!["*".to_string()],
                 iat: 0,
                 exp: usize::MAX,
+                pwd_exp: false,
             }));
         }
 
@@ -184,6 +200,14 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             &validation,
         )
         .map_err(|_| AppError::unauthorized("invalid or expired token"))?;
+
+        // 合规强制：密码过期 token 仅放行白名单路径
+        if data.claims.pwd_exp {
+            let path = parts.uri.path();
+            if !PWD_EXPIRED_ALLOWLIST.contains(&path) {
+                return Err(AppError::forbidden("密码已过期，请先修改密码"));
+            }
+        }
 
         Ok(AuthUser(data.claims))
     }

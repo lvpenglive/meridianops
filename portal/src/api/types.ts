@@ -62,6 +62,7 @@ export interface UserInfo {
   departmentId?: string
   enabled: boolean
   lastLoginAt?: string | null
+  passwordChangedAt?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -75,6 +76,10 @@ export interface LoginResponse {
   token: string
   expiresAt: string
   user: UserInfo
+  /** 密码是否已过期（true 时 token 仅能访问改密端点） */
+  passwordExpired?: boolean
+  /** 会话超时分钟数（0=不超时），前端据此做 idle 计时 */
+  sessionTimeoutMinutes: number
 }
 
 // ---- 用户管理 ----
@@ -222,7 +227,26 @@ export interface PasswordPolicy {
   requireDigit: boolean
   requireSpecial: boolean
   description: string
+  /** 密码过期天数（0=不过期） */
+  expiryDays: number
 }
 
 /** 批量更新系统配置的请求体。key → value 映射。 */
 export type UpdateSettingsRequest = Record<string, string>
+
+// ---- 个人工作台 Dashboard ----
+
+export interface DashboardStats {
+  totalUsers: number
+  enabledUsers: number
+  totalRoles: number
+  totalDepartments: number
+  todayOps: number
+  todayLogins: number
+}
+
+export interface DashboardData {
+  stats: DashboardStats
+  recentActivities: AuditLog[]
+  myActivities: AuditLog[]
+}

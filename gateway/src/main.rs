@@ -3,6 +3,7 @@ mod audit_routes;
 mod auth;
 mod auth_routes;
 mod config;
+mod dashboard_routes;
 mod db;
 mod dept_routes;
 mod error;

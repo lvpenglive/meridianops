@@ -35,6 +35,10 @@
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="最后登录">{{ formatTime(userStore.user?.lastLoginAt) }}</el-descriptions-item>
+            <el-descriptions-item label="密码最后修改">{{ formatTime(userStore.user?.passwordChangedAt) }}</el-descriptions-item>
+            <el-descriptions-item label="密码过期状态">
+              <el-tag :type="passwordExpiryTag" size="small">{{ passwordExpiryText }}</el-tag>
+            </el-descriptions-item>
             <el-descriptions-item label="创建时间">{{ formatTime(userStore.user?.createdAt) }}</el-descriptions-item>
             <el-descriptions-item label="更新时间">{{ formatTime(userStore.user?.updatedAt) }}</el-descriptions-item>
           </el-descriptions>
@@ -48,6 +52,14 @@
         <!-- 修改密码 -->
         <el-tab-pane label="修改密码" name="password">
           <div class="pwd-form-wrap">
+            <el-alert
+              v-if="forceChange"
+              title="密码已过期，必须修改后才能继续使用系统"
+              type="error"
+              :closable="false"
+              show-icon
+              class="policy-alert"
+            />
             <el-alert
               v-if="policy"
               :title="policy.description"
@@ -150,6 +162,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { InfoFilled, Refresh } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -159,8 +172,12 @@ import { listAuditLogs } from '../../api/audit'
 import type { PasswordPolicy, AuditLog } from '../../api/types'
 
 const userStore = useUserStore()
+const route = useRoute()
 
 const activeTab = ref<'profile' | 'password' | 'history'>('profile')
+
+// 强制改密：URL 带 forceChange=1 或 store.passwordExpired 时自动切到密码 tab
+const forceChange = computed(() => route.query.forceChange === '1' || userStore.passwordExpired)
 
 const avatarText = computed(() => {
   const name = userStore.user?.displayName || userStore.user?.username || '?'
@@ -180,6 +197,37 @@ const roleTagType = computed<'primary' | 'success' | 'info'>(() => {
 })
 
 const canReadAudit = computed(() => userStore.hasPermission('audit:read'))
+
+// 密码年龄与过期提示
+const passwordAgeDays = computed(() => {
+  const changed = userStore.user?.passwordChangedAt
+  if (!changed) return null
+  try {
+    const d = new Date(changed)
+    if (isNaN(d.getTime())) return null
+    return Math.floor((Date.now() - d.getTime()) / 86400000)
+  } catch {
+    return null
+  }
+})
+
+const passwordExpiryText = computed(() => {
+  if (!policy.value || policy.value.expiryDays <= 0) return '未启用密码过期策略'
+  if (passwordAgeDays.value === null) return '—'
+  const remaining = policy.value.expiryDays - passwordAgeDays.value
+  if (remaining <= 0) return `已过期 ${-remaining} 天，请立即修改`
+  if (remaining <= 7) return `将在 ${remaining} 天后过期`
+  return `剩余 ${remaining} 天`
+})
+
+const passwordExpiryTag = computed<'success' | 'warning' | 'danger'>(() => {
+  if (!policy.value || policy.value.expiryDays <= 0) return 'success'
+  if (passwordAgeDays.value === null) return 'success'
+  const remaining = policy.value.expiryDays - passwordAgeDays.value
+  if (remaining <= 0) return 'danger'
+  if (remaining <= 7) return 'warning'
+  return 'success'
+})
 
 // ---- 时间格式化 ----
 function formatTime(s?: string | null): string {
@@ -270,8 +318,15 @@ async function handleChangePassword() {
         oldPassword: pwdForm.oldPassword,
         newPassword: pwdForm.newPassword,
       })
+      // pwd_exp 场景下 store 已跳转登录页，不会执行到这里
       ElMessage.success('密码修改成功')
       resetPwdForm()
+      // 刷新用户信息以更新 passwordChangedAt
+      try {
+        await userStore.fetchMe()
+      } catch {
+        // 忽略
+      }
     } catch {
       // 错误提示由 request 拦截器统一处理
     } finally {
@@ -335,6 +390,10 @@ onMounted(() => {
   loadPolicy()
   if (canReadAudit.value) {
     loadHistory()
+  }
+  // 强制改密：自动切到密码 tab
+  if (forceChange.value) {
+    activeTab.value = 'password'
   }
 })
 </script>

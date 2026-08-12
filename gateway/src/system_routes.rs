@@ -68,6 +68,8 @@ async fn update_settings(
         "password_require_special",
         "login_max_attempts",
         "login_lockout_minutes",
+        "password_expiry_days",
+        "session_timeout_minutes",
     ];
     let updated_by = auth.0.sub.clone();
     let mut entries: Vec<(String, String, String)> = Vec::new();
@@ -111,6 +113,10 @@ async fn get_password_policy(
         .map(|s| (s.setting_key, s.setting_value))
         .collect();
     let policy = auth::PasswordPolicy::from_settings(&map);
+    let expiry_days: i64 = map
+        .get("password_expiry_days")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
     Ok(Json(serde_json::json!({
         "code": 0,
         "data": {
@@ -120,6 +126,7 @@ async fn get_password_policy(
             "requireDigit": policy.require_digit,
             "requireSpecial": policy.require_special,
             "description": policy.description(),
+            "expiryDays": expiry_days,
         }
     })))
 }
