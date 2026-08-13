@@ -2,14 +2,17 @@ mod audit;
 mod audit_routes;
 mod auth;
 mod auth_routes;
+mod cmdb_routes;
 mod config;
 mod dashboard_routes;
 mod db;
 mod dept_routes;
 mod error;
+mod report_routes;
 mod role_routes;
 mod routes;
 mod system_routes;
+mod token_routes;
 
 use clap::Parser;
 use config::GatewayConfig;
@@ -70,9 +73,12 @@ async fn main() -> anyhow::Result<()> {
         jwt_ttl_hours: config.auth.token_ttl_hours,
     });
 
-    let app = create_router(state);
+    let app = create_router(state.clone());
 
-    // 3. 启动 + graceful shutdown
+    // 3. 启动定时拉取后台任务
+    tokio::spawn(cmdb_routes::pull_scheduler_loop(state.db.clone()));
+
+    // 4. 启动 + graceful shutdown
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(
         listener,

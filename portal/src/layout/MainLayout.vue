@@ -114,17 +114,34 @@ type MenuGroup =
   | { type: 'sub'; title: string; icon: string; children: MenuItem[] }
 
 const allMenuGroups: MenuGroup[] = [
-  { type: 'item', path: '/dashboard', title: '个人工作台', icon: 'HomeFilled' },
-  { type: 'item', path: '/overview', title: '态势中心', icon: 'Monitor' },
   {
-    type: 'sub', title: '资产管理', icon: 'Server', children: [
-      { path: '/assets', title: '资产管理', icon: 'Connection' },
+    type: 'sub', title: '工作台', icon: 'HomeFilled', children: [
+      { path: '/dashboard', title: '个人工作台', icon: 'HomeFilled' },
+    ]
+  },
+  {
+    type: 'sub', title: '运营分析', icon: 'DataAnalysis', children: [
+      { path: '/overview', title: '态势中心', icon: 'Monitor' },
+      { path: '/report', title: '报表中心', icon: 'TrendCharts', permission: 'audit:read' },
+      { path: '/audit', title: '审计中心', icon: 'Notebook', permission: 'audit:read' },
+      { path: '/cost', title: '费用中心', icon: 'Money' },
+    ]
+  },
+  {
+    type: 'sub', title: '资产管理', icon: 'Platform', children: [
+      { path: '/assets', title: '资产清单', icon: 'Connection', permission: 'asset:read' },
+      { path: '/cmdb/models', title: 'CI 模型', icon: 'Files', permission: 'asset:read' },
+      { path: '/cmdb/relation-types', title: '关系类型', icon: 'Link', permission: 'asset:read' },
+      { path: '/topology', title: '拓扑视图', icon: 'Share', permission: 'asset:read' },
+      { path: '/sync-sources', title: '数据源同步', icon: 'Promotion', permission: 'asset:read' },
       { path: '/containers', title: '容器管理', icon: 'Box' },
       { path: '/database', title: 'DB数据库', icon: 'Coin' },
+      { path: '/config', title: '配置中心', icon: 'Setting' },
     ]
   },
   {
     type: 'sub', title: '监控告警', icon: 'Bell', children: [
+      { path: '/alerts', title: '告警中心', icon: 'BellFilled' },
       { path: '/logs', title: '日志中心', icon: 'Document' },
       { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
     ]
@@ -133,7 +150,6 @@ const allMenuGroups: MenuGroup[] = [
     type: 'sub', title: '运维流程', icon: 'Operation', children: [
       { path: '/jobs', title: '作业中心', icon: 'List' },
       { path: '/tickets', title: '工单系统', icon: 'Tickets' },
-      { path: '/config', title: '配置中心', icon: 'Setting' },
     ]
   },
   {
@@ -141,9 +157,8 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/system/users', title: '用户管理', icon: 'User', permission: 'user:read' },
       { path: '/system/roles', title: '角色管理', icon: 'UserFilled', permission: 'role:read' },
       { path: '/system/departments', title: '部门管理', icon: 'OfficeBuilding', permission: 'dept:read' },
-      { path: '/audit', title: '审计中心', icon: 'Notebook', permission: 'audit:read' },
-      { path: '/cost', title: '费用中心', icon: 'Money' },
       { path: '/system', title: '系统设置', icon: 'Tools', permission: 'system:read' },
+      { path: '/system/api-tokens', title: 'API 令牌', icon: 'Key', permission: 'system:read' },
     ]
   },
 ]

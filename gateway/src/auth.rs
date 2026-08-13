@@ -16,6 +16,7 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
+use crate::db;
 use crate::error::AppError;
 use crate::routes::AppState;
 
@@ -192,6 +193,41 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             .filter(|s| !s.is_empty())
             .ok_or_else(|| AppError::unauthorized("missing token"))?;
 
+        // 分支 1：API Token（前缀 mk-）→ 走 DB 校验 + 权限上限裁剪
+        if let Some(stripped) = token.strip_prefix("mk-") {
+            let plain = format!("mk-{}", stripped);
+            let api_tok = db::find_valid_api_token(&state.db, &plain)
+                .await
+                .map_err(|_| AppError::unauthorized("invalid or expired token"))?
+                .ok_or_else(|| AppError::unauthorized("invalid or expired token"))?;
+
+            // 角色：从 Token 行里取，兜底 viewer
+            let role = Role::parse(&api_tok.role).unwrap_or(Role::Viewer);
+            let uid = api_tok.owner_user_id.clone();
+            let username = format!("api-token:{}", api_tok.name);
+            // exp：若 token 行 expires_at 为 Some，则用那个；否则永不过期（ usize::MAX ）
+            let exp_usize = match api_tok.expires_at.as_deref() {
+                None => usize::MAX,
+                Some(ts) => chrono::DateTime::parse_from_rfc3339(ts)
+                    .map(|d| d.timestamp() as usize)
+                    .unwrap_or(0),
+            };
+            let iat = chrono::Utc::now().timestamp() as usize;
+            let permissions = api_tok.parse_scopes();
+
+            return Ok(AuthUser(Claims {
+                sub: username,
+                uid,
+                role,
+                role_id: None,
+                permissions,
+                iat,
+                exp: exp_usize,
+                pwd_exp: false,
+            }));
+        }
+
+        // 分支 2：普通 JWT → 原校验逻辑
         let mut validation = Validation::default();
         validation.validate_exp = true;
         let data = decode::<Claims>(

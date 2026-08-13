@@ -20,6 +20,7 @@ pub struct AuditQuery {
     pub actor: Option<String>,
     pub action: Option<String>,
     pub target_type: Option<String>,
+    pub target_id: Option<String>,
     pub status: Option<String>,
     pub start_from: Option<String>,
     pub page: Option<u64>,
@@ -35,8 +36,8 @@ pub struct AuditPageResponse {
     pub items: Vec<db::AuditLog>,
 }
 
-/// 分页查询审计日志（仅 admin）。
-/// 支持按 actor/action/target_type/status/start_from 筛选。
+/// 分页查询审计日志（需 audit:read 权限）。
+/// 支持按 actor/action/target_type/target_id/status/start_from 筛选。
 async fn list_audit_logs(
     State(state): State<Arc<AppState>>,
     auth: auth::AuthUser,
@@ -52,6 +53,7 @@ async fn list_audit_logs(
         q.actor.as_deref(),
         q.action.as_deref(),
         q.target_type.as_deref(),
+        q.target_id.as_deref(),
         q.status.as_deref(),
         q.start_from.as_deref(),
         page,

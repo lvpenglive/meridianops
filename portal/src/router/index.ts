@@ -30,7 +30,37 @@ const routes = [
         path: 'assets',
         name: 'Assets',
         component: () => import('../views/assets/AssetsPage.vue'),
-        meta: { title: '资产管理', icon: 'Server' }
+        meta: { title: '资产管理', icon: 'Service' }
+      },
+      {
+        path: 'assets/:id',
+        name: 'AssetDetail',
+        component: () => import('../views/assets/AssetDetailPage.vue'),
+        meta: { title: '资产详情', icon: 'Service', permission: 'asset:read' }
+      },
+      {
+        path: 'cmdb/models',
+        name: 'CiModels',
+        component: () => import('../views/cmdb/ModelsPage.vue'),
+        meta: { title: 'CI 模型', icon: 'Files', permission: 'asset:read' }
+      },
+      {
+        path: 'cmdb/relation-types',
+        name: 'CiRelationTypes',
+        component: () => import('../views/cmdb/RelationTypesPage.vue'),
+        meta: { title: '关系类型', icon: 'Connection', permission: 'asset:read' }
+      },
+      {
+        path: 'topology',
+        name: 'Topology',
+        component: () => import('../views/topology/TopologyPage.vue'),
+        meta: { title: '拓扑视图', icon: 'Share', permission: 'asset:read' }
+      },
+      {
+        path: 'sync-sources',
+        name: 'SyncSources',
+        component: () => import('../views/sync/SyncSourcesPage.vue'),
+        meta: { title: '数据源同步', icon: 'Connection', permission: 'asset:read' }
       },
       {
         path: 'containers',
@@ -43,6 +73,12 @@ const routes = [
         name: 'Database',
         component: () => import('../views/database/DatabasePage.vue'),
         meta: { title: 'DB数据库', icon: 'Coin' }
+      },
+      {
+        path: 'alerts',
+        name: 'Alerts',
+        component: () => import('../views/alerts/AlertsPage.vue'),
+        meta: { title: '告警中心', icon: 'BellFilled' }
       },
       {
         path: 'logs',
@@ -87,6 +123,30 @@ const routes = [
         meta: { title: '审计中心', icon: 'Notebook', permission: 'audit:read' }
       },
       {
+        path: 'report',
+        name: 'ReportIndex',
+        component: () => import('../views/report/ReportIndexPage.vue'),
+        meta: { title: '报表中心', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
+        path: 'report/login-security',
+        name: 'ReportLoginSecurity',
+        component: () => import('../views/report/LoginSecurityReport.vue'),
+        meta: { title: '登录安全分析', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
+        path: 'report/sensitive-ops',
+        name: 'ReportSensitiveOps',
+        component: () => import('../views/report/SensitiveOpsReport.vue'),
+        meta: { title: '敏感操作审计', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
+        path: 'report/compliance-health',
+        name: 'ReportComplianceHealth',
+        component: () => import('../views/report/ComplianceHealthReport.vue'),
+        meta: { title: '合规健康度', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
         path: 'system/users',
         name: 'SystemUsers',
         component: () => import('../views/system/UsersPage.vue'),
@@ -115,6 +175,12 @@ const routes = [
         name: 'System',
         component: () => import('../views/system/SystemPage.vue'),
         meta: { title: '系统设置', icon: 'Tools', permission: 'system:read' }
+      },
+      {
+        path: 'system/api-tokens',
+        name: 'SystemApiTokens',
+        component: () => import('../views/system/ApiTokensPage.vue'),
+        meta: { title: 'API 令牌', icon: 'Key', permission: 'system:read' }
       }
     ]
   }

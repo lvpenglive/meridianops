@@ -4,7 +4,7 @@
       <el-col :span="6">
         <el-card class="stat-card" shadow="hover">
           <div class="stat-content">
-            <div class="stat-icon" style="background: #409EFF"><el-icon :size="28"><Server /></el-icon></div>
+            <div class="stat-icon" style="background: #409EFF"><el-icon :size="28"><Service /></el-icon></div>
             <div class="stat-info">
               <div class="stat-value">{{ overview.agents.online }} / {{ overview.agents.total }}</div>
               <div class="stat-label">Agent 在线</div>
