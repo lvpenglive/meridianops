@@ -310,6 +310,8 @@ export interface CiModel {
   sortOrder: number
   createdAt: string
   updatedAt: string
+  /** 属性数（list 接口附带，避免前端逐个请求） */
+  attrCount?: number
 }
 
 /** 模型属性定义 */
@@ -355,8 +357,13 @@ export interface CiInstance {
 export interface CiRelation {
   id: string
   sourceId: string
+  sourceName?: string
   targetId: string
+  targetName?: string
+  /** 关系类型英文 code（如 depends_on / contains / runs_on） */
   relationType: string
+  /** 关系类型中文名称（接口直接 JOIN 返回，无需前端再映射） */
+  relationTypeName?: string
   createdAt: string
 }
 

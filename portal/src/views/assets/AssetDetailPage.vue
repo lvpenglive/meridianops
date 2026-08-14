@@ -115,7 +115,9 @@
           <el-table :data="relations" v-loading="loadingRelations" stripe size="default">
             <el-table-column label="关系类型" width="160">
               <template #default="{ row }">
-                <el-tag size="small">{{ relTypeNameMap[row.relationType] || row.relationType }}</el-tag>
+                <el-tag size="small">
+                  {{ row.relationTypeName || relTypeNameMap[row.relationType] || row.relationType }}
+                </el-tag>
               </template>
             </el-table-column>
             <el-table-column label="方向" width="100">
@@ -328,7 +330,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { ArrowLeft, Edit, Plus, Refresh, Monitor, Cpu, Coin, Connection, Grid } from '@element-plus/icons-vue'
@@ -428,21 +430,16 @@ async function fetchRelations() {
   loadingRelations.value = true
   try {
     relations.value = await listCiRelations(instanceId.value)
-    // 加载对端名称
-    const peerIds = new Set<string>()
-    relations.value.forEach(r => {
-      if (r.sourceId !== instanceId.value) peerIds.add(r.sourceId)
-      if (r.targetId !== instanceId.value) peerIds.add(r.targetId)
-    })
+    // 接口已 JOIN 返回对端名称，直接构建映射，无需逐个请求（N+1）
     const map: Record<string, string> = {}
-    await Promise.all([...peerIds].map(async id => {
-      try {
-        const peer = await getCiInstance(id)
-        map[id] = peer.name
-      } catch {
-        map[id] = id.slice(0, 8) + '...'
+    relations.value.forEach(r => {
+      if (r.sourceId !== instanceId.value && r.sourceName) {
+        map[r.sourceId] = r.sourceName
       }
-    }))
+      if (r.targetId !== instanceId.value && r.targetName) {
+        map[r.targetId] = r.targetName
+      }
+    })
     relNameMap.value = map
   } catch (e: any) {
     ElMessage.error(e?.message || '加载关系失败')
@@ -666,6 +663,25 @@ function formatTime(t: string): string {
 onMounted(() => {
   fetchInstance()
   fetchRelationTypes()
+  fetchRelations()
+})
+
+// 路由参数变化时（点击对端资产跳转）重新加载数据
+watch(() => route.params.id, (newId) => {
+  if (!newId) return
+  // 重置状态
+  activeTab.value = 'info'
+  loadedTabs.value = new Set(['info'])
+  relations.value = []
+  relNameMap.value = {}
+  syncLogs.value = []
+  syncLogsTotal.value = 0
+  auditLogs.value = []
+  auditTotal.value = 0
+  // 重新加载
+  fetchInstance()
+  fetchRelationTypes()
+  fetchRelations()
 })
 </script>
 

@@ -73,7 +73,22 @@ async fn list_models(
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
     let models = db::list_ci_models(&state.db).await?;
-    Ok(Json(serde_json::json!({ "code": 0, "data": models })))
+    // 单条 GROUP BY 查询所有模型的属性数，避免前端逐个请求（N+1）
+    let attr_counts = db::count_ci_model_attrs_by_model(&state.db).await?;
+    let data: Vec<serde_json::Value> = models
+        .iter()
+        .map(|m| {
+            let mut v = serde_json::to_value(m).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "attrCount".into(),
+                    serde_json::json!(attr_counts.get(&m.id).copied().unwrap_or(0)),
+                );
+            }
+            v
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
 }
 
 /// 获取模型详情 + 属性定义列表。
@@ -657,7 +672,8 @@ async fn list_relations(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
-    let rels = db::list_ci_relations(&state.db, &id).await?;
+    // JOIN 一次返回对端实例名称，避免前端逐个请求（N+1）
+    let rels = db::list_ci_relations_with_names(&state.db, &id).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": rels })))
 }
 
@@ -884,26 +900,27 @@ async fn cmdb_stats(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
-    let models = db::list_ci_models(&state.db).await?;
-    let total = db::count_ci_instances_total(&state.db).await?;
+    // 单条 LEFT JOIN + GROUP BY 查询，替代原来的 N+1 循环（每个模型一次 COUNT）
+    let (stats, total) = db::list_ci_model_stats(&state.db).await?;
 
-    let mut by_model = Vec::new();
-    for m in &models {
-        let count = db::count_ci_instances_by_model(&state.db, &m.id).await?;
-        by_model.push(serde_json::json!({
-            "modelId": m.id,
-            "modelCode": m.code,
-            "modelName": m.name,
-            "icon": m.icon,
-            "count": count,
-        }));
-    }
+    let by_model: Vec<_> = stats
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "modelId": m.id,
+                "modelCode": m.code,
+                "modelName": m.name,
+                "icon": m.icon,
+                "count": m.count,
+            })
+        })
+        .collect();
 
     Ok(Json(serde_json::json!({
         "code": 0,
         "data": {
             "total": total,
-            "modelCount": models.len(),
+            "modelCount": stats.len(),
             "byModel": by_model,
         }
     })))

@@ -966,8 +966,8 @@ async function exportData(format: 'xlsx' | 'csv') {
 
 // ---- 初始化 ----
 onMounted(async () => {
-  await fetchModels()
-  await Promise.all([fetchList(), fetchStats()])
+  // 三个请求无依赖关系，并行加载减少等待时间
+  await Promise.all([fetchModels(), fetchList(), fetchStats()])
 })
 </script>
 

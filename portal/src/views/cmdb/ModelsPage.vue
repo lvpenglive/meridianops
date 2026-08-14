@@ -274,16 +274,9 @@ async function fetchModels() {
   loadingModels.value = true
   try {
     models.value = await listCiModels()
-    // 预加载每个模型的字段数
+    // 接口已附带 attrCount，直接构建映射，无需逐个请求
     const counts: Record<string, number> = {}
-    await Promise.all(models.value.map(async (m) => {
-      try {
-        const attrs = await listCiModelAttrs(m.id)
-        counts[m.id] = attrs.length
-      } catch {
-        counts[m.id] = 0
-      }
-    }))
+    models.value.forEach(m => { counts[m.id] = m.attrCount ?? 0 })
     attrCountMap.value = counts
     // 默认选中第一个
     if (!selectedModelId.value && models.value.length) {

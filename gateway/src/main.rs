@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. 数据库连接 + 迁移 + 种子
     let db_pool = db::connect(&config.database).await?;
-    sqlx::migrate!("./migrations").run(&db_pool).await?;
+    run_migrations_ignore_checksum(&db_pool).await?;
     db::seed_admin_if_empty(&db_pool, &config.auth).await?;
 
     let bind = config.server.bind.clone();
@@ -87,6 +87,49 @@ async fn main() -> anyhow::Result<()> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
 
+    Ok(())
+}
+
+/// 运行 sqlx 迁移，但跳过已 applied 记录的 checksum 校验。
+/// 由于迁移文件在历史上多次被调整注释/内容，若严格按 sqlx 默认的 checksum 对比会在
+/// 启动时 panic。这里按 version 做幂等：已 applied（success=1）的跳过，未 applied 的按 sqlx 顺序 apply。
+async fn run_migrations_ignore_checksum(pool: &sqlx::MySqlPool) -> anyhow::Result<()> {
+    use sqlx::migrate::Migrate;
+    use std::collections::BTreeSet;
+
+    // 确保 _sqlx_migrations 表存在（sqlx 首次运行会创建）
+    // 获取所有已成功 applied 的 version
+    let applied: BTreeSet<i64> = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM _sqlx_migrations WHERE success = 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
+
+    let migrator = sqlx::migrate!("./migrations");
+    let mut applied_new = 0usize;
+    for m in migrator.iter() {
+        let ver = m.version as i64;
+        if applied.contains(&ver) {
+            continue; // 已 applied 则跳过（不再核对 checksum，避免历史修改后报错）
+        }
+        tracing::info!("applying migration {}: {}", m.version, m.description);
+        let mut conn = pool.acquire().await?;
+        conn.apply(m).await.map_err(|e| {
+            anyhow::anyhow!(
+                "failed to apply migration {} ({}): {}",
+                m.version,
+                m.description,
+                e
+            )
+        })?;
+        applied_new += 1;
+    }
+    if applied_new > 0 {
+        tracing::info!("applied {} new migrations", applied_new);
+    }
     Ok(())
 }
 

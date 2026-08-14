@@ -1388,6 +1388,17 @@ pub async fn list_ci_model_attrs(pool: &DbPool, model_id: &str) -> anyhow::Resul
     Ok(rows)
 }
 
+/// 一次性查询所有模型的属性数（GROUP BY model_id），避免前端逐个请求。
+/// 返回 model_id → 属性数 的映射。
+pub async fn count_ci_model_attrs_by_model(pool: &DbPool) -> anyhow::Result<std::collections::HashMap<String, i64>> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT model_id, COUNT(*) FROM ci_model_attrs GROUP BY model_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// 批量查询多模型的属性（用于实例列表展示列定义）。
 pub async fn list_ci_model_attrs_batch(
     pool: &DbPool,
@@ -1722,21 +1733,31 @@ pub async fn delete_ci_instance(pool: &DbPool, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 统计某模型的实例数（用于 dashboard）。
-pub async fn count_ci_instances_by_model(pool: &DbPool, model_id: &str) -> anyhow::Result<i64> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ci_instances WHERE model_id = ?")
-        .bind(model_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(n)
+/// 模型统计行（含实例数），用于 dashboard 一次性获取全部模型 + 计数，避免 N+1 查询。
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CiModelStat {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub icon: String,
+    pub count: i64,
 }
 
-/// 统计全部 CI 实例数。
-pub async fn count_ci_instances_total(pool: &DbPool) -> anyhow::Result<i64> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ci_instances")
-        .fetch_one(pool)
-        .await?;
-    Ok(n)
+/// 一次性查询所有模型及其实例数（LEFT JOIN + GROUP BY），单条 SQL 替代 N+1 循环。
+/// 返回 (模型统计列表, 总实例数)。
+pub async fn list_ci_model_stats(pool: &DbPool) -> anyhow::Result<(Vec<CiModelStat>, i64)> {
+    let rows = sqlx::query_as::<_, CiModelStat>(
+        "SELECT m.id AS id, m.code AS code, m.name AS name, m.icon AS icon, \
+                COUNT(i.id) AS count \
+         FROM ci_models m \
+         LEFT JOIN ci_instances i ON i.model_id = m.id \
+         GROUP BY m.id, m.code, m.name, m.icon \
+         ORDER BY m.sort_order, m.name",
+    )
+    .fetch_all(pool)
+    .await?;
+    let total = rows.iter().map(|r| r.count).sum();
+    Ok((rows, total))
 }
 
 // ---- CI 关系类型 ----
@@ -1869,6 +1890,42 @@ pub struct CiRelation {
     pub created_at: String,
 }
 
+/// 关系行（含对端实例名称 + 关系类型中文名称），避免前端逐个请求导致 N+1。
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CiRelationWithName {
+    pub id: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub target_id: String,
+    pub target_name: String,
+    pub relation_type: String,
+    /// 关系类型中文名称（JOIN ci_relation_types.name），未匹配时回空串
+    pub relation_type_name: String,
+    pub created_at: String,
+}
+
+/// 查询某 CI 实例的所有关系（作为源或目标），同时 JOIN 返回对端实例名称和关系类型中文名称。
+pub async fn list_ci_relations_with_names(pool: &DbPool, ci_id: &str) -> anyhow::Result<Vec<CiRelationWithName>> {
+    let rows = sqlx::query_as::<_, CiRelationWithName>(
+        "SELECT r.id, r.source_id, s.name AS source_name, \
+                r.target_id, t.name AS target_name, \
+                r.relation_type, COALESCE(rt.name, '') AS relation_type_name, \
+                r.created_at \
+         FROM ci_relations r \
+         LEFT JOIN ci_instances s ON s.id = r.source_id \
+         LEFT JOIN ci_instances t ON t.id = r.target_id \
+         LEFT JOIN ci_relation_types rt ON rt.code = r.relation_type \
+         WHERE r.source_id = ? OR r.target_id = ? \
+         ORDER BY r.created_at DESC",
+    )
+    .bind(ci_id)
+    .bind(ci_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 查询某 CI 实例的所有关系（作为源或目标）。
 pub async fn list_ci_relations(pool: &DbPool, ci_id: &str) -> anyhow::Result<Vec<CiRelation>> {
     let rows = sqlx::query_as::<_, CiRelation>(
@@ -1928,9 +1985,9 @@ pub struct TopoNode {
     pub name: String,
     pub status: String,
     pub model_id: String,
-    pub model_code: String,
-    pub model_name: String,
-    pub icon: String,
+    pub model_code: Option<String>,
+    pub model_name: Option<String>,
+    pub icon: Option<String>,
     pub source: Option<String>,
 }
 
@@ -1967,11 +2024,11 @@ pub async fn query_topology(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    // 节点：实例 JOIN 模型
+    // 节点：实例 JOIN 模型（INNER JOIN，仅保留有有效模型的实例，避免 model_code NULL）
     let node_sql = format!(
         "SELECT i.id, i.name, i.status, i.model_id, m.code AS model_code, m.name AS model_name, m.icon, i.source \
          FROM ci_instances i \
-         LEFT JOIN ci_models m ON m.id = i.model_id \
+         INNER JOIN ci_models m ON m.id = i.model_id \
          {} ORDER BY m.sort_order, i.name",
         where_clause
     );

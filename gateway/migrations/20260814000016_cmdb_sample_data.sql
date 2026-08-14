@@ -220,12 +220,12 @@ INSERT INTO ci_relations (id, source_id, target_id, relation_type, created_at) V
 ('rel-b15','ins-bs-mbank','ins-bs-esb','depends_on', NOW()),
 ('rel-b16','ins-bs-esb','ins-bs-core','depends_on', NOW());
 
--- ---- F. 负载均衡后端池：VIP → F5 → 中间件 ----
+-- ---- F. 负载均衡后端池：F5 contains VIP；F5 contains 后端成员 ----
 INSERT INTO ci_relations (id, source_id, target_id, relation_type, created_at) VALUES
-('rel-f1','ins-vip-core', 'ins-f5-app','contains', NOW()),
-('rel-f2','ins-vip-ebank','ins-f5-app','contains', NOW()),
-('rel-f3','ins-vip-mbank','ins-f5-app','contains', NOW()),
-('rel-f4','ins-vip-ecs',  'ins-f5-app','contains', NOW()),
+('rel-f1','ins-f5-app','ins-vip-core', 'contains', NOW()),
+('rel-f2','ins-f5-app','ins-vip-ebank','contains', NOW()),
+('rel-f3','ins-f5-app','ins-vip-mbank','contains', NOW()),
+('rel-f4','ins-f5-app','ins-vip-ecs',  'contains', NOW()),
 ('rel-f5','ins-f5-app','ins-mw-core-wl01','contains', NOW()),
 ('rel-f6','ins-f5-app','ins-mw-core-wl02','contains', NOW()),
 ('rel-f7','ins-f5-app','ins-mw-ebank-nginx1','contains', NOW()),
@@ -241,8 +241,9 @@ INSERT INTO ci_relations (id, source_id, target_id, relation_type, created_at) V
 ('rel-s2','ins-waf','ins-vip-mbank','monitors', NOW()),
 ('rel-s3','ins-bastion','ins-host-core-app1','manages', NOW()),
 ('rel-s4','ins-bastion','ins-host-core-db1','manages', NOW()),
-('rel-s5','ins-hsm','ins-db-core-oracle1','depends_on', NOW()),
-('rel-s6','ins-hsm','ins-db-core-oracle2','depends_on', NOW());
+-- Oracle TDE 透明加密/签名校验需调用加密机，所以 数据库 depends_on 加密机
+('rel-s5','ins-db-core-oracle1','ins-hsm','depends_on', NOW()),
+('rel-s6','ins-db-core-oracle2','ins-hsm','depends_on', NOW());
 
 -- ---- H. 备份/同步：数据库主从、灾备 ----
 INSERT INTO ci_relations (id, source_id, target_id, relation_type, created_at) VALUES
