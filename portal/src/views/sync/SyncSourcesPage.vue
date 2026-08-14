@@ -118,9 +118,9 @@
         <el-table-column label="数据源" width="110">
           <template #default="{ row }">{{ sourceName(row.sourceCode) }}</template>
         </el-table-column>
-        <el-table-column prop="action" label="动作" width="90">
+        <el-table-column prop="action" label="动作" width="100">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.action === 'pull' ? 'warning' : ''">{{ row.action }}</el-tag>
+            <el-tag size="small" :type="actionTagType(row.action)">{{ actionLabel(row.action) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="modelCode" label="模型" width="100" />
@@ -313,6 +313,15 @@ function syncStatusType(s: string): string {
 function syncStatusLabel(s: string): string {
   const map: Record<string, string> = { success: '成功', partial: '部分', failed: '失败' }
   return map[s] ?? s
+}
+function actionTagType(a: string): string {
+  if (a === 'webhook') return 'success'
+  if (a === 'pull') return 'warning'
+  return 'info'
+}
+function actionLabel(a: string): string {
+  const map: Record<string, string> = { webhook: '推送', pull: '拉取', upsert: '更新' }
+  return map[a] ?? a
 }
 function logStatusType(s: string): string {
   if (s === 'success') return 'success'

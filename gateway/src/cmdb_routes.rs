@@ -1055,7 +1055,7 @@ async fn sync_instances(
             None => {
                 failed_count += 1;
                 let _ = db::insert_sync_log(
-                    &state.db, &req.source, &batch_id, "upsert", &req.model_code,
+                    &state.db, &req.source, &batch_id, "webhook", &req.model_code,
                     "", None, "", "failed", "字段映射失败：缺少必填字段",
                     Some(item),
                 ).await;
@@ -1064,7 +1064,7 @@ async fn sync_instances(
         };
 
         let attrs_json = mapped.attributes.to_string();
-        let action = "upsert";
+        let action = "webhook";
 
         match db::upsert_ci_instance(
             &state.db, &model_id, &mapped.name, &mapped.status,
@@ -1462,7 +1462,7 @@ async fn pull_instances(
             None => {
                 failed_count += 1;
                 let _ = db::insert_sync_log(
-                    &state.db, &req.source, &batch_id, "upsert", &model_code,
+                    &state.db, &req.source, &batch_id, "pull", &model_code,
                     "", None, "", "failed", "字段映射失败：缺少必填字段",
                     Some(item),
                 ).await;
@@ -1478,7 +1478,7 @@ async fn pull_instances(
             Ok((instance_id, is_new)) => {
                 success_count += 1;
                 let _ = db::insert_sync_log(
-                    &state.db, &req.source, &batch_id, "upsert", &model_code,
+                    &state.db, &req.source, &batch_id, "pull", &model_code,
                     &mapped.external_id, Some(&instance_id), &mapped.name,
                     "success", if is_new { "created" } else { "updated" },
                     Some(item),
@@ -1487,7 +1487,7 @@ async fn pull_instances(
             Err(e) => {
                 failed_count += 1;
                 let _ = db::insert_sync_log(
-                    &state.db, &req.source, &batch_id, "upsert", &model_code,
+                    &state.db, &req.source, &batch_id, "pull", &model_code,
                     &mapped.external_id, None, &mapped.name,
                     "failed", &format!("入库失败: {}", e),
                     Some(item),
@@ -1637,7 +1637,7 @@ pub async fn do_pull(pool: &crate::db::DbPool, source_code: &str, model_code: &s
             None => {
                 failed_count += 1;
                 let _ = db::insert_sync_log(
-                    pool, source_code, &batch_id, "upsert", &mc,
+                    pool, source_code, &batch_id, "pull", &mc,
                     "", None, "", "failed", "字段映射失败", Some(item),
                 ).await;
                 continue;
@@ -1652,7 +1652,7 @@ pub async fn do_pull(pool: &crate::db::DbPool, source_code: &str, model_code: &s
             Ok((instance_id, is_new)) => {
                 success_count += 1;
                 let _ = db::insert_sync_log(
-                    pool, source_code, &batch_id, "upsert", &mc,
+                    pool, source_code, &batch_id, "pull", &mc,
                     &mapped.external_id, Some(&instance_id), &mapped.name,
                     "success", if is_new { "created" } else { "updated" },
                     Some(item),
@@ -1661,7 +1661,7 @@ pub async fn do_pull(pool: &crate::db::DbPool, source_code: &str, model_code: &s
             Err(e) => {
                 failed_count += 1;
                 let _ = db::insert_sync_log(
-                    pool, source_code, &batch_id, "upsert", &mc,
+                    pool, source_code, &batch_id, "pull", &mc,
                     &mapped.external_id, None, &mapped.name,
                     "failed", &format!("入库失败: {}", e), Some(item),
                 ).await;
