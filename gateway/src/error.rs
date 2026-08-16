@@ -48,6 +48,14 @@ impl AppError {
             message: e.to_string(),
         }
     }
+    /// 产品授权过期。返回 402 (Payment Required) 语义，前端可据此弹出续期提示。
+    pub fn license_expired(msg: &str) -> Self {
+        Self {
+            status: StatusCode::PAYMENT_REQUIRED,
+            code: 402,
+            message: msg.to_string(),
+        }
+    }
 }
 
 impl fmt::Display for AppError {

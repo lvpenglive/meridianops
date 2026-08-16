@@ -121,6 +121,34 @@ pub struct LoginResponse {
     pub password_expired: Option<bool>,
     /// 会话超时分钟数（0=不超时）。前端据此做客户端 idle 计时。
     pub session_timeout_minutes: i64,
+    /// 当前产品授权摘要（前端用于页脚标识+到期预警）。
+    pub license: LicenseSummary,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenseSummary {
+    pub edition: String,
+    pub customer: String,
+    pub expires_at: String,
+    pub activated_at: String,
+    pub days_remaining: i64,
+    pub is_expired: bool,
+    pub warn_level: String,
+}
+
+impl From<crate::license_routes::LicenseInfo> for LicenseSummary {
+    fn from(i: crate::license_routes::LicenseInfo) -> Self {
+        Self {
+            edition: i.edition,
+            customer: i.customer,
+            expires_at: i.expires_at,
+            activated_at: i.activated_at,
+            days_remaining: i.days_remaining,
+            is_expired: i.is_expired,
+            warn_level: i.warn_level,
+        }
+    }
 }
 
 /// 登录：校验用户名密码，签发 JWT。
@@ -271,6 +299,12 @@ async fn login(
         .flatten()
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
+
+    // 授权信息：登录时一并返回（到期了仍允许登录，但返回 is_expired=true，前端拦截功能操作）
+    let license_map = crate::license_routes::load_license_map(&state.db).await;
+    let license_info = crate::license_routes::build_license_info(&license_map);
+    let license_summary = LicenseSummary::from(license_info);
+
     tracing::info!(username = %user_info.username, pwd_expired = password_expired, "user logged in");
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -280,6 +314,7 @@ async fn login(
             user: user_info,
             password_expired: if password_expired { Some(true) } else { None },
             session_timeout_minutes,
+            license: license_summary,
         }
     })))
 }
@@ -400,6 +435,7 @@ async fn list_users(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "user:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let users = db::list_all_users(&state.db).await?;
     let users_info: Vec<UserInfo> = users.into_iter().map(UserInfo::from).collect();
     Ok(Json(serde_json::json!({ "code": 0, "data": users_info })))
@@ -450,6 +486,7 @@ async fn create_user(
     Json(req_body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "user:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let username = req_body.username.trim().to_string();
@@ -534,6 +571,7 @@ async fn update_user(
     Json(req_body): Json<UpdateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "user:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_user_by_id(&state.db, &id)
@@ -608,6 +646,7 @@ async fn toggle_enable(
     Json(req_body): Json<ToggleEnableRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "user:toggle_enable")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
     db::update_enabled(&state.db, &id, req_body.enabled).await?;
 
@@ -637,6 +676,7 @@ async fn reset_password(
     Json(req_body): Json<ResetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "user:reset_password")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
     if req_body.password.len() < 6 {
         return Err(AppError::bad("密码至少 6 位"));

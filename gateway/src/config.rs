@@ -79,7 +79,7 @@ fn default_seed_username() -> String {
     "admin".to_string()
 }
 fn default_seed_password() -> String {
-    "admin123!".to_string()
+    "Admin123!".to_string()
 }
 fn default_true() -> bool {
     true

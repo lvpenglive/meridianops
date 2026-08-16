@@ -80,6 +80,22 @@ export interface LoginResponse {
   passwordExpired?: boolean
   /** 会话超时分钟数（0=不超时），前端据此做 idle 计时 */
   sessionTimeoutMinutes: number
+  /** 当前产品授权摘要（前端用于页脚标识 + 到期预警） */
+  license: LicenseStatus
+}
+
+/** 产品授权摘要（登录响应/全局 license/status 接口通用） */
+export interface LicenseStatus {
+  edition: 'Community' | 'Enterprise' | 'Ultimate' | string
+  customer: string
+  /** 到期时间 RFC3339，空字符串=永不到期 */
+  expiresAt: string
+  /** 激活时间 RFC3339，空字符串=未激活 */
+  activatedAt: string
+  /** 剩余天数。永不到期 = 9223372036854775807 (i64::MAX)，已过期 = 负数 */
+  daysRemaining: number
+  isExpired: boolean
+  warnLevel: 'none' | 'soon' | 'urgent' | 'expired'
 }
 
 // ---- 用户管理 ----

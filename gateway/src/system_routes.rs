@@ -31,6 +31,7 @@ async fn list_settings(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let settings = db::list_all_settings(&state.db).await?;
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -54,6 +55,7 @@ async fn update_settings(
     Json(req_body): Json<UpdateSettingsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     if req_body.settings.is_empty() {

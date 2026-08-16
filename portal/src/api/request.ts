@@ -1,9 +1,54 @@
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useUserStore } from '../stores/user'
 
 const TOKEN_KEY = 'meridianops_token'
 const USER_KEY = 'meridianops_user'
 const LAST_ACTIVITY_KEY = 'meridianops_last_activity'
+
+/** 用来防止短时间内出现多个 402 时反复弹窗。 */
+let _licenseExpiredBoxShown = false
+
+/** 处理产品授权过期：刷新 license 状态并弹续期模态框。 */
+async function handleLicenseExpired(message: string) {
+  const user = useUserStore()
+  // 即使 token 不在也要尝试拿到 store 的 setLicense 能力，同步刷新缓存
+  try {
+    await user.refreshLicense()
+  } catch {
+    /* ignore */
+  }
+  if (_licenseExpiredBoxShown) return
+  _licenseExpiredBoxShown = true
+  const isAdmin = user.hasPermission('system:update')
+  try {
+    const title = '产品授权已过期'
+    const content =
+      (message || '当前产品授权已到期，业务功能已暂停使用。') +
+      (isAdmin ? '\n您可以前往「授权管理」完成续期。' : '\n请联系系统管理员续期。')
+    if (isAdmin) {
+      await ElMessageBox.alert(content, title, {
+        confirmButtonText: '前往授权管理',
+        type: 'warning',
+        dangerouslyUseHTMLString: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+        showClose: false,
+      })
+      if (window.location.pathname !== '/system/license') {
+        window.location.href = '/system/license'
+      }
+    } else {
+      await ElMessageBox.alert(content, title, {
+        confirmButtonText: '知道了',
+        type: 'warning',
+        showClose: false,
+      })
+    }
+  } finally {
+    _licenseExpiredBoxShown = false
+  }
+}
 
 const request = axios.create({
   baseURL: '/api',
@@ -46,6 +91,11 @@ request.interceptors.response.use(
         ElMessage.error('登录已过期，请重新登录')
         window.location.href = '/login'
       }
+      return Promise.reject(error)
+    }
+    if (status === 402) {
+      const msg = error.response?.data?.message || '产品授权已过期'
+      void handleLicenseExpired(msg)
       return Promise.reject(error)
     }
     if (status === 403) {

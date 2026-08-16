@@ -81,12 +81,43 @@
         </div>
       </el-header>
 
+      <!-- 授权预警横幅 -->
+      <div v-if="licenseBannerProps" :class="['license-banner', `license-banner--${licenseBannerProps.level}`]">
+        <el-icon><WarningFilled /></el-icon>
+        <span class="license-banner-text">{{ licenseBannerProps.text }}</span>
+        <el-button
+          v-if="userStore.hasPermission('system:read')"
+          link
+          type="primary"
+          size="small"
+          @click="router.push('/system/license')"
+        >
+          前往授权管理
+        </el-button>
+      </div>
+
       <el-main class="main-content">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <component :is="Component" />
           </transition>
         </router-view>
+        <!-- 页脚授权标识 -->
+        <div class="license-footer">
+          <span>© {{ new Date().getFullYear() }} MeridianOps</span>
+          <span class="license-footer-divider">·</span>
+          <el-tag :type="footerEditionTagType" size="small" effect="plain">{{ footerEditionLabel }}</el-tag>
+          <template v-if="userStore.license?.customer">
+            <span class="license-footer-divider">·</span>
+            <span>{{ userStore.license.customer }}</span>
+          </template>
+          <template v-if="footerExpiryText">
+            <span class="license-footer-divider">·</span>
+            <span :class="{ 'license-footer-expired': userStore.license?.isExpired }">
+              {{ footerExpiryText }}
+            </span>
+          </template>
+        </div>
       </el-main>
     </el-container>
   </el-container>
@@ -95,8 +126,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useUserStore } from '../stores/user'
+import { useUserStore, PERPETUAL_DAYS } from '../stores/user'
 import { ElMessageBox } from 'element-plus'
+import { WarningFilled } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -149,7 +181,9 @@ const allMenuGroups: MenuGroup[] = [
   {
     type: 'sub', title: '运维流程', icon: 'Operation', children: [
       { path: '/jobs', title: '作业中心', icon: 'List' },
+      { path: '/system/credentials', title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' },
       { path: '/tickets', title: '工单系统', icon: 'Tickets' },
+      { path: '/knowledge', title: '知识库', icon: 'Collection', permission: 'knowledge:read' },
     ]
   },
   {
@@ -159,6 +193,8 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/system/departments', title: '部门管理', icon: 'OfficeBuilding', permission: 'dept:read' },
       { path: '/system', title: '系统设置', icon: 'Tools', permission: 'system:read' },
       { path: '/system/api-tokens', title: 'API 令牌', icon: 'Key', permission: 'system:read' },
+      { path: '/system/dict', title: '字典管理', icon: 'Collection', permission: 'dict:read' },
+      { path: '/system/license', title: '授权管理', icon: 'Key', permission: 'system:read' },
     ]
   },
 ]
@@ -184,6 +220,61 @@ const defaultOpeneds = computed(() =>
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta.title as string || '')
+
+// ---- 授权信息展示 ----
+const footerEditionLabel = computed(() => {
+  const v = userStore.license?.edition
+  if (v === 'Community') return 'Community 社区版'
+  if (v === 'Enterprise') return 'Enterprise 企业版'
+  if (v === 'Ultimate') return 'Ultimate 旗舰版'
+  return v || '未授权'
+})
+const footerEditionTagType = computed<'success' | 'warning' | 'info' | 'primary' | 'danger'>(() => {
+  const v = userStore.license?.edition
+  if (v === 'Ultimate') return 'warning'
+  if (v === 'Enterprise') return 'primary'
+  if (v === 'Community') return 'info'
+  return 'info'
+})
+const footerExpiryText = computed(() => {
+  const lic = userStore.license
+  if (!lic) return ''
+  if (!lic.expiresAt || lic.daysRemaining >= PERPETUAL_DAYS) return '永久授权'
+  if (lic.isExpired) return `授权已于 ${formatDate(lic.expiresAt)} 过期`
+  return `授权至 ${formatDate(lic.expiresAt)}（剩余 ${lic.daysRemaining} 天）`
+})
+function formatDate(s: string): string {
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return s
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** 顶部预警横幅：仅 soon/urgent/expired 显示。none 不展示。 */
+const licenseBannerProps = computed<{ level: 'soon' | 'urgent' | 'expired'; text: string } | null>(() => {
+  const lic = userStore.license
+  if (!lic) return null
+  if (lic.isExpired) {
+    return {
+      level: 'expired',
+      text: `产品授权已于 ${formatDate(lic.expiresAt)} 过期，业务功能已暂停。请联系管理员续期。`,
+    }
+  }
+  if (!lic.expiresAt || lic.daysRemaining >= PERPETUAL_DAYS) return null
+  if (lic.daysRemaining <= 7) {
+    return {
+      level: 'urgent',
+      text: `授权仅剩 ${lic.daysRemaining} 天到期，请立即联系管理员续期避免业务中断。`,
+    }
+  }
+  if (lic.daysRemaining <= 30) {
+    return {
+      level: 'soon',
+      text: `授权将于 ${lic.daysRemaining} 天后到期，建议提前续期。`,
+    }
+  }
+  return null
+})
 
 function toggleCollapse() {
   isCollapse.value = !isCollapse.value
@@ -336,6 +427,51 @@ async function handleCommand(command: string) {
   background: #f0f2f5;
   padding: 16px;
   overflow-y: auto;
+}
+
+/* 授权预警横幅 */
+.license-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  font-size: 13px;
+  border-bottom: 1px solid transparent;
+}
+.license-banner--soon {
+  background: #fdf6ec;
+  color: #e6a23c;
+  border-bottom-color: #f5dab1;
+}
+.license-banner--urgent,
+.license-banner--expired {
+  background: #fef0f0;
+  color: #f56c6c;
+  border-bottom-color: #fbc4c4;
+}
+.license-banner-text {
+  flex: 1;
+}
+
+/* 页脚授权标识 */
+.license-footer {
+  margin-top: 16px;
+  padding: 12px 0;
+  text-align: center;
+  font-size: 12px;
+  color: #909399;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.license-footer-divider {
+  color: #c0c4cc;
+}
+.license-footer-expired {
+  color: #f56c6c;
+  font-weight: 500;
 }
 
 .fade-enter-active,

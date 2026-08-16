@@ -1,4 +1,4 @@
-//! 部门管理路由（树形）。
+﻿//! 部门管理路由（树形）。
 //!
 //! 路由：
 //!   GET    /api/departments        列出所有部门（扁平，前端构建树）  (dept:read)
@@ -51,6 +51,7 @@ async fn list_departments(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "dept:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let depts = db::list_departments(&state.db).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": depts })))
 }
@@ -62,6 +63,7 @@ async fn get_department(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "dept:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let dept = db::find_department_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::not_found("部门不存在"))?;
@@ -77,6 +79,7 @@ async fn create_department(
     Json(req): Json<CreateDepartmentRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "dept:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let name = req.name.trim().to_string();
@@ -122,6 +125,7 @@ async fn update_department(
     Json(req): Json<UpdateDepartmentRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "dept:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_department_by_id(&state.db, &id)
@@ -172,6 +176,7 @@ async fn delete_department(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "dept:delete")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     db::find_department_by_id(&state.db, &id)

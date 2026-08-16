@@ -44,6 +44,7 @@ async fn get_dashboard(
     Query(q): Query<DashboardQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // 任意已登录用户可访问，无权限码要求
+    crate::license_routes::require_active_license(&state.db).await?;
     let since = q.since.unwrap_or_else(default_since_utc);
 
     // 并发执行所有聚合查询，降低延迟

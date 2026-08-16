@@ -117,6 +117,12 @@ const routes = [
         meta: { title: '工单系统', icon: 'Tickets' }
       },
       {
+        path: 'knowledge',
+        name: 'Knowledge',
+        component: () => import('../views/knowledge/KnowledgePage.vue'),
+        meta: { title: '知识库', icon: 'Collection', permission: 'knowledge:read' }
+      },
+      {
         path: 'audit',
         name: 'Audit',
         component: () => import('../views/audit/AuditPage.vue'),
@@ -181,6 +187,24 @@ const routes = [
         name: 'SystemApiTokens',
         component: () => import('../views/system/ApiTokensPage.vue'),
         meta: { title: 'API 令牌', icon: 'Key', permission: 'system:read' }
+      },
+      {
+        path: 'system/dict',
+        name: 'SystemDict',
+        component: () => import('../views/system/DictPage.vue'),
+        meta: { title: '字典管理', icon: 'Collection', permission: 'dict:read' }
+      },
+      {
+        path: 'system/license',
+        name: 'SystemLicense',
+        component: () => import('../views/system/LicensePage.vue'),
+        meta: { title: '授权管理', icon: 'Key', permission: 'system:read' }
+      },
+      {
+        path: 'system/credentials',
+        name: 'SystemCredentials',
+        component: () => import('../views/system/CredentialsPage.vue'),
+        meta: { title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' }
       }
     ]
   }
@@ -217,6 +241,17 @@ router.beforeEach((to, _from, next) => {
   const perm = to.meta.permission as string | undefined
   if (perm && userStore.isAuthenticated && !userStore.hasPermission(perm)) {
     next('/dashboard')
+    return
+  }
+  // 产品授权过期拦截：除登录/个人中心/授权管理外，其余页面跳转授权管理页
+  // （仅当用户为管理员 system:read 时；普通用户允许浏览但请求会被 402 拦截）
+  if (
+    userStore.isAuthenticated &&
+    userStore.licenseExpired &&
+    !['/login', '/profile', '/system/license'].includes(to.path) &&
+    userStore.hasPermission('system:read')
+  ) {
+    next('/system/license')
     return
   }
   next()

@@ -69,6 +69,7 @@ async fn list_roles(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "role:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let roles = db::list_roles(&state.db).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": roles })))
 }
@@ -82,6 +83,7 @@ async fn create_role(
     Json(req): Json<CreateRoleRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "role:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let name = req.name.trim().to_string();
@@ -126,6 +128,7 @@ async fn get_role(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "role:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let role = db::find_role_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::not_found("角色不存在"))?;
@@ -142,6 +145,7 @@ async fn update_role(
     Json(req): Json<UpdateRoleRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "role:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_role_by_id(&state.db, &id)
@@ -174,6 +178,7 @@ async fn delete_role(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "role:delete")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let role = db::find_role_by_id(&state.db, &id)
@@ -202,6 +207,7 @@ async fn list_role_permissions(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "role:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let perms = db::list_permissions_by_role(&state.db, &id).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": perms })))
 }
@@ -216,6 +222,7 @@ async fn set_role_permissions(
     Json(req): Json<SetPermissionsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "role:assign_permission")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // 确认角色存在
@@ -239,6 +246,7 @@ async fn list_permissions(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "role:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let perms = db::list_permissions(&state.db).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": perms })))
 }

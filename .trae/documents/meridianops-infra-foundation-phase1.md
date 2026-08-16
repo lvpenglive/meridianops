@@ -97,7 +97,7 @@ min_connections = 1
 jwt_secret = "change-me-to-a-long-random-string"
 token_ttl_hours = 24
 seed_username = "admin"
-seed_password = "admin123!"
+seed_password = "Admin123!"
 enabled = true
 ```
 
@@ -393,7 +393,7 @@ router.beforeEach((to, _from, next) => {
 1. 准备 MySQL（`docker run -d --name mops-mysql -e MYSQL_ROOT_PASSWORD=root -p 3306:3306 mysql:8` + 建库建用户）
 2. `cargo build` 通过
 3. `cargo run`，期望日志：`mysql ready` → `migrations applied` → `seed admin user created username=admin` → `listening on 0.0.0.1:8000`
-4. `POST /api/auth/login` 用 `admin/admin123!` → 返回 `{ code: 0, data: { token, expiresAt, user } }`
+4. `POST /api/auth/login` 用 `admin/Admin123!` → 返回 `{ code: 0, data: { token, expiresAt, user } }`
 5. `GET /api/auth/me` 带 Bearer token → 返回用户信息
 6. `GET /api/auth/me` 无 token → 401 `missing token`
 7. 错误密码 → 401 `用户名或密码错误`
@@ -403,7 +403,7 @@ router.beforeEach((to, _from, next) => {
 ### 前端侧（浏览器）
 1. `npm run dev` 启动 5173
 2. 访问 `/` 自动跳 `/login`
-3. 输入 `admin/admin123!` 登录 → 跳 `/overview`，ElMessage 成功
+3. 输入 `admin/Admin123!` 登录 → 跳 `/overview`，ElMessage 成功
 4. F5 刷新，保持在 `/overview`（token 持久化 + isAuthenticated 通过）
 5. 顶部用户下拉显示"管理员"
 6. 登出 → 跳 `/login`，localStorage 清空

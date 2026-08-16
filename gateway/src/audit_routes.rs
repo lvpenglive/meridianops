@@ -44,6 +44,7 @@ async fn list_audit_logs(
     Query(q): Query<AuditQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
 
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).clamp(1, 100);

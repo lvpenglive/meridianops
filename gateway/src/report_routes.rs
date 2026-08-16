@@ -1,4 +1,4 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::routing::get;
@@ -109,6 +109,7 @@ async fn login_trend(
     Query(q): Query<DaysQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let days = q.days.unwrap_or(30).clamp(1, 365);
     let rows = db::report_login_trend(&state.db, days).await?;
     let data: Vec<LoginTrendItem> = rows
@@ -129,6 +130,7 @@ async fn login_failed_top(
     Query(q): Query<DaysLimitQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let days = q.days.unwrap_or(30).clamp(1, 365);
     let limit = q.limit.unwrap_or(10).clamp(1, 100);
     let rows = db::report_login_failed_top(&state.db, days, limit).await?;
@@ -149,6 +151,7 @@ async fn locked_users(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let users = db::report_locked_users(&state.db).await?;
     let data: Vec<UserInfo> = users.into_iter().map(UserInfo::from).collect();
     Ok(Json(serde_json::json!({ "code": 0, "data": data })))
@@ -161,6 +164,7 @@ async fn sensitive_ops_trend(
     Query(q): Query<DaysQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let days = q.days.unwrap_or(30).clamp(1, 365);
     let rows = db::report_sensitive_ops_trend(&state.db, days).await?;
     let data: Vec<SensitiveTrendItem> = rows
@@ -177,6 +181,7 @@ async fn sensitive_ops_top(
     Query(q): Query<DaysLimitQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let days = q.days.unwrap_or(30).clamp(1, 365);
     let limit = q.limit.unwrap_or(10).clamp(1, 100);
     let rows = db::report_sensitive_ops_top(&state.db, days, limit).await?;
@@ -198,6 +203,7 @@ async fn sensitive_ops_list(
     Query(q): Query<SensitiveListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let days = q.days.unwrap_or(30).clamp(1, 365);
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).clamp(1, 100);
@@ -214,6 +220,7 @@ async fn compliance_summary(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let expiry_days = db::get_setting(&state.db, "password_expiry_days")
         .await
         .ok()
@@ -241,6 +248,7 @@ async fn inactive_users(
     Query(q): Query<InactiveQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let days = q.days.unwrap_or(90).clamp(1, 365);
     let users = db::report_inactive_users(&state.db, days).await?;
     let data: Vec<UserInfo> = users.into_iter().map(UserInfo::from).collect();
@@ -253,6 +261,7 @@ async fn role_assignment(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let rows = db::report_role_assignment(&state.db).await?;
     let data: Vec<RoleAssignmentItem> = rows
         .into_iter()

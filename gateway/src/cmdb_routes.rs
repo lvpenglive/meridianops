@@ -1,4 +1,4 @@
-//! CMDB 配置管理路由。
+﻿//! CMDB 配置管理路由。
 //!
 //! 路由：
 //!   GET    /api/cmdb/models                        列出所有 CI 模型            (asset:read)
@@ -72,6 +72,7 @@ async fn list_models(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let models = db::list_ci_models(&state.db).await?;
     // 单条 GROUP BY 查询所有模型的属性数，避免前端逐个请求（N+1）
     let attr_counts = db::count_ci_model_attrs_by_model(&state.db).await?;
@@ -98,6 +99,7 @@ async fn get_model(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let model = db::find_ci_model_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::not_found("CI 模型不存在"))?;
@@ -128,6 +130,7 @@ async fn create_model(
     Json(req): Json<CreateModelRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let code = req.code.trim().to_string();
@@ -184,6 +187,7 @@ async fn update_model(
     Json(req): Json<UpdateModelRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_ci_model_by_id(&state.db, &id)
@@ -220,6 +224,7 @@ async fn delete_model(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_ci_model_by_id(&state.db, &id)
@@ -250,6 +255,7 @@ async fn list_model_attrs(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let attrs = db::list_ci_model_attrs(&state.db, &id).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": attrs })))
 }
@@ -279,6 +285,7 @@ async fn create_model_attr(
     Json(req): Json<CreateModelAttrRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // 校验模型存在
@@ -347,6 +354,7 @@ async fn update_model_attr(
     Json(req): Json<UpdateModelAttrRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_ci_model_attr(&state.db, &attr_id)
@@ -393,6 +401,7 @@ async fn delete_model_attr(
     Path((model_id, attr_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_ci_model_attr(&state.db, &attr_id)
@@ -428,6 +437,7 @@ async fn topology(
     Query(q): Query<TopologyQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let model_id = q.model_id.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
     let status = q.status.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
 
@@ -488,6 +498,7 @@ async fn list_instances(
     Query(q): Query<InstanceQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).clamp(1, 200);
 
@@ -518,6 +529,7 @@ async fn get_instance(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let inst = db::find_ci_instance_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::not_found("资产不存在"))?;
@@ -532,6 +544,7 @@ async fn create_instance(
     Json(req): Json<CreateInstanceRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "asset:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let name = req.name.trim().to_string();
@@ -587,6 +600,7 @@ async fn update_instance(
     Json(req): Json<UpdateInstanceRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_ci_instance_by_id(&state.db, &id)
@@ -632,6 +646,7 @@ async fn delete_instance(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:delete")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let existing = db::find_ci_instance_by_id(&state.db, &id)
@@ -672,6 +687,7 @@ async fn list_relations(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     // JOIN 一次返回对端实例名称，避免前端逐个请求（N+1）
     let rels = db::list_ci_relations_with_names(&state.db, &id).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": rels })))
@@ -684,6 +700,7 @@ async fn list_all_relations(
     Query(q): Query<RelationQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ci_id = q.ci_id.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
     let rels = match ci_id {
         Some(cid) => db::list_ci_relations(&state.db, cid).await?,
@@ -703,6 +720,7 @@ async fn create_relation(
     Json(req): Json<CreateRelationRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "asset:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // 校验两端实例存在
@@ -743,6 +761,7 @@ async fn delete_relation(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     db::delete_ci_relation(&state.db, &id).await?;
@@ -784,6 +803,7 @@ async fn list_relation_types(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let types = db::list_ci_relation_types(&state.db).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": types })))
 }
@@ -797,6 +817,7 @@ async fn create_relation_type(
     Json(req): Json<CreateRelationTypeRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // code 格式校验
@@ -847,6 +868,7 @@ async fn update_relation_type(
     Json(req): Json<UpdateRelationTypeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     db::update_ci_relation_type(
@@ -878,6 +900,7 @@ async fn delete_relation_type(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let deleted = db::delete_ci_relation_type(&state.db, &id).await?;
@@ -900,6 +923,7 @@ async fn cmdb_stats(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     // 单条 LEFT JOIN + GROUP BY 查询，替代原来的 N+1 循环（每个模型一次 COUNT）
     let (stats, total) = db::list_ci_model_stats(&state.db).await?;
 
@@ -934,6 +958,7 @@ async fn list_sync_sources(
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let sources = db::list_sync_sources(&state.db).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": sources })))
 }
@@ -960,6 +985,7 @@ async fn list_sync_logs(
     Query(q): Query<SyncLogQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(20).clamp(1, 200);
 
@@ -1032,6 +1058,7 @@ async fn sync_instances(
     Json(req): Json<SyncRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // 1. 校验数据源
@@ -1209,6 +1236,7 @@ async fn update_sync_source(
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let api_url = req.get("apiUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1259,6 +1287,7 @@ async fn create_sync_source(
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     let code = req.get("code").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
@@ -1324,6 +1353,7 @@ async fn delete_sync_source(
     Path(code): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // 存在性校验
@@ -1371,6 +1401,7 @@ async fn pull_instances(
     Json(req): Json<PullRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // 1. 读取数据源配置
@@ -1820,6 +1851,7 @@ async fn batch_create_instances(
     Json(req): Json<BatchCreateInstancesRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "asset:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ip = audit::extract_ip(&headers, Some(addr));
 
     // 校验模型

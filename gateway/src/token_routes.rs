@@ -42,6 +42,7 @@ async fn list_tokens(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::license_routes::require_active_license(&state.db).await?;
     let owner_filter = if is_admin(&auth) { None } else { Some(auth.0.uid.as_str()) };
     let list = db::list_api_tokens(&state.db, owner_filter).await?;
     Ok(Json(serde_json::json!({ "code": 0, "data": list })))
@@ -53,6 +54,7 @@ async fn list_my_permissions(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::license_routes::require_active_license(&state.db).await?;
     // 普通用户：只能给自身权限子集；admin 取库里所有权限点
     let my_perms: Vec<String> = if is_admin(&auth) {
         db::list_permissions(&state.db).await?.into_iter().map(|p| p.code).collect()
@@ -100,6 +102,7 @@ async fn create_token(
     auth: AuthUser,
     Json(req): Json<CreateTokenReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::license_routes::require_active_license(&state.db).await?;
     if req.name.trim().is_empty() {
         return Err(AppError::bad("令牌名称不能为空"));
     }
@@ -195,6 +198,7 @@ async fn revoke_token(
     Path(id): Path<String>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::license_routes::require_active_license(&state.db).await?;
     // 权限检查：普通用户只能吊销自己的
     let owner_filter = if is_admin(&auth) { None } else { Some(auth.0.uid.as_str()) };
     let ok = db::revoke_api_token(&state.db, &id, owner_filter).await?;
@@ -221,6 +225,7 @@ async fn update_expiry(
     auth: AuthUser,
     Json(req): Json<UpdateExpiryReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::license_routes::require_active_license(&state.db).await?;
     // 计算
     let expires_at_opt = match req.ttl_type.as_str() {
         "never" => None,
@@ -262,6 +267,7 @@ async fn delete_token(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
     let ok = db::delete_api_token(&state.db, &id).await?;
     if !ok {
         return Err(AppError::not_found("令牌不存在"));

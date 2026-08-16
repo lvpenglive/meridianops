@@ -4,13 +4,21 @@ mod auth;
 mod auth_routes;
 mod cmdb_routes;
 mod config;
+mod credential_routes;
+mod crypto;
 mod dashboard_routes;
 mod db;
 mod dept_routes;
+mod dict_routes;
 mod error;
+mod knowledge_routes;
+mod license_crypto;
+mod license_routes;
+mod job_routes;
 mod report_routes;
 mod role_routes;
 mod routes;
+mod ssh_executor;
 mod system_routes;
 mod token_routes;
 
@@ -78,6 +86,9 @@ async fn main() -> anyhow::Result<()> {
     // 3. 启动定时拉取后台任务
     tokio::spawn(cmdb_routes::pull_scheduler_loop(state.db.clone()));
 
+    // 3.1 一次性任务：用 jieba 重新分词知识库 content_text（幂等，已执行则跳过）
+    tokio::spawn(knowledge_routes::resegment_knowledge_content(state.db.clone()));
+
     // 4. 启动 + graceful shutdown
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(
@@ -97,7 +108,12 @@ async fn run_migrations_ignore_checksum(pool: &sqlx::MySqlPool) -> anyhow::Resul
     use sqlx::migrate::Migrate;
     use std::collections::BTreeSet;
 
-    // 确保 _sqlx_migrations 表存在（sqlx 首次运行会创建）
+    // 清理 _sqlx_migrations 中历史遗留的失败记录（success=0），避免重复 apply 时主键冲突
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE success = 0")
+        .execute(pool)
+        .await
+        .ok();
+
     // 获取所有已成功 applied 的 version
     let applied: BTreeSet<i64> = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM _sqlx_migrations WHERE success = 1",

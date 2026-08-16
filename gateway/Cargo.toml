@@ -24,3 +24,12 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 async-trait = "0.1"
 rand = "0.8"
 sha2 = "0.10"
+jieba-rs = "0.7"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+# V1.5: SSH 执行引擎
+russh = "0.46"
+russh-keys = "0.46"
+# V1.5: 凭据加密
+aes-gcm = "0.10"
+hex = "0.4"
