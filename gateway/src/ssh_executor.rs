@@ -43,7 +43,7 @@ pub struct SshCredential {
 
 /// 单台主机的执行目标
 pub struct SshTarget {
-    pub asset_id: i64,
+    pub asset_id: String,
     pub asset_name: String,
     pub ip: String,
     pub port: i64,
@@ -51,7 +51,7 @@ pub struct SshTarget {
 
 /// 单台主机执行结果
 pub struct SshExecResult {
-    pub asset_id: i64,
+    pub asset_id: String,
     pub success: bool,
     pub exit_code: Option<i32>,
     pub stdout: String,
@@ -61,7 +61,7 @@ pub struct SshExecResult {
 }
 
 impl SshExecResult {
-    fn success(asset_id: i64, stdout: String, exit_code: i32, duration_ms: i64) -> Self {
+    fn success(asset_id: String, stdout: String, exit_code: i32, duration_ms: i64) -> Self {
         Self {
             asset_id,
             success: exit_code == 0,
@@ -73,7 +73,7 @@ impl SshExecResult {
         }
     }
 
-    fn failed(asset_id: i64, stderr: String, exit_code: Option<i32>, duration_ms: i64) -> Self {
+    fn failed(asset_id: String, stderr: String, exit_code: Option<i32>, duration_ms: i64) -> Self {
         Self {
             asset_id,
             success: false,
@@ -85,7 +85,7 @@ impl SshExecResult {
         }
     }
 
-    fn error(asset_id: i64, err: String, duration_ms: i64) -> Self {
+    fn error(asset_id: String, err: String, duration_ms: i64) -> Self {
         Self {
             asset_id,
             success: false,
@@ -173,7 +173,7 @@ impl SshExecutor {
                 Ok(r) => results.push(r),
                 Err(e) => {
                     results.push(SshExecResult::error(
-                        0,
+                        "unknown".to_string(),
                         format!("Task panicked: {}", e),
                         0,
                     ));
@@ -222,10 +222,10 @@ async fn execute_on_host(
     match result {
         Ok(Ok((stdout, stderr, exit_code))) => {
             if exit_code == 0 {
-                SshExecResult::success(target.asset_id, stdout, exit_code, duration_ms)
+                SshExecResult::success(target.asset_id.clone(), stdout, exit_code, duration_ms)
             } else {
                 SshExecResult::failed(
-                    target.asset_id,
+                    target.asset_id.clone(),
                     if stderr.is_empty() {
                         format!("Exit code: {}\n{}", exit_code, stdout)
                     } else {
@@ -236,9 +236,9 @@ async fn execute_on_host(
                 )
             }
         }
-        Ok(Err(e)) => SshExecResult::error(target.asset_id, e, duration_ms),
+        Ok(Err(e)) => SshExecResult::error(target.asset_id.clone(), e, duration_ms),
         Err(_) => SshExecResult::error(
-            target.asset_id,
+            target.asset_id.clone(),
             format!("执行超时（{}秒）", timeout_secs),
             duration_ms,
         ),
@@ -447,7 +447,7 @@ pub async fn persist_target_result(
     .bind(&result.stderr)
     .bind(result.duration_ms)
     .bind(run_id)
-    .bind(result.asset_id)
+    .bind(&result.asset_id)
     .execute(pool)
     .await;
 }
@@ -456,8 +456,8 @@ pub async fn persist_target_result(
 pub async fn run_job_ssh_executor(
     pool: MySqlPool,
     run_id: i64,
-    asset_ids: Vec<i64>,
-    asset_map: HashMap<i64, (String, String)>,
+    asset_ids: Vec<String>,
+    asset_map: HashMap<String, (String, String)>,
     script_content: String,
     script_type: String,
     timeout_secs: i64,
@@ -475,7 +475,7 @@ pub async fn run_job_ssh_executor(
                 (format!("Asset#{}", aid), String::new())
             });
             SshTarget {
-                asset_id: *aid,
+                asset_id: aid.clone(),
                 asset_name: name,
                 ip,
                 port: ssh_port,

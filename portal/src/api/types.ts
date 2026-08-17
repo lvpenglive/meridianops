@@ -262,8 +262,42 @@ export interface DashboardStats {
   todayLogins: number
 }
 
+export interface OpsStats {
+  totalAssets: number
+  totalModels: number
+  totalJobDefs: number
+  enabledJobDefs: number
+  todayJobRuns: number
+  todayJobSuccess: number
+  totalSyncSources: number
+  enabledSyncSources: number
+}
+
+export interface ModelStatItem {
+  code: string
+  name: string
+  count: number
+  icon: string
+}
+
+export interface JobRunSummaryItem {
+  id: number
+  jobName: string
+  triggerMode: string
+  overallStatus: string
+  targetCount: number
+  successCount: number
+  failedCount: number
+  startedBy: string
+  startedAt: string
+  finishedAt: string | null
+}
+
 export interface DashboardData {
   stats: DashboardStats
+  opsStats: OpsStats
+  modelStats: ModelStatItem[]
+  recentJobRuns: JobRunSummaryItem[]
   recentActivities: AuditLog[]
   myActivities: AuditLog[]
 }

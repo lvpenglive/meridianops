@@ -24,6 +24,58 @@
       </div>
     </el-card>
 
+    <!-- 运维统计卡片 -->
+    <el-row :gutter="16" class="stat-row">
+      <el-col :xs="12" :sm="12" :md="6">
+        <el-card shadow="hover" class="stat-card stat-card--assets" @click="go('/assets')">
+          <div class="stat-card__body">
+            <div class="stat-card__icon"><Connection :size="26" /></div>
+            <div class="stat-card__info">
+              <div class="stat-card__value">{{ opsStats.totalAssets }}</div>
+              <div class="stat-card__label">资产总数</div>
+            </div>
+          </div>
+          <div class="stat-card__extra">{{ opsStats.totalModels }} 个 CI 模型</div>
+        </el-card>
+      </el-col>
+      <el-col :xs="12" :sm="12" :md="6">
+        <el-card shadow="hover" class="stat-card stat-card--jobs" @click="go('/jobs')">
+          <div class="stat-card__body">
+            <div class="stat-card__icon"><Tools :size="26" /></div>
+            <div class="stat-card__info">
+              <div class="stat-card__value">{{ opsStats.totalJobDefs }}</div>
+              <div class="stat-card__label">作业定义</div>
+            </div>
+          </div>
+          <div class="stat-card__extra">启用 {{ opsStats.enabledJobDefs }} 个</div>
+        </el-card>
+      </el-col>
+      <el-col :xs="12" :sm="12" :md="6">
+        <el-card shadow="hover" class="stat-card stat-card--runs" @click="go('/jobs')">
+          <div class="stat-card__body">
+            <div class="stat-card__icon"><CaretRight :size="26" /></div>
+            <div class="stat-card__info">
+              <div class="stat-card__value">{{ opsStats.todayJobRuns }}</div>
+              <div class="stat-card__label">今日执行</div>
+            </div>
+          </div>
+          <div class="stat-card__extra">成功 {{ opsStats.todayJobSuccess }} 次</div>
+        </el-card>
+      </el-col>
+      <el-col :xs="12" :sm="12" :md="6">
+        <el-card shadow="hover" class="stat-card stat-card--sync" @click="go('/sync')">
+          <div class="stat-card__body">
+            <div class="stat-card__icon"><Refresh :size="26" /></div>
+            <div class="stat-card__info">
+              <div class="stat-card__value">{{ opsStats.totalSyncSources }}</div>
+              <div class="stat-card__label">同步数据源</div>
+            </div>
+          </div>
+          <div class="stat-card__extra">启用 {{ opsStats.enabledSyncSources }} 个</div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- 统计卡片 -->
     <el-row :gutter="16" class="stat-row">
       <el-col :xs="12" :sm="12" :md="6">
@@ -128,6 +180,49 @@
 
       <!-- 全局最近活动 -->
       <el-col :xs="24" :md="16">
+        <!-- 资产模型分布 + 最近作业执行 -->
+        <el-row :gutter="16" class="chart-row">
+          <el-col :xs="24" :sm="10">
+            <el-card shadow="never" class="chart-card">
+              <template #header>
+                <div class="card-header">
+                  <span class="card-header__title">📊 资产模型分布</span>
+                </div>
+              </template>
+              <div ref="modelChartRef" class="chart-container"></div>
+              <el-empty v-if="!loading && modelStats.length === 0" description="暂无资产" :image-size="40" />
+            </el-card>
+          </el-col>
+          <el-col :xs="24" :sm="14">
+            <el-card shadow="never" class="job-runs-card">
+              <template #header>
+                <div class="card-header">
+                  <span class="card-header__title">🔧 最近作业执行</span>
+                  <el-button link type="primary" size="small" @click="go('/jobs')">作业中心</el-button>
+                </div>
+              </template>
+              <el-table :data="recentJobRuns" size="small" stripe max-height="280">
+                <el-table-column prop="jobName" label="作业名称" min-width="120" show-overflow-tooltip />
+                <el-table-column label="状态" width="80">
+                  <template #default="{ row }">
+                    <el-tag :type="runStatusType(row.overallStatus)" size="small" effect="dark">
+                      {{ runStatusLabel(row.overallStatus) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="目标/成功" width="90">
+                  <template #default="{ row }">
+                    <span style="font-family: monospace; font-size: 12px">{{ row.successCount }}/{{ row.targetCount }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="startedBy" label="执行人" width="80" show-overflow-tooltip />
+                <el-table-column prop="startedAt" label="开始时间" width="150" />
+              </el-table>
+              <el-empty v-if="!loading && recentJobRuns.length === 0" description="暂无执行记录" :image-size="40" />
+            </el-card>
+          </el-col>
+        </el-row>
+
         <el-card shadow="never" class="recent-card">
           <template #header>
             <div class="card-header">
@@ -170,13 +265,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, UserFilled, OfficeBuilding, Notebook, Tools, Tickets, Document } from '@element-plus/icons-vue'
+import { User, UserFilled, OfficeBuilding, Notebook, Tools, Tickets, Document, Connection, CaretRight, Refresh } from '@element-plus/icons-vue'
+import * as echarts from 'echarts'
 import { useUserStore } from '../../stores/user'
 import { getDashboard } from '../../api/dashboard'
-import type { DashboardData, DashboardStats, AuditLog } from '../../api/types'
+import type { DashboardData, DashboardStats, OpsStats, ModelStatItem, JobRunSummaryItem, AuditLog } from '../../api/types'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -190,8 +286,23 @@ const stats = ref<DashboardStats>({
   todayOps: 0,
   todayLogins: 0,
 })
+const opsStats = ref<OpsStats>({
+  totalAssets: 0,
+  totalModels: 0,
+  totalJobDefs: 0,
+  enabledJobDefs: 0,
+  todayJobRuns: 0,
+  todayJobSuccess: 0,
+  totalSyncSources: 0,
+  enabledSyncSources: 0,
+})
+const modelStats = ref<ModelStatItem[]>([])
+const recentJobRuns = ref<JobRunSummaryItem[]>([])
 const recentActivities = ref<AuditLog[]>([])
 const myActivities = ref<AuditLog[]>([])
+
+const modelChartRef = ref<HTMLElement | null>(null)
+let modelChart: echarts.ECharts | null = null
 
 // 当前时间显示（每秒刷新）
 const nowText = ref('')
@@ -257,8 +368,13 @@ async function load() {
   try {
     const data: DashboardData = await getDashboard()
     stats.value = data.stats
+    opsStats.value = data.opsStats
+    modelStats.value = data.modelStats
+    recentJobRuns.value = data.recentJobRuns
     recentActivities.value = data.recentActivities
     myActivities.value = data.myActivities
+    await nextTick()
+    initModelChart()
   } catch (e: any) {
     if (e?.message !== '无权限访问') {
       ElMessage.error('加载工作台数据失败')
@@ -266,6 +382,68 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function initModelChart() {
+  if (!modelChartRef.value || modelStats.value.length === 0) return
+  if (!modelChart) {
+    modelChart = echarts.init(modelChartRef.value)
+  }
+  const total = modelStats.value.reduce((sum, m) => sum + m.count, 0)
+  modelChart.setOption({
+    tooltip: {
+      trigger: 'item',
+      formatter: '{b}: {c} ({d}%)',
+    },
+    legend: {
+      orient: 'horizontal',
+      bottom: 0,
+      textStyle: { fontSize: 11 },
+      itemWidth: 10,
+      itemHeight: 10,
+    },
+    series: [
+      {
+        name: '资产分布',
+        type: 'pie',
+        radius: ['38%', '62%'],
+        center: ['50%', '42%'],
+        avoidLabelOverlap: true,
+        label: {
+          show: true,
+          position: 'center',
+          formatter: `{a|${total}}\n{b|资产总数}`,
+          rich: {
+            a: { fontSize: 24, fontWeight: 'bold', color: '#303133' },
+            b: { fontSize: 12, color: '#909399', padding: [4, 0, 0, 0] },
+          },
+        },
+        labelLine: { show: false },
+        data: modelStats.value.map((m) => ({
+          name: m.name,
+          value: m.count,
+        })),
+      },
+    ],
+  })
+}
+
+function handleResize() {
+  modelChart?.resize()
+}
+
+function runStatusLabel(s: string): string {
+  const map: Record<string, string> = {
+    running: '执行中', success: '成功', failed: '失败', partial: '部分成功', timeout: '超时', pending: '等待',
+  }
+  return map[s] || s
+}
+
+function runStatusType(s: string): '' | 'success' | 'warning' | 'danger' | 'info' {
+  const map: Record<string, '' | 'success' | 'warning' | 'danger' | 'info'> = {
+    running: 'warning', success: 'success', failed: 'danger', partial: 'warning', timeout: 'danger', pending: 'info',
+  }
+  return map[s] || 'info'
 }
 
 function go(path: string) {
@@ -304,10 +482,14 @@ onMounted(() => {
   tick()
   timer = window.setInterval(tick, 1000)
   load()
+  window.addEventListener('resize', handleResize)
 })
 
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer)
+  window.removeEventListener('resize', handleResize)
+  modelChart?.dispose()
+  modelChart = null
 })
 </script>
 
@@ -421,6 +603,24 @@ onBeforeUnmount(() => {
 .stat-card--roles .stat-card__icon { background: linear-gradient(135deg, #67C23A, #85ce61); }
 .stat-card--depts .stat-card__icon { background: linear-gradient(135deg, #E6A23C, #ebb563); }
 .stat-card--ops .stat-card__icon { background: linear-gradient(135deg, #F56C6C, #f78989); }
+.stat-card--assets .stat-card__icon { background: linear-gradient(135deg, #5B8FF9, #5AD8A6); }
+.stat-card--jobs .stat-card__icon { background: linear-gradient(135deg, #5D7092, #8B5CF6); }
+.stat-card--runs .stat-card__icon { background: linear-gradient(135deg, #F6BD16, #E86452); }
+.stat-card--sync .stat-card__icon { background: linear-gradient(135deg, #6DC8EC, #945FB9); }
+
+/* 图表行 */
+.chart-row {
+  margin-bottom: 16px;
+}
+.chart-card :deep(.el-card__body) {
+  padding: 12px 16px;
+}
+.chart-container {
+  height: 280px;
+}
+.job-runs-card :deep(.el-card__body) {
+  padding: 8px 12px;
+}
 
 /* 主行 */
 .main-row {

@@ -95,7 +95,7 @@ struct CreateDefinitionRequest {
     #[serde(default = "default_scope")]
     target_scope: String,
     #[serde(default)]
-    target_asset_ids: Option<Vec<i64>>,
+    target_asset_ids: Option<Vec<String>>,
     #[serde(default)]
     target_cmdb_query: Option<String>,
     #[serde(default = "default_run_as")]
@@ -123,7 +123,7 @@ struct UpdateDefinitionRequest {
     timeout_secs: i64,
     target_scope: String,
     #[serde(default)]
-    target_asset_ids: Option<Vec<i64>>,
+    target_asset_ids: Option<Vec<String>>,
     #[serde(default)]
     target_cmdb_query: Option<String>,
     run_as: String,
@@ -147,9 +147,9 @@ fn default_executor_type() -> String { "ssh".to_string() }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExecuteRequest {
-    /// 选择的资产 ID 数组；空数组 => 走作业定义的 target_asset_ids
+    /// 选择的资产 ID 数组（CI 实例 UUID 字符串）；空数组 => 走作业定义的 target_asset_ids
     #[serde(default)]
-    asset_ids: Option<Vec<i64>>,
+    asset_ids: Option<Vec<String>>,
 }
 
 // ===== 作业定义 CRUD =====
@@ -421,10 +421,10 @@ async fn execute_job(
     }
 
     // 2. 解析目标资产
-    let asset_ids: Vec<i64> = if let Some(ids) = req.asset_ids {
-        ids
+    let asset_ids: Vec<String> = if let Some(ids) = req.asset_ids {
+        ids.into_iter().filter(|s| !s.trim().is_empty()).collect()
     } else if let Some(ids) = def["targetAssetIds"].as_array() {
-        ids.iter().filter_map(|v| v.as_i64()).collect()
+        ids.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).filter(|s| !s.trim().is_empty()).collect()
     } else {
         Vec::new()
     };
@@ -436,14 +436,27 @@ async fn execute_job(
     asset_ids.sort_unstable();
     asset_ids.dedup();
 
-    // 3. 查询资产信息（name + ip），从 ci_assets 表
+    // 3. 查询资产信息（name + ip），从 ci_instances 表（CMDB 动态模型，IP 位于 attributes JSON）
     let placeholders = asset_ids
         .iter()
         .map(|_| "?")
         .collect::<Vec<_>>()
         .join(",");
+    // 从 JSON attributes 中尽量推断 IP：key 名为 ip/mgmt_ip/bk_host_innerip 之一
     let sql_str = format!(
-        "SELECT id, asset_name, primary_ip FROM ci_assets WHERE id IN ({})",
+        "SELECT i.id, \
+                i.name, \
+                COALESCE(\
+                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.ip')),\
+                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.mgmt_ip')),\
+                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.bk_host_innerip')),\
+                    ''\
+                ) AS primary_ip, \
+                m.code AS model_code, \
+                m.name AS model_name \
+         FROM ci_instances i \
+         LEFT JOIN ci_models m ON m.id = i.model_id \
+         WHERE i.id IN ({})",
         placeholders
     );
     let mut q = sqlx::query(&sql_str);
@@ -451,16 +464,16 @@ async fn execute_job(
         q = q.bind(aid);
     }
     let asset_rows = q.fetch_all(&state.db).await?;
-    let mut asset_map: HashMap<i64, (String, String)> = HashMap::new();
+    let mut asset_map: HashMap<String, (String, String)> = HashMap::new();
     for r in &asset_rows {
-        let aid: i64 = r.try_get("id").unwrap_or(0);
-        let name: String = r.try_get("asset_name").unwrap_or_default();
+        let aid: String = r.try_get("id").unwrap_or_default();
+        let name: String = r.try_get("name").unwrap_or_default();
         let ip: String = r.try_get("primary_ip").unwrap_or_default();
         asset_map.insert(aid, (name, ip));
     }
     // 未查到的资产给默认值
     for aid in &asset_ids {
-        asset_map.entry(*aid).or_insert_with(|| (format!("Asset#{}", aid), String::new()));
+        asset_map.entry(aid.clone()).or_insert_with(|| (format!("Asset#{}", aid), String::new()));
     }
 
     // 4. 创建 job_run
@@ -598,8 +611,8 @@ async fn execute_job(
 async fn run_job_mock_executor(
     pool: MySqlPool,
     run_id: i64,
-    asset_ids: Vec<i64>,
-    asset_map: HashMap<i64, (String, String)>,
+    asset_ids: Vec<String>,
+    asset_map: HashMap<String, (String, String)>,
     script_content: &str,
     script_type: &str,
 ) -> Result<(), AppError> {
@@ -614,14 +627,18 @@ async fn run_job_mock_executor(
             "UPDATE job_run_targets SET status='running', started_at=NOW() WHERE job_run_id=? AND asset_id=?",
         )
         .bind(run_id)
-        .bind(aid)
+        .bind(&aid)
         .execute(&pool)
         .await
         .ok();
 
         // --- 模拟执行 ---
         // 简单随机：80% 成功，20% 失败；基于 asset_id hash 保持稳定（同资产多次结果相同）
-        let pseudo = (aid as u32).wrapping_add(run_id as u32);
+        let pseudo = aid
+            .chars()
+            .take(8)
+            .fold(0u32, |acc, c| acc.wrapping_mul(31).wrapping_add(c as u32))
+            .wrapping_add(run_id as u32);
         let is_success = pseudo % 10 < 8;
         let delay = (pseudo % 400) + 50; // 50~450ms
         tokio::time::sleep(Duration::from_millis(delay as u64)).await;
@@ -635,7 +652,7 @@ async fn run_job_mock_executor(
                 .get(&aid)
                 .map(|(_, ip)| ip.clone())
                 .unwrap_or_default();
-            let sample_stdout = mock_script_output(script_content, script_type, &hostname, &ip, aid as u32);
+            let sample_stdout = mock_script_output(script_content, script_type, &hostname, &ip, pseudo);
             success += 1;
             (0i64, sample_stdout, String::new(), "success".to_string())
         } else {
@@ -657,7 +674,7 @@ async fn run_job_mock_executor(
         .bind(stderr)
         .bind(dur)
         .bind(run_id)
-        .bind(aid)
+        .bind(&aid)
         .execute(&pool)
         .await
         .ok();
@@ -838,7 +855,7 @@ async fn get_run(
         .map(|r| {
             serde_json::json!({
                 "id": r.try_get::<i64, _>("id").unwrap_or(0),
-                "assetId": r.try_get::<i64, _>("asset_id").unwrap_or(0),
+                "assetId": r.try_get::<String, _>("asset_id").unwrap_or_default(),
                 "assetName": r.try_get::<String, _>("asset_name").unwrap_or_default(),
                 "assetIp": r.try_get::<String, _>("asset_ip").unwrap_or_default(),
                 "status": r.try_get::<String, _>("status").unwrap_or_default(),
@@ -916,26 +933,36 @@ async fn list_assets_for_select(
     let (page, page_size) = query.normalize();
     let offset = (page - 1) * page_size;
 
-    let mut sql_where = "WHERE status IS NULL OR status != 'deleted'".to_string();
+    let mut sql_where = String::new();
     if !query.keyword.is_empty() {
         let kw = mysql_like_escape(&query.keyword);
         sql_where.push_str(&format!(
-            " AND (asset_name LIKE '%{0}%' OR primary_ip LIKE '%{0}%')",
+            " AND (i.name LIKE '%{0}%' OR JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.ip')) LIKE '%{0}%' OR JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.mgmt_ip')) LIKE '%{0}%' OR JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.bk_host_innerip')) LIKE '%{0}%')",
             kw
         ));
     }
 
     let total: i64 = sqlx::query_scalar(&format!(
-        "SELECT COUNT(*) FROM ci_assets {}",
+        "SELECT COUNT(*) FROM ci_instances i WHERE i.status != 'deleted'{}",
         sql_where
     ))
     .fetch_one(&state.db)
     .await?;
 
     let rows = sqlx::query(&format!(
-        "SELECT id, asset_name, primary_ip, asset_type, status \
-         FROM ci_assets {} \
-         ORDER BY id DESC LIMIT {} OFFSET {}",
+        "SELECT i.id, i.name, \
+                COALESCE(\
+                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.ip')),\
+                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.mgmt_ip')),\
+                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.bk_host_innerip')),\
+                    ''\
+                ) AS primary_ip, \
+                m.code AS asset_type, \
+                i.status \
+         FROM ci_instances i \
+         LEFT JOIN ci_models m ON m.id = i.model_id \
+         WHERE i.status != 'deleted'{} \
+         ORDER BY i.created_at DESC LIMIT {} OFFSET {}",
         sql_where, page_size, offset
     ))
     .fetch_all(&state.db)
@@ -945,11 +972,11 @@ async fn list_assets_for_select(
         .iter()
         .map(|r| {
             serde_json::json!({
-                "id": r.try_get::<i64, _>("id").unwrap_or(0),
-                "assetName": r.try_get::<String, _>("asset_name").unwrap_or_default(),
-                "primaryIp": r.try_get::<Option<String>, _>("primary_ip").ok().flatten().unwrap_or_default(),
+                "id": r.try_get::<String, _>("id").unwrap_or_default(),
+                "assetName": r.try_get::<String, _>("name").unwrap_or_default(),
+                "primaryIp": r.try_get::<String, _>("primary_ip").ok().unwrap_or_default(),
                 "assetType": r.try_get::<Option<String>, _>("asset_type").ok().flatten().unwrap_or_default(),
-                "status": r.try_get::<Option<String>, _>("status").ok().flatten().unwrap_or("active".into()),
+                "status": r.try_get::<String, _>("status").unwrap_or("active".into()),
             })
         })
         .collect();
@@ -976,7 +1003,7 @@ async fn load_def(pool: &MySqlPool, id: i64) -> Result<serde_json::Value, AppErr
         Some(r) => r,
         None => return Err(AppError::not_found("作业定义不存在")),
     };
-    let target_ids: Vec<i64> = row
+    let target_ids: Vec<String> = row
         .try_get::<Option<String>, _>("target_asset_ids")
         .ok()
         .flatten()

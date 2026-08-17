@@ -981,6 +981,85 @@ pub async fn list_recent_audit_logs_by_actor(
     Ok(rows)
 }
 
+// ============ Dashboard 运维统计 ============
+
+/// 统计 CI 实例总数（排除已删除）。
+pub async fn count_ci_instances_total(pool: &DbPool) -> anyhow::Result<i64> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ci_instances WHERE status != 'deleted'",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+/// 统计作业定义总数和启用数。返回 (总数, 启用数)。
+pub async fn count_job_definitions_summary(pool: &DbPool) -> anyhow::Result<(i64, i64)> {
+    let row: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*) AS total, \
+                CAST(COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0) AS SIGNED) AS enabled_count \
+         FROM job_definitions",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// 统计今日作业执行数。返回 (今日执行总数, 成功数)。
+pub async fn count_job_runs_today(pool: &DbPool, since: &str) -> anyhow::Result<(i64, i64)> {
+    let row: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*) AS total, \
+                CAST(COALESCE(SUM(CASE WHEN overall_status = 'success' THEN 1 ELSE 0 END), 0) AS SIGNED) AS success_count \
+         FROM job_runs WHERE started_at >= ?",
+    )
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// 作业执行摘要行（dashboard 用）。
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct JobRunSummary {
+    pub id: i64,
+    pub job_name: String,
+    pub trigger_mode: String,
+    pub overall_status: String,
+    pub target_count: i64,
+    pub success_count: i64,
+    pub failed_count: i64,
+    pub started_by: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+/// 查询最近 N 条作业执行摘要。
+pub async fn list_recent_job_runs(pool: &DbPool, limit: i64) -> anyhow::Result<Vec<JobRunSummary>> {
+    let rows = sqlx::query_as::<_, JobRunSummary>(
+        "SELECT id, job_name, trigger_mode, overall_status, \
+                target_count, success_count, failed_count, \
+                started_by, DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at, \
+                DATE_FORMAT(finished_at, '%Y-%m-%d %H:%i:%s') AS finished_at \
+         FROM job_runs ORDER BY id DESC LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 统计同步数据源总数和启用数。返回 (总数, 启用数)。
+pub async fn count_sync_sources_summary(pool: &DbPool) -> anyhow::Result<(i64, i64)> {
+    let row: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*) AS total, \
+                CAST(COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0) AS SIGNED) AS enabled_count \
+         FROM sync_sources",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 // ============ 报表中心查询 ============
 
 /// 报表：登录趋势。返回 [(date_str, success_count, failed_count)]，按日期升序。
