@@ -51,12 +51,14 @@
         <el-card shadow="never" class="filter-card">
           <el-form :inline="true" :model="filter" @submit.prevent>
             <el-form-item label="级别">
-              <el-select v-model="filter.severity" placeholder="全部" clearable style="width: 120px" @change="onFilter">
-                <el-option label="P0 紧急" value="P0" />
-                <el-option label="P1 重要" value="P1" />
-                <el-option label="P2 次要" value="P2" />
-                <el-option label="P3 警告" value="P3" />
-                <el-option label="提示" value="info" />
+              <el-select v-model="filter.severity" placeholder="全部" clearable style="width: 140px" @change="onFilter">
+                <el-option label="灾难 Disaster" value="disaster" />
+                <el-option label="严重 Critical" value="critical" />
+                <el-option label="重要 High" value="high" />
+                <el-option label="一般 Average" value="average" />
+                <el-option label="警告 Warning" value="warning" />
+                <el-option label="提示 Information" value="information" />
+                <el-option label="提示 Info" value="info" />
               </el-select>
             </el-form-item>
             <el-form-item label="状态">
@@ -64,6 +66,7 @@
                 <el-option label="触发中" value="firing" />
                 <el-option label="已认领" value="acknowledged" />
                 <el-option label="已解决" value="resolved" />
+                <el-option label="待评估" value="pending" />
                 <el-option label="已静默" value="suppressed" />
               </el-select>
             </el-form-item>
@@ -71,6 +74,9 @@
               <el-select v-model="filter.source" placeholder="全部" clearable style="width: 130px" @change="onFilter">
                 <el-option label="Zabbix" value="zabbix" />
                 <el-option label="Prometheus" value="prometheus" />
+                <el-option label="SNMP Trap" value="snmptrap" />
+                <el-option label="Kafka 接入" value="kafka" />
+                <el-option label="Eventide 推送" value="eventide" />
                 <el-option label="人工上报" value="manual" />
                 <el-option label="作业执行" value="job" />
                 <el-option label="系统内置" value="system" />
@@ -739,15 +745,24 @@ function errMsg(e: unknown): string {
 }
 
 function severityTagType(s: string): 'danger' | 'warning' | 'info' | 'success' | 'primary' {
-  if (s === 'P0') return 'danger'
-  if (s === 'P1') return 'warning'
-  if (s === 'P2') return 'primary'
-  if (s === 'P3') return 'info'
+  if (s === 'disaster' || s === 'critical') return 'danger'
+  if (s === 'high') return 'warning'
+  if (s === 'average') return 'primary'
+  if (s === 'warning') return 'info'
   return 'success'
 }
 
 function severityLabel(s: string): string {
-  const map: Record<string, string> = { P0: 'P0 紧急', P1: 'P1 重要', P2: 'P2 次要', P3: 'P3 警告', info: '提示' }
+  const map: Record<string, string> = {
+    disaster: '灾难 Disaster',
+    critical: '严重 Critical',
+    high: '重要 High',
+    average: '一般 Average',
+    warning: '警告 Warning',
+    information: '提示 Information',
+    info: '提示 Info',
+    P0: 'P0 紧急', P1: 'P1 重要', P2: 'P2 次要', P3: 'P3 警告',
+  }
   return map[s] ?? s
 }
 
@@ -759,13 +774,18 @@ function statusTagType(s: string): 'danger' | 'warning' | 'success' | 'info' {
 }
 
 function statusLabel(s: string): string {
-  const map: Record<string, string> = { firing: '触发中', acknowledged: '已认领', resolved: '已解决', suppressed: '已静默' }
+  const map: Record<string, string> = {
+    firing: '触发中', acknowledged: '已认领', resolved: '已解决',
+    pending: '待评估', suppressed: '已静默',
+  }
   return map[s] ?? s
 }
 
 function sourceLabel(s: string): string {
   const map: Record<string, string> = {
-    zabbix: 'Zabbix', prometheus: 'Prometheus', manual: '人工上报', job: '作业执行', system: '系统内置',
+    zabbix: 'Zabbix', prometheus: 'Prometheus',
+    snmptrap: 'SNMP Trap', kafka: 'Kafka 接入', eventide: 'Eventide 推送',
+    manual: '人工上报', job: '作业执行', system: '系统内置',
   }
   return map[s] ?? s
 }

@@ -30,6 +30,7 @@ use uuid::Uuid;
 
 use crate::audit;
 use crate::auth;
+use crate::db;
 use crate::error::AppError;
 use crate::routes::AppState;
 
@@ -52,6 +53,8 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/alerts/silences/:id",
             axum::routing::put(update_silence).delete(delete_silence),
         )
+        // Eventide webhook 接收端（无 JWT 鉴权，用共享 token）
+        .route("/api/alerts/ingress/eventide", axum::routing::post(ingress_eventide))
 }
 
 // ============ 请求 / 响应结构 ============
@@ -935,4 +938,309 @@ fn rows_to_json_map(rows: Vec<sqlx::mysql::MySqlRow>, key_col: &str) -> serde_js
         map.insert(key, serde_json::Value::from(cnt));
     }
     serde_json::Value::Object(map)
+}
+
+// ============ Eventide webhook 接收端 ============
+
+/// Eventide 推送过来的告警 payload（基于 Alertmanager 标准 + Eventide 扩展字段）。
+///
+/// 字段说明：
+/// - `alertId`：Eventide 端的告警 UUID（可选，缺省时由 MeridianOps 生成）
+/// - `transition`：状态变更类型 `became_firing` / `became_resolved` / `became_acknowledged`
+/// - `status`：`firing` / `resolved` / `pending` / `suppressed` 等
+/// - `severity`：`disaster` / `critical` / `high` / `average` / `warning` / `information`
+/// - `fingerprint`：Eventide 计算的指纹，用作幂等去重键
+/// - `labels`：标签 JSON（含 alertname / instance / source / alertIp 等）
+/// - `annotations`：注解 JSON（含 summary / description / dashboard 等）
+/// - `value`：触发时的指标值（可空）
+/// - `startsAt` / `endsAt`：RFC3339 时间
+/// - `tally`：触发次数累计
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventideAlertPayload {
+    #[serde(default)]
+    alert_id: Option<String>,
+    #[serde(default)]
+    transition: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    severity: Option<String>,
+    #[serde(default)]
+    fingerprint: Option<String>,
+    #[serde(default)]
+    labels: Option<serde_json::Value>,
+    #[serde(default)]
+    annotations: Option<serde_json::Value>,
+    #[serde(default)]
+    value: Option<f64>,
+    #[serde(default)]
+    starts_at: Option<String>,
+    #[serde(default)]
+    ends_at: Option<String>,
+    #[serde(default)]
+    tally: Option<i64>,
+}
+
+/// POST /api/alerts/ingress/eventide — 接收 Eventide webhook 推送的告警事件。
+///
+/// 鉴权：`Authorization: Bearer <ingress_token>`，token 在 gateway-config.toml [alerts] 节配置。
+/// 若 `ingress_enabled = false`，端点返回 404，避免暴露未配置的接收端。
+async fn ingress_eventide(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<EventideAlertPayload>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 1) 检查 ingress 是否启用
+    if !state.config.alerts.ingress_enabled {
+        return Err(AppError::not_found("告警 ingress 端点未启用"));
+    }
+
+    // 2) 校验 token
+    let expected_token = &state.config.alerts.ingress_token;
+    if expected_token.is_empty() || expected_token.starts_with("change-me") {
+        return Err(AppError::internal("ingress token 未正确配置，请在 [alerts] 节设置真实密钥"));
+    }
+    let provided = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").map(|t| t.to_string()));
+    let provided = match provided {
+        Some(t) => t,
+        None => return Err(AppError::unauthorized("缺少 Authorization Bearer token")),
+    };
+    if provided != *expected_token {
+        return Err(AppError::unauthorized("ingress token 不匹配"));
+    }
+
+    // 3) 解析 payload 字段
+    let labels = payload.labels.clone().unwrap_or(serde_json::Value::Null);
+    let annotations = payload.annotations.clone().unwrap_or(serde_json::Value::Null);
+
+    // 从 labels 提取 source / alertname / ip / hostname
+    let (source, alertname, alert_ip, hostname) = extract_label_fields(&labels);
+    let title = alertname
+        .clone()
+        .unwrap_or_else(|| "未命名告警".to_string());
+    let message = extract_summary(&annotations).or_else(|| alertname.clone());
+
+    // severity 归一化：保留 Eventide 原值，缺省 info
+    let severity = normalize_severity(payload.severity.as_deref());
+
+    // fingerprint：优先用 Eventide 提供的，否则本地计算
+    let fingerprint = payload.fingerprint.clone().unwrap_or_else(|| {
+        calc_fingerprint(&source, &None, &title, &Some(labels.clone()))
+    });
+
+    // 时间：startsAt 缺省用 now；endsAt 仅 resolved 时使用
+    let now = chrono::Utc::now().to_rfc3339();
+    let starts_at = payload.starts_at.clone().unwrap_or_else(|| now.clone());
+    let ends_at = payload.ends_at.clone();
+
+    // status：transition 优先，否则用 status，缺省 firing
+    let (new_status, is_resolve) = match payload.transition.as_deref() {
+        Some("became_resolved") => ("resolved", true),
+        Some("became_acknowledged") => ("acknowledged", false),
+        _ => match payload.status.as_deref() {
+            Some("resolved") => ("resolved", true),
+            Some(s) if !s.is_empty() => (s, false),
+            _ => ("firing", false),
+        },
+    };
+
+    // 4) 关联 CMDB 资产：用 alertIp 在 ci_instances 里反查（按 attrs->>ip）
+    //    Eventide 标签里 ip 通常是监控对象的 IP，可与 CMDB 主机实例的 IP 属性匹配。
+    let (ci_id, ci_name_snapshot) = match alert_ip.as_deref() {
+        Some(ip) if !ip.is_empty() => lookup_ci_by_ip(&state.db, ip).await.unwrap_or((None, None)),
+        _ => (None, hostname.clone()),
+    };
+
+    let labels_str = json_to_str(&Some(labels));
+    let new_id = payload.alert_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // 5) upsert：按 fingerprint 去重
+    let existing = sqlx::query("SELECT id FROM alert_events WHERE fingerprint = ?")
+        .bind(&fingerprint)
+        .fetch_optional(&state.db)
+        .await?;
+    let was_merged = existing.is_some();
+
+    if is_resolve {
+        // became_resolved：把已有告警标记为 resolved
+        if let Some(r) = existing {
+            let existing_id: String = r.try_get::<String, _>("id").unwrap_or_default();
+            let actor = "eventide";
+            sqlx::query(
+                "UPDATE alert_events \
+                 SET status = 'resolved', resolved_by = ?, resolved_at = ?, resolution_note = ?, \
+                 ends_at = ?, updated_at = ? WHERE id = ?",
+            )
+            .bind(actor)
+            .bind(&now)
+            .bind(message.as_deref())
+            .bind(ends_at.as_deref())
+            .bind(&now)
+            .bind(&existing_id)
+            .execute(&state.db)
+            .await?;
+            return Ok(Json(serde_json::json!({
+                "code": 0,
+                "data": { "id": existing_id, "fingerprint": fingerprint, "action": "resolved", "merged": true }
+            })));
+        }
+        // 若不存在，跳过（无法 resolve 不存在的告警）
+        return Ok(Json(serde_json::json!({
+            "code": 0,
+            "data": { "id": null, "fingerprint": fingerprint, "action": "noop_resolved", "merged": false }
+        })));
+    }
+
+    let id = if let Some(r) = existing {
+        // 合并：fire_count + tally（Eventide 累计）+ 1，fired_at 更新为 startsAt
+        let existing_id: String = r.try_get::<String, _>("id").unwrap_or_default();
+        let increment = payload.tally.unwrap_or(1).max(1);
+        sqlx::query(
+            "UPDATE alert_events \
+             SET fire_count = fire_count + ?, fired_at = ?, status = ?, severity = ?, \
+                 acknowledged_by = NULL, acknowledged_at = NULL, \
+                 resolved_by = NULL, resolved_at = NULL, resolution_note = NULL, \
+                 message = COALESCE(?, message), ci_id = COALESCE(?, ci_id), \
+                 ci_name_snapshot = COALESCE(?, ci_name_snapshot), labels = ?, \
+                 ends_at = ?, updated_at = ? \
+             WHERE id = ?",
+        )
+        .bind(increment)
+        .bind(&starts_at)
+        .bind(new_status)
+        .bind(&severity)
+        .bind(message.as_deref())
+        .bind(ci_id.as_deref())
+        .bind(ci_name_snapshot.as_deref())
+        .bind(&labels_str)
+        .bind(ends_at.as_deref())
+        .bind(&now)
+        .bind(&existing_id)
+        .execute(&state.db)
+        .await?;
+        existing_id
+    } else {
+        // 新建
+        sqlx::query(
+            "INSERT INTO alert_events \
+             (id, fingerprint, source, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
+              fire_count, first_fired_at, fired_at, ends_at, acknowledged_by, acknowledged_at, resolved_by, resolved_at, \
+              resolution_note, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)",
+        )
+        .bind(&new_id)
+        .bind(&fingerprint)
+        .bind(&source)
+        .bind(&severity)
+        .bind(new_status)
+        .bind(&title)
+        .bind(message.as_deref())
+        .bind(&labels_str)
+        .bind(ci_id.as_deref())
+        .bind(ci_name_snapshot.as_deref())
+        .bind(payload.tally.unwrap_or(1))
+        .bind(&starts_at)
+        .bind(&starts_at)
+        .bind(ends_at.as_deref())
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.db)
+        .await?;
+        new_id
+    };
+
+    // 6) 审计：用 system 标记，actor=ingress:eventide
+    let detail = serde_json::json!({
+        "id": id, "fingerprint": fingerprint, "transition": payload.transition,
+        "severity": severity, "source": source, "merged": was_merged,
+    });
+    let _ = db::insert_audit_log(
+        &state.db,
+        "ingress:eventide",
+        "ingress_alert_eventide",
+        "alert_events",
+        &id,
+        Some(&detail),
+        "webhook",
+        "success",
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "code": 0,
+        "data": {
+            "id": id, "fingerprint": fingerprint, "action": if was_merged { "merged" } else { "created" },
+            "merged": was_merged,
+        }
+    })))
+}
+
+/// 从 labels JSON 提取 (source, alertname, alertIp, hostname)
+fn extract_label_fields(labels: &serde_json::Value) -> (String, Option<String>, Option<String>, Option<String>) {
+    let get_str = |key: &str| -> Option<String> {
+        labels.get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+    // source: Eventide labels.source 通常形如 "ingress:snmptrap" → 截取冒号后部分
+    let raw_source = get_str("source").or_else(|| get_str("ingress_source"));
+    let source = match raw_source.as_deref() {
+        Some(s) if s.starts_with("ingress:") => s.strip_prefix("ingress:").unwrap_or(s).to_string(),
+        Some(s) => s.to_string(),
+        None => "eventide".to_string(),
+    };
+    let alertname = get_str("alertname");
+    let alert_ip = get_str("alertIp").or_else(|| get_str("ip")).or_else(|| get_str("instance"));
+    let hostname = get_str("hostname")
+        .or_else(|| get_str("trap_hosts.主机名"))
+        .or_else(|| get_str("host"));
+    (source, alertname, alert_ip, hostname)
+}
+
+/// 从 annotations 提取摘要文本：summary > description > hint
+fn extract_summary(annotations: &serde_json::Value) -> Option<String> {
+    let get_str = |key: &str| -> Option<String> {
+        annotations.get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+    get_str("summary").or_else(|| get_str("description")).or_else(|| get_str("hint"))
+}
+
+/// severity 归一化：Eventide 用 disaster/critical/high/average/warning/information
+/// 接受任意值，缺省 info；映射时仅做大小写归一，保留原值用于显示
+fn normalize_severity(s: Option<&str>) -> String {
+    match s {
+        Some(v) if !v.is_empty() => v.to_lowercase(),
+        _ => "info".to_string(),
+    }
+}
+
+/// 用 IP 在 ci_instances 表反查资产（按动态属性 attrs 里的 ip 字段匹配）。
+/// 返回 (Option<ci_id>, Option<name>)
+async fn lookup_ci_by_ip(pool: &sqlx::MySqlPool, ip: &str) -> anyhow::Result<(Option<String>, Option<String>)> {
+    // ci_instances.attrs 是 JSON，包含各种动态属性，其中常见键为 ip / manageIp / host_ip
+    // 用 JSON_EXTRACT 简单匹配（注意 attrs 是 JSON 字符串）
+    let row = sqlx::query(
+        "SELECT id, name FROM ci_instances \
+         WHERE JSON_EXTRACT(attrs, '$.ip') = ? \
+            OR JSON_EXTRACT(attrs, '$.manageIp') = ? \
+            OR JSON_EXTRACT(attrs, '$.host_ip') = ? \
+         LIMIT 1",
+    )
+    .bind(ip)
+    .bind(ip)
+    .bind(ip)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        Some(r) => Ok((
+            Some(r.try_get::<String, _>("id").unwrap_or_default()),
+            Some(r.try_get::<String, _>("name").unwrap_or_default()),
+        )),
+        None => Ok((None, None)),
+    }
 }

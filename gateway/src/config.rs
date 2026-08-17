@@ -7,7 +7,28 @@ pub struct GatewayConfig {
     pub database: DatabaseConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub alerts: AlertsConfig,
     pub systems: Vec<SystemConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlertsConfig {
+    /// Eventide webhook 推送鉴权 token，双方共享。
+    /// MeridianOps 端校验 `Authorization: Bearer <ingress_token>`。
+    pub ingress_token: String,
+    /// 是否启用 ingress 接收端（false 时返回 404，避免暴露未配置的端点）
+    pub ingress_enabled: bool,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            ingress_token: "change-me-to-a-random-secret".to_string(),
+            ingress_enabled: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +136,7 @@ impl Default for GatewayConfig {
             },
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
+            alerts: AlertsConfig::default(),
             systems: vec![
                 SystemConfig {
                     id: "axleops".to_string(),
@@ -223,6 +245,14 @@ impl GatewayConfig {
         if let Ok(v) = std::env::var("MERIDIANOPS_AUTH_ENABLED") {
             if let Ok(b) = v.parse::<bool>() {
                 self.auth.enabled = b;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_ALERT_INGRESS_TOKEN") {
+            self.alerts.ingress_token = v;
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_ALERT_INGRESS_ENABLED") {
+            if let Ok(b) = v.parse::<bool>() {
+                self.alerts.ingress_enabled = b;
             }
         }
     }
