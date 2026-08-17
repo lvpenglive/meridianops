@@ -102,6 +102,13 @@ const reportGroups: ReportGroup[] = [
         icon: 'Checked',
         available: true,
       },
+      {
+        title: '审计操作趋势',
+        desc: '近 N 天审计操作量趋势，按操作类型堆叠',
+        path: '/report/audit-trend',
+        icon: 'DataAnalysis',
+        available: true,
+      },
     ],
   },
   {
@@ -131,6 +138,8 @@ const reportGroups: ReportGroup[] = [
       { title: '核心系统可用性', desc: '核心系统 SLA 可用性统计', path: '/report/availability', icon: 'Monitor', available: false },
       { title: '巡检完成率', desc: '周期性巡检任务完成情况', path: '/report/inspection', icon: 'Checked', available: false },
       { title: '变更成功率', desc: '变更工单成功率统计', path: '/report/change-success', icon: 'RefreshRight', available: false },
+      { title: '作业执行趋势', desc: '近 N 天执行量/成功/失败趋势', path: '/report/job-trend', icon: 'DataAnalysis', available: true },
+      { title: '作业执行统计', desc: '按作业定义汇总成功率与耗时', path: '/report/job-summary', icon: 'Histogram', available: true },
     ],
   },
   {
@@ -138,9 +147,10 @@ const reportGroups: ReportGroup[] = [
     icon: 'Connection',
     reports: [
       { title: '资产总数趋势', desc: '主机/设备资产数量变化', path: '/report/asset-trend', icon: 'DataAnalysis', available: false },
-      { title: '资产分类统计', desc: '按类型/部门/环境分布', path: '/report/asset-category', icon: 'Box', available: false },
+      { title: '资产分类统计', desc: '按类型/状态分布，环形图+明细', path: '/report/asset-category', icon: 'Box', available: true },
       { title: '到期设备清单', desc: '保修/维护即将到期的设备', path: '/report/asset-expiry', icon: 'Calendar', available: false },
       { title: '数据库实例统计', desc: 'DB 实例分布与容量', path: '/report/db-instances', icon: 'Coin', available: false },
+      { title: '知识库分类统计', desc: '按分类统计文章数、查看量、有用数', path: '/report/knowledge-stats', icon: 'DocumentChecked', available: true },
     ],
   },
 ]

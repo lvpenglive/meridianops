@@ -153,6 +153,36 @@ const routes = [
         meta: { title: '合规健康度', icon: 'TrendCharts', permission: 'audit:read' }
       },
       {
+        path: 'report/asset-category',
+        name: 'ReportAssetCategory',
+        component: () => import('../views/report/AssetCategoryReport.vue'),
+        meta: { title: '资产分类统计', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
+        path: 'report/job-trend',
+        name: 'ReportJobTrend',
+        component: () => import('../views/report/JobRunTrendReport.vue'),
+        meta: { title: '作业执行趋势', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
+        path: 'report/job-summary',
+        name: 'ReportJobSummary',
+        component: () => import('../views/report/JobDefSummaryReport.vue'),
+        meta: { title: '作业执行统计', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
+        path: 'report/knowledge-stats',
+        name: 'ReportKnowledgeStats',
+        component: () => import('../views/report/KnowledgeCategoryReport.vue'),
+        meta: { title: '知识库分类统计', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
+        path: 'report/audit-trend',
+        name: 'ReportAuditTrend',
+        component: () => import('../views/report/AuditTrendReport.vue'),
+        meta: { title: '审计操作趋势', icon: 'TrendCharts', permission: 'audit:read' }
+      },
+      {
         path: 'system/users',
         name: 'SystemUsers',
         component: () => import('../views/system/UsersPage.vue'),

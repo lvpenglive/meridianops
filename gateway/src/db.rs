@@ -1273,7 +1273,96 @@ pub async fn report_role_assignment(pool: &DbPool) -> anyhow::Result<Vec<(String
     Ok(rows)
 }
 
-/// 计算 N 天前的 RFC3339 时间戳（用于 SQL 查询条件）。
+// ============ 报表中心扩展 ============
+
+/// 资产分类统计：按 CI 模型分组的实例数。返回 (model_code, model_name, count, icon)。
+pub async fn report_asset_category(pool: &DbPool) -> anyhow::Result<Vec<(String, String, i64, String)>> {
+    let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
+        "SELECT m.code, m.name, CAST(COUNT(i.id) AS SIGNED) AS cnt, COALESCE(m.icon, '') \
+         FROM ci_models m \
+         INNER JOIN ci_instances i ON i.model_id = m.id AND i.status != 'deleted' \
+         GROUP BY m.id, m.code, m.name, m.icon \
+         ORDER BY cnt DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 资产状态分布：按 status 分组。返回 (status, count)。
+pub async fn report_asset_status(pool: &DbPool) -> anyhow::Result<Vec<(String, i64)>> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT status, CAST(COUNT(*) AS SIGNED) AS cnt \
+         FROM ci_instances WHERE status != 'deleted' \
+         GROUP BY status ORDER BY cnt DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 作业执行趋势：按天聚合执行次数和成功数。返回 (date, total, success, failed)。
+pub async fn report_job_run_trend(pool: &DbPool, days: i64) -> anyhow::Result<Vec<(String, i64, i64, i64)>> {
+    let since = days_ago_rfc3339(days);
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT CAST(DATE(started_at) AS CHAR) AS d, CAST(COUNT(*) AS SIGNED) AS total, \
+                CAST(COALESCE(SUM(CASE WHEN overall_status = 'success' THEN 1 ELSE 0 END), 0) AS SIGNED) AS success, \
+                CAST(COALESCE(SUM(CASE WHEN overall_status IN ('failed','partial','timeout') THEN 1 ELSE 0 END), 0) AS SIGNED) AS failed \
+         FROM job_runs WHERE started_at >= ? \
+         GROUP BY CAST(DATE(started_at) AS CHAR) ORDER BY d",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 作业执行统计：按作业定义汇总。返回 (job_name, total, success, failed, avg_duration_ms)。
+pub async fn report_job_def_summary(pool: &DbPool, days: i64) -> anyhow::Result<Vec<(String, i64, i64, i64, f64)>> {
+    let since = days_ago_rfc3339(days);
+    let rows: Vec<(String, i64, i64, i64, f64)> = sqlx::query_as(
+        "SELECT job_name, CAST(COUNT(*) AS SIGNED) AS total, \
+                CAST(COALESCE(SUM(CASE WHEN overall_status = 'success' THEN 1 ELSE 0 END), 0) AS SIGNED) AS success, \
+                CAST(COALESCE(SUM(CASE WHEN overall_status IN ('failed','partial','timeout') THEN 1 ELSE 0 END), 0) AS SIGNED) AS failed, \
+                CAST(COALESCE(AVG(NULLIF(TIMESTAMPDIFF(SECOND, started_at, finished_at), 0)), 0) AS DOUBLE) AS avg_dur \
+         FROM job_runs WHERE started_at >= ? \
+         GROUP BY job_name ORDER BY total DESC",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 知识库分类统计：按 category 分组。返回 (category, count, total_views, total_helpful)。
+pub async fn report_knowledge_category(pool: &DbPool) -> anyhow::Result<Vec<(String, i64, i64, i64)>> {
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT category, CAST(COUNT(*) AS SIGNED) AS cnt, \
+                CAST(COALESCE(SUM(view_count), 0) AS SIGNED) AS views, \
+                CAST(COALESCE(SUM(helpful_count), 0) AS SIGNED) AS helpful \
+         FROM knowledge_items WHERE status = 'published' \
+         GROUP BY category ORDER BY cnt DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 审计操作趋势：按天+action 聚合。返回 (date, action, count)。
+pub async fn report_audit_trend(pool: &DbPool, days: i64) -> anyhow::Result<Vec<(String, String, i64)>> {
+    let since = days_ago_rfc3339(days);
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT CAST(DATE(created_at) AS CHAR) AS d, action, CAST(COUNT(*) AS SIGNED) AS cnt \
+         FROM audit_logs WHERE created_at >= ? \
+         GROUP BY CAST(DATE(created_at) AS CHAR), action ORDER BY d, action",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 计算N天前RFC3339时间戳（报表查询用）
 fn days_ago_rfc3339(days: i64) -> String {
     (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339()
 }

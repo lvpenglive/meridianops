@@ -1,4 +1,4 @@
-﻿use std::sync::Arc;
+use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::routing::get;
@@ -23,6 +23,13 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/reports/compliance-summary", get(compliance_summary))
         .route("/api/reports/inactive-users", get(inactive_users))
         .route("/api/reports/role-assignment", get(role_assignment))
+        // 扩展报表
+        .route("/api/reports/asset-category", get(asset_category))
+        .route("/api/reports/asset-status", get(asset_status))
+        .route("/api/reports/job-run-trend", get(job_run_trend))
+        .route("/api/reports/job-def-summary", get(job_def_summary))
+        .route("/api/reports/knowledge-category", get(knowledge_category))
+        .route("/api/reports/audit-trend", get(audit_trend))
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,6 +275,118 @@ async fn role_assignment(
         .map(|(n, c)| RoleAssignmentItem {
             role_name: n,
             user_count: c,
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
+}
+
+// ============ 扩展报表 ============
+
+/// 资产分类统计（按 CI 模型分布）。
+async fn asset_category(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let rows = db::report_asset_category(&state.db).await?;
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(code, name, count, icon)| {
+            serde_json::json!({ "code": code, "name": name, "count": count, "icon": icon })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
+}
+
+/// 资产状态分布。
+async fn asset_status(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let rows = db::report_asset_status(&state.db).await?;
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(status, count)| serde_json::json!({ "status": status, "count": count }))
+        .collect();
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
+}
+
+/// 作业执行趋势。
+async fn job_run_trend(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Query(q): Query<DaysQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    let rows = db::report_job_run_trend(&state.db, days).await?;
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(d, total, success, failed)| {
+            serde_json::json!({ "date": d, "total": total, "success": success, "failed": failed })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
+}
+
+/// 作业执行统计（按作业定义汇总）。
+async fn job_def_summary(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Query(q): Query<DaysQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    let rows = db::report_job_def_summary(&state.db, days).await?;
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(name, total, success, failed, avg_dur)| {
+            serde_json::json!({
+                "jobName": name, "total": total, "success": success, "failed": failed,
+                "avgDurationSec": (avg_dur * 10.0).round() / 10.0,
+                "successRate": if *total > 0 { ((*success as f64 / *total as f64) * 1000.0).round() / 10.0 } else { 0.0 },
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
+}
+
+/// 知识库分类统计。
+async fn knowledge_category(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let rows = db::report_knowledge_category(&state.db).await?;
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(cat, count, views, helpful)| {
+            serde_json::json!({ "category": cat, "count": count, "totalViews": views, "totalHelpful": helpful })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
+}
+
+/// 审计操作趋势。
+async fn audit_trend(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Query(q): Query<DaysQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "audit:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    let rows = db::report_audit_trend(&state.db, days).await?;
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(d, action, count)| {
+            serde_json::json!({ "date": d, "action": action, "count": count })
         })
         .collect();
     Ok(Json(serde_json::json!({ "code": 0, "data": data })))

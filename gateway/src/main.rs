@@ -1,3 +1,4 @@
+mod alert_routes;
 mod audit;
 mod audit_routes;
 mod auth;
