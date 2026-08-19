@@ -174,6 +174,7 @@ const allMenuGroups: MenuGroup[] = [
   {
     type: 'sub', title: '监控告警', icon: 'Bell', children: [
       { path: '/alerts', title: '告警中心', icon: 'BellFilled' },
+      { path: '/alerts/screen', title: '告警大屏', icon: 'Monitor' },
       { path: '/logs', title: '日志中心', icon: 'Document' },
       { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
     ]

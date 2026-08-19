@@ -81,6 +81,12 @@ const routes = [
         meta: { title: '告警中心', icon: 'BellFilled' }
       },
       {
+        path: 'alerts/screen',
+        name: 'AlertsScreen',
+        component: () => import('../views/alerts/AlertsScreen.vue'),
+        meta: { title: '告警大屏', icon: 'Monitor', fullscreen: true }
+      },
+      {
         path: 'logs',
         name: 'Logs',
         component: () => import('../views/logs/LogsPage.vue'),

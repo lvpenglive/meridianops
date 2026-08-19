@@ -71,9 +71,29 @@ async fn main() -> anyhow::Result<()> {
     let bind = config.server.bind.clone();
     tracing::info!("Starting MeridianOps Gateway on {}", bind);
 
+    // 1.5 加载告警接入配置：优先从 system_settings 表读取，覆盖 toml 中的值。
+    // 这样前端在「告警接入」面板修改的密钥/启用状态重启后仍然生效。
+    let mut alerts_runtime = config.alerts.clone();
+    if let Ok(Some(token)) = db::get_setting(&db_pool, "alert_ingress_token").await {
+        if !token.is_empty() {
+            alerts_runtime.ingress_token = token;
+        }
+    }
+    if let Ok(Some(en)) = db::get_setting(&db_pool, "alert_ingress_enabled").await {
+        if let Ok(b) = en.parse::<bool>() {
+            alerts_runtime.ingress_enabled = b;
+        }
+    }
+    tracing::info!(
+        "alert ingress loaded from db: enabled={}, token_len={}",
+        alerts_runtime.ingress_enabled,
+        alerts_runtime.ingress_token.len()
+    );
+
     // 2. AppState
     let state = Arc::new(AppState {
         config: Arc::new(config.clone()),
+        alerts_runtime: Arc::new(std::sync::RwLock::new(alerts_runtime)),
         client: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?,
@@ -108,6 +128,47 @@ async fn main() -> anyhow::Result<()> {
 async fn run_migrations_ignore_checksum(pool: &sqlx::MySqlPool) -> anyhow::Result<()> {
     use sqlx::migrate::Migrate;
     use std::collections::BTreeSet;
+
+    // ============================================================
+    // 预执行：确保 alert_events 的接入渠道/接入者列存在（兼容历史上失败过的迁移 31）
+    // MySQL 不支持 ADD COLUMN IF NOT EXISTS，手动检查。
+    // ============================================================
+    let has_ing_channel: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS \
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'alert_events' AND COLUMN_NAME = 'ingress_channel'",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    if has_ing_channel.is_none() {
+        tracing::info!("adding alert_events.ingress_channel column");
+        sqlx::query(
+            "ALTER TABLE alert_events \
+             ADD COLUMN ingress_channel VARCHAR(32) NOT NULL DEFAULT 'manual' \
+             COMMENT '接入渠道:webhook/manual/job/api_token/system' AFTER source",
+        )
+        .execute(pool)
+        .await
+        .ok();
+    }
+    let has_ing_actor: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS \
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'alert_events' AND COLUMN_NAME = 'ingress_actor'",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    if has_ing_actor.is_none() {
+        tracing::info!("adding alert_events.ingress_actor column");
+        sqlx::query(
+            "ALTER TABLE alert_events \
+             ADD COLUMN ingress_actor VARCHAR(128) NULL \
+             COMMENT '接入者身份（通道名/用户名/token 名）' AFTER ingress_channel",
+        )
+        .execute(pool)
+        .await
+        .ok();
+    }
 
     // 清理 _sqlx_migrations 中历史遗留的失败记录（success=0），避免重复 apply 时主键冲突
     sqlx::query("DELETE FROM _sqlx_migrations WHERE success = 0")

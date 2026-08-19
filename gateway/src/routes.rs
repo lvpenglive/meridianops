@@ -7,12 +7,15 @@ use axum::{
 };
 use reqwest::Client;
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use crate::config::GatewayConfig;
+use crate::config::{AlertsConfig, GatewayConfig};
 
 pub struct AppState {
     pub config: Arc<GatewayConfig>,
+    /// 运行时可更新的告警接入配置（覆盖 toml [alerts] 节）。
+    /// 启动时优先从 system_settings 表加载；前端 PUT /api/system/alert-ingress 时同步更新。
+    pub alerts_runtime: Arc<RwLock<AlertsConfig>>,
     pub client: Client,
     pub db: sqlx::MySqlPool,
     pub jwt_secret: String,
