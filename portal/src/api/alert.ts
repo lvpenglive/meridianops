@@ -39,11 +39,11 @@ export interface AlertEventPage {
 
 export interface AlertEventQuery {
   page?: number
-  page_size?: number
+  pageSize?: number
   source?: string
   severity?: string
   status?: string
-  ci_id?: string
+  ciId?: string
   keyword?: string
 }
 

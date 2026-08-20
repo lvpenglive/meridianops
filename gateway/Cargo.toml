@@ -16,7 +16,7 @@ toml = "0.8"
 anyhow = "1"
 thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "mysql", "macros", "chrono", "migrate"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "mysql", "macros", "chrono", "migrate", "json"] }
 jsonwebtoken = "9"
 argon2 = { version = "0.5", features = ["std"] }
 uuid = { version = "1", features = ["v4", "serde"] }

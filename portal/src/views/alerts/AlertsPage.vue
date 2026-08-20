@@ -875,7 +875,7 @@ const filter = reactive({
 async function loadEvents() {
   listLoading.value = true
   try {
-    const params: Record<string, unknown> = { page: filter.page, page_size: filter.pageSize }
+    const params: Record<string, unknown> = { page: filter.page, pageSize: filter.pageSize }
     if (filter.severity) params.severity = filter.severity
     if (filter.status) params.status = filter.status
     if (filter.source) params.source = filter.source

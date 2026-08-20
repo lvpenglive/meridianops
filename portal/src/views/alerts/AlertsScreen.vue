@@ -264,7 +264,9 @@ const filteredList = computed(() => {
 })
 const displayList = computed(() => {
   if (!filteredList.value.length) return []
-  if (filteredList.value.length <= 5) return filteredList.value
+  // 正常银行大屏不会有 >100 条 4/5 级活跃告警，仅在超大量时复制实现无缝滚动
+  // 避免中小数据量时出现重复显示
+  if (filteredList.value.length <= 100) return filteredList.value
   return [...filteredList.value, ...filteredList.value]
 })
 
@@ -330,7 +332,7 @@ async function loadAll() {
   try {
     const [st, ev] = await Promise.all([
       getAlertStats(),
-      listAlertEvents({ page: currentPage.value, page_size: pageSize }),
+      listAlertEvents({ page: currentPage.value, pageSize: pageSize, status: 'firing,acknowledged' }),
     ])
     stats.value = st
     const evPage = ev as { items: AlertEvent[]; total: number }

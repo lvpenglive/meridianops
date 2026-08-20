@@ -209,8 +209,18 @@ async fn list_events(
     }
     if let Some(s) = &q.status {
         if !s.is_empty() {
-            where_clauses.push("e.status = ?".to_string());
-            bind_values.push(s.clone());
+            // 支持逗号分隔的多状态过滤（例如 "firing,acknowledged"）
+            let parts: Vec<&str> = s.split(',').map(|p| p.trim()).filter(|p| !p.is_empty()).collect();
+            if parts.len() == 1 {
+                where_clauses.push("e.status = ?".to_string());
+                bind_values.push(parts[0].to_string());
+            } else if !parts.is_empty() {
+                let placeholders = parts.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                where_clauses.push(format!("e.status IN ({})", placeholders));
+                for p in parts {
+                    bind_values.push(p.to_string());
+                }
+            }
         }
     }
     if let Some(s) = &q.ci_id {
@@ -253,9 +263,9 @@ async fn list_events(
          e.fire_count, e.first_fired_at, e.fired_at, e.ends_at, e.acknowledged_by, e.acknowledged_at, e.resolved_by, e.resolved_at, \
          e.resolution_note, e.created_at, e.updated_at, \
          u.username AS contact_name \
-         FROM alert_events e{} \
+         FROM alert_events e \
          LEFT JOIN ci_instances ci ON e.ci_id = ci.id \
-         LEFT JOIN users u ON ci.owner_id = u.id \
+         LEFT JOIN users u ON ci.owner_id = u.id{} \
          ORDER BY CASE LOWER(e.severity) \
              WHEN '5' THEN 5 WHEN 'p5' THEN 5 WHEN 'disaster' THEN 5 WHEN 'dis' THEN 5 \
              WHEN '4' THEN 4 WHEN 'p4' THEN 4 WHEN 'high' THEN 4 WHEN 'major' THEN 4 WHEN 'critical' THEN 4 WHEN 'crit' THEN 4 \
@@ -278,10 +288,9 @@ async fn list_events(
     let items: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let labels_str = r.try_get::<Option<String>, _>("labels").unwrap_or(None);
-            let labels_val: serde_json::Value = labels_str
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
+            let labels_val: serde_json::Value = r
+                .try_get::<Option<serde_json::Value>, _>("labels")
+                .unwrap_or(None)
                 .unwrap_or(serde_json::Value::Null);
             serde_json::json!({
                 "id": r.try_get::<String, _>("id").unwrap_or_default(),
@@ -344,10 +353,9 @@ async fn get_event(
 
     match row {
         Some(r) => {
-            let labels_str = r.try_get::<Option<String>, _>("labels").unwrap_or(None);
-            let labels_val: serde_json::Value = labels_str
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
+            let labels_val: serde_json::Value = r
+                .try_get::<Option<serde_json::Value>, _>("labels")
+                .unwrap_or(None)
                 .unwrap_or(serde_json::Value::Null);
             Ok(Json(serde_json::json!({
                 "code": 0,
