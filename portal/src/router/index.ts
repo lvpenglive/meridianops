@@ -120,7 +120,13 @@ const routes = [
         path: 'tickets',
         name: 'Tickets',
         component: () => import('../views/tickets/TicketsPage.vue'),
-        meta: { title: '工单系统', icon: 'Tickets' }
+        meta: { title: '工单系统', icon: 'Tickets', permission: 'ticket:read' }
+      },
+      {
+        path: 'workflows',
+        name: 'Workflows',
+        component: () => import('../views/workflows/WorkflowTemplatesPage.vue'),
+        meta: { title: '流程模板', icon: 'Share', permission: 'workflow:read' }
       },
       {
         path: 'knowledge',

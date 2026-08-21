@@ -183,7 +183,8 @@ const allMenuGroups: MenuGroup[] = [
     type: 'sub', title: '运维流程', icon: 'Operation', children: [
       { path: '/jobs', title: '作业中心', icon: 'List' },
       { path: '/system/credentials', title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' },
-      { path: '/tickets', title: '工单系统', icon: 'Tickets' },
+      { path: '/tickets', title: '工单系统', icon: 'Tickets', permission: 'ticket:read' },
+      { path: '/workflows', title: '流程模板', icon: 'Share', permission: 'workflow:read' },
       { path: '/knowledge', title: '知识库', icon: 'Collection', permission: 'knowledge:read' },
     ]
   },

@@ -21,7 +21,10 @@ mod role_routes;
 mod routes;
 mod ssh_executor;
 mod system_routes;
+mod template_routes;
+mod ticket_routes;
 mod token_routes;
+mod workflow_engine;
 
 use clap::Parser;
 use config::GatewayConfig;
