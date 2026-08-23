@@ -120,6 +120,11 @@
             <el-option v-for="u in users" :key="u.id" :label="u.displayName || u.username" :value="u.id" />
           </el-select>
         </el-form-item>
+        <el-form-item label="报告人">
+          <el-select v-model="filter.reporterId" placeholder="全部" clearable filterable style="width:150px" @change="onFilter">
+            <el-option v-for="u in users" :key="u.id" :label="u.displayName || u.username" :value="u.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="SLA">
           <el-select v-model="filter.slaState" placeholder="全部" clearable style="width:110px" @change="onFilter">
             <el-option label="正常" value="ok" />
@@ -137,13 +142,29 @@
           <el-button :icon="Refresh" @click="resetFilter">重置</el-button>
           <el-button v-if="hasPerm('ticket:create')" type="success" :icon="Plus"
             @click="openCreateDialog()">新建工单</el-button>
+          <el-button v-if="hasPerm('ticket:export')" :icon="Download" @click="exportTickets">导出</el-button>
         </el-form-item>
       </el-form>
     </el-card>
 
     <!-- ============ 工单列表 ============ -->
     <el-card shadow="never" class="list-card">
-      <el-table v-loading="listLoading" :data="rows" stripe @row-click="openDetail">
+      <!-- 批量操作栏 -->
+      <div v-if="selectedRows.length > 0" class="batch-bar">
+        <span class="batch-bar__info">已选择 <b>{{ selectedRows.length }}</b> 项</span>
+        <el-button size="small" type="primary" :icon="User" :disabled="!hasPerm('ticket:update')" @click="openBatchAssignDialog">
+          批量分派
+        </el-button>
+        <el-button size="small" type="success" :icon="CircleCheck" :disabled="!hasPerm('ticket:update')" @click="openBatchCloseDialog">
+          批量关闭
+        </el-button>
+        <el-button size="small" type="warning" :icon="Flag" :disabled="!hasPerm('ticket:update')" @click="openBatchPriorityDialog">
+          批量改优先级
+        </el-button>
+        <el-button size="small" @click="clearSelection">取消选择</el-button>
+      </div>
+      <el-table v-loading="listLoading" :data="rows" stripe @row-click="openDetail" @selection-change="handleSelectionChange" ref="tableRef">
+        <el-table-column type="selection" width="42" :selectable="isRowSelectable" @click.stop />
         <el-table-column label="编号" width="180">
           <template #default="{ row }">
             <div class="no-col">
@@ -480,56 +501,151 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- ============ 批量分派对话框 ============ -->
+    <el-dialog v-model="batchAssignVisible" title="批量分派工单" width="480px" :close-on-click-modal="false">
+      <el-form :model="batchAssignForm" label-width="80px">
+        <el-form-item label="处理人">
+          <el-select v-model="batchAssignForm.assigneeId" filterable placeholder="请选择处理人" style="width:100%">
+            <el-option v-for="u in users" :key="u.id" :label="u.displayName || u.username" :value="u.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="batchAssignForm.comment" type="textarea" :rows="2" placeholder="可选：填写分派备注…" />
+        </el-form-item>
+        <el-form-item>
+          <span style="color:#909399; font-size:13px">共 {{ selectedRows.length }} 个工单将被分派给所选用户</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchAssignVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchActionLoading" @click="submitBatchAssign">确认分派</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ============ 批量关闭对话框 ============ -->
+    <el-dialog v-model="batchCloseVisible" title="批量关闭工单" width="480px" :close-on-click-modal="false">
+      <el-form :model="batchCloseForm" label-width="80px">
+        <el-form-item label="解决方案">
+          <el-input v-model="batchCloseForm.resolution" type="textarea" :rows="3" placeholder="请填写解决方案…" />
+        </el-form-item>
+        <el-form-item label="关闭备注">
+          <el-input v-model="batchCloseForm.comment" type="textarea" :rows="2" placeholder="可选：填写关闭备注…" />
+        </el-form-item>
+        <el-form-item>
+          <span style="color:#e6a23c; font-size:13px">
+            ⚠ 共 {{ selectedRows.length }} 个工单将被关闭，此操作不可撤销
+          </span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchCloseVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchActionLoading" @click="submitBatchClose">确认关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ============ 批量改优先级对话框 ============ -->
+    <el-dialog v-model="batchPriorityVisible" title="批量修改优先级" width="420px" :close-on-click-modal="false">
+      <el-form :model="batchPriorityForm" label-width="80px">
+        <el-form-item label="优先级">
+          <el-radio-group v-model="batchPriorityForm.priority">
+            <el-radio :value="1"><el-tag effect="dark" type="danger">P1 紧急</el-tag></el-radio>
+            <el-radio :value="2"><el-tag effect="dark" type="warning">P2 高</el-tag></el-radio>
+            <el-radio :value="3"><el-tag effect="plain" type="primary">P3 中</el-tag></el-radio>
+            <el-radio :value="4"><el-tag effect="plain" type="info">P4 低</el-tag></el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="batchPriorityForm.comment" type="textarea" :rows="2" placeholder="可选：填写修改备注…" />
+        </el-form-item>
+        <el-form-item>
+          <span style="color:#909399; font-size:13px">共 {{ selectedRows.length }} 个工单将修改优先级</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchPriorityVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchActionLoading" @click="submitBatchPriority">确认修改</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   Tickets, Edit, Stamp, SuccessFilled, AlarmClock, Search, Refresh, Plus,
-  View, User, Warning, Delete, ArrowDown, EditPen, Check, ChatDotRound, Link
+  View, User, Warning, Delete, ArrowDown, EditPen, Check, ChatDotRound, Link,
+  Download, CircleCheck, Flag,
 } from '@element-plus/icons-vue'
 import {
   listTickets, getTicketKpis, getTicketDetail, createTicket, updateTicket,
   deleteTicket, assignTicket, executeNodeAction, addComment, linkAlert,
-  unlinkAlert, cancelTicket,
+  unlinkAlert, cancelTicket, getExportUrl, batchAction,
   type TicketSummary, type TicketDetail, type TicketNode, type TicketListQuery,
   type TicketPriority, type TicketStatus, type CommentAction, type WorkflowActionReq,
+  type BatchDecision,
 } from '../../api/ticket'
 import { listAllTemplates, type WorkflowTemplate } from '../../api/template'
 import { listAlertEvents, type AlertEvent, type AlertEventQuery } from '../../api/alert'
 import { useUserStore } from '../../stores/user'
+import { useTicketDicts, labelOf } from '../../composables/useTicketDicts'
 
 // ---------------- 路由 & 权限 ----------------
 const userStore = useUserStore()
+const route = useRoute()
 function hasPerm(p: string) { return userStore.hasPermission(p) }
 
-// ---------------- 常量 ----------------
-const TICKET_TYPE_META = {
-  incident:          { label: '事件工单',    desc: '告警拨测/事件驱动', tag: 'danger' as const },
-  problem:           { label: '故障工单',    desc: '根因修复/RCA',   tag: 'warning' as const },
-  change:            { label: '标准变更',    desc: '普通变更审批流', tag: 'primary' as const },
-  change_emergency:  { label: '紧急变更',    desc: '快速紧急变更',   tag: 'danger' as const },
-  task:              { label: '运维任务',    desc: '日常运维操作',   tag: 'info' as const },
-} as const
-const PRIORITY_META: Record<number, { label: string; tag: any; warn: number }> = {
-  1: { label: 'P1 紧急', tag: 'danger',  warn: 1 },
-  2: { label: 'P2 高',   tag: 'warning', warn: 2 },
-  3: { label: 'P3 中',   tag: 'primary', warn: 8 },
-  4: { label: 'P4 低',   tag: 'info',    warn: 24 },
+// ---------------- 字典枚举 ----------------
+const dicts = useTicketDicts()
+
+const TICKET_TYPE_TAGS: Record<string, { tag: string; desc: string }> = {
+  incident:         { tag: 'danger',  desc: '告警拨测/事件驱动' },
+  problem:          { tag: 'warning', desc: '根因修复/RCA' },
+  change:           { tag: 'primary', desc: '普通变更审批流' },
+  change_emergency: { tag: 'danger',  desc: '快速紧急变更' },
+  task:             { tag: 'info',    desc: '日常运维操作' },
 }
-const STATUS_META: Record<string, { label: string; tag: any }> = {
-  open:           { label: '已创建',     tag: 'info' },
-  assigned:       { label: '已分派',     tag: '' },
-  in_progress:    { label: '处理中',     tag: 'warning' },
-  pending_review: { label: '待复核',     tag: 'primary' },
-  resolved:       { label: '已解决',     tag: 'success' },
-  closed:         { label: '已关闭',     tag: 'success' },
-  cancelled:      { label: '已取消',     tag: 'danger' },
+const TICKET_TYPE_META = computed(() => {
+  const m: Record<string, { label: string; tag: string; desc: string }> = {}
+  for (const t of dicts.ticketTypes.value) {
+    const fallback = TICKET_TYPE_TAGS[t.value] || { tag: 'info', desc: '' }
+    m[t.value] = { label: t.label, ...fallback }
+  }
+  return m
+})
+const PRIORITY_TAGS: Record<string, { tag: string; warn: number }> = {
+  '1': { tag: 'danger',  warn: 1 },
+  '2': { tag: 'warning', warn: 2 },
+  '3': { tag: 'primary', warn: 8 },
+  '4': { tag: 'info',    warn: 24 },
 }
-const STATUS_OPTIONS = Object.entries(STATUS_META).map(([value, { label }]) => ({ value, label }))
-const CATEGORY_SUGGESTIONS = ['数据库', '网络', '安全', '主机', '应用', '存储', '中间件', '办公网', '操作系统', '配置', '容量', '监控', '其他']
+const PRIORITY_META = computed<Record<number, { label: string; tag: any; warn: number }>>(() => {
+  const m: Record<number, { label: string; tag: any; warn: number }> = {}
+  for (const p of dicts.priorities.value) {
+    const fallback = PRIORITY_TAGS[p.value] || { tag: 'info', warn: 24 }
+    m[Number(p.value)] = { label: p.label, ...fallback }
+  }
+  return m
+})
+const STATUS_TAGS: Record<string, string> = {
+  open: 'info', assigned: '', in_progress: 'warning',
+  pending_review: 'primary', resolved: 'success', closed: 'success', cancelled: 'danger',
+}
+const STATUS_META = computed<Record<string, { label: string; tag: any }>>(() => {
+  const m: Record<string, { label: string; tag: any }> = {}
+  for (const s of dicts.statuses.value) {
+    m[s.value] = { label: s.label, tag: STATUS_TAGS[s.value] ?? 'info' }
+  }
+  return m
+})
+const STATUS_OPTIONS = computed(() =>
+  dicts.statuses.value.map(s => ({ value: s.value, label: s.label }))
+)
+const CATEGORY_SUGGESTIONS = computed(() =>
+  dicts.categories.value.map(c => c.label)
+)
 
 // ---------------- 列表 / KPI ----------------
 interface UserLite { id: string; username: string; displayName?: string | null; roleId?: string | null; roleLabel?: string | null }
@@ -581,6 +697,107 @@ function resetFilter() {
 }
 function onDateRangeChange(v: [string, string] | null) { dateRange.value = v || null; onFilter() }
 
+/* ============= 导出 ============= */
+function exportTickets() {
+  const params: TicketListQuery = { ...filter }
+  if (dateRange.value?.[0]) params.createdAtFrom = dateRange.value[0]
+  if (dateRange.value?.[1]) params.createdAtTo = dateRange.value[1]
+  const url = getExportUrl(params)
+  // 用 a 标签方式下载
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `tickets_${new Date().toISOString().slice(0,10)}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+/* ============= 批量选择 ============= */
+const tableRef = ref<any>(null)
+const selectedRows = ref<TicketSummary[]>([])
+
+function handleSelectionChange(rows: TicketSummary[]) {
+  selectedRows.value = rows
+}
+function clearSelection() {
+  tableRef.value?.clearSelection?.()
+  selectedRows.value = []
+}
+function isRowSelectable(row: TicketSummary): boolean {
+  // 已关闭/已取消的工单不参与批量操作
+  return row.status !== 'closed' && row.status !== 'cancelled'
+}
+
+/* ============= 批量操作 ============= */
+const batchActionLoading = ref(false)
+const batchAssignVisible = ref(false)
+const batchAssignForm = reactive<{ assigneeId: string; comment: string }>({ assigneeId: '', comment: '' })
+const batchCloseVisible = ref(false)
+const batchCloseForm = reactive<{ resolution: string; comment: string }>({ resolution: '', comment: '' })
+const batchPriorityVisible = ref(false)
+const batchPriorityForm = reactive<{ priority: TicketPriority; comment: string }>({ priority: 3, comment: '' })
+
+function openBatchAssignDialog() {
+  batchAssignForm.assigneeId = ''
+  batchAssignForm.comment = ''
+  batchAssignVisible.value = true
+}
+function openBatchCloseDialog() {
+  batchCloseForm.resolution = ''
+  batchCloseForm.comment = ''
+  batchCloseVisible.value = true
+}
+function openBatchPriorityDialog() {
+  batchPriorityForm.priority = 3
+  batchPriorityForm.comment = ''
+  batchPriorityVisible.value = true
+}
+
+async function submitBatchAction(decision: BatchDecision, opts: any) {
+  if (selectedRows.value.length === 0) {
+    ElMessage.warning('请先选择工单')
+    return
+  }
+  const ticketIds = selectedRows.value.map(r => r.id)
+  batchActionLoading.value = true
+  try {
+    const res = await batchAction(ticketIds, decision, opts)
+    ElMessage.success(`批量操作完成：成功 ${res.success}/${res.total} 个`)
+    // 刷新列表和 KPI
+    await Promise.all([loadList(), loadKpis()])
+    clearSelection()
+    return res
+  } catch (e) { ElMessage.error(errMsg(e)) } finally { batchActionLoading.value = false }
+}
+
+async function submitBatchAssign() {
+  if (!batchAssignForm.assigneeId) {
+    ElMessage.warning('请选择处理人')
+    return
+  }
+  const res = await submitBatchAction('assign', {
+    assigneeId: batchAssignForm.assigneeId,
+    comment: batchAssignForm.comment || undefined,
+  })
+  if (res) batchAssignVisible.value = false
+}
+
+async function submitBatchClose() {
+  const res = await submitBatchAction('close', {
+    resolution: batchCloseForm.resolution || undefined,
+    comment: batchCloseForm.comment || undefined,
+  })
+  if (res) batchCloseVisible.value = false
+}
+
+async function submitBatchPriority() {
+  const res = await submitBatchAction('priority', {
+    priority: batchPriorityForm.priority,
+    comment: batchPriorityForm.comment || undefined,
+  })
+  if (res) batchPriorityVisible.value = false
+}
+
 function prWidth(by: Record<string, number>, p: 1|2|3|4) {
   const sum = (Object.values(by || {}) as number[]).reduce((a,b)=>a+(b||0),0) || 1
   return Math.min(100, Math.round(((by['P'+p] ?? by[p]) ?? 0) / sum * 100))
@@ -603,7 +820,7 @@ function isSlaWarn(t: { slaDueAt?: string | null; status?: string; priority?: Ti
   if (!t.slaDueAt) return false
   if (t.status === 'closed' || t.status === 'cancelled') return false
   const left = hoursUntil(t.slaDueAt)
-  const warn = PRIORITY_META[t.priority || 3].warn
+  const warn = PRIORITY_META.value[t.priority || 3]?.warn ?? 24
   return left >= 0 && left < warn
 }
 
@@ -664,13 +881,7 @@ function activeStepIndex(nodes: TicketNode[]) {
   return actIdx < 0 ? list.length : actIdx + 1
 }
 function nodeKindLabel(k: string) {
-  const map: Record<string, string> = {
-    start: '起始', end: '结束', auto_pass: '自动通过',
-    single_approval: '单人审批', all_approval: '全员审批', any_approval: '或签审批',
-    countersign: '会签', condition_gateway: '条件分支',
-    parallel_split: '并行分叉', parallel_join: '并行汇聚'
-  }
-  return map[k] || k
+  return labelOf(dicts.nodeKinds.value, k)
 }
 function fmtApprovers(list?: Array<{id?: string; name?: string} | any> | null): string {
   if (!Array.isArray(list)) return '-'
@@ -946,12 +1157,20 @@ function errMsg(e: unknown): string {
 
 // ---------------- 生命周期 ----------------
 onMounted(async () => {
+  await dicts.load()
   await Promise.all([loadUsers(), loadKpis(), loadList()])
   try { templates.value = await listAllTemplates() as any } catch {}
   try {
     const recent = await listTickets({ page: 1, pageSize: 50 })
     recentTickets.value = recent.list
   } catch {}
+  const qid = route.query.id
+  if (typeof qid === 'string' && qid) {
+    detailVisible.value = true
+    detail.value = null
+    detailTab.value = route.query.action ? 'flow' : detailTab.value
+    await loadDetail(qid)
+  }
 })
 </script>
 
@@ -990,6 +1209,27 @@ onMounted(async () => {
 
 .filter-card { margin-bottom: 12px; }
 .filter-card .el-form-item { margin-bottom: 8px; margin-right: 6px; }
+
+/* 批量操作栏 */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+.batch-bar__info {
+  font-size: 13px;
+  color: #409EFF;
+  margin-right: 8px;
+}
+.batch-bar__info b {
+  font-weight: 600;
+  margin: 0 2px;
+}
 
 .list-card .no-col { display:flex; align-items:center; }
 

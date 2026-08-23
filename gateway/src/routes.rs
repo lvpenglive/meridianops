@@ -42,6 +42,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(crate::alert_routes::routes())
         .merge(crate::ticket_routes::routes())
         .merge(crate::template_routes::routes())
+        .merge(crate::notification_routes::routes())
+        .merge(crate::aiops_routes::routes())
         .route("/api/systems", get(list_systems))
         .route("/api/systems/:id", get(get_system))
         .route("/api/proxy/*rest", proxy_any_method())

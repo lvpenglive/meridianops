@@ -155,6 +155,68 @@
             />
           </div>
         </el-tab-pane>
+
+        <!-- 通知设置 -->
+        <el-tab-pane label="通知设置" name="notifications">
+          <div class="notify-settings">
+            <div class="notify-section">
+              <div class="notify-section__title">消息通知</div>
+              <div class="notify-section__desc">配置接收哪些类型的站内通知</div>
+              <el-form label-width="0" class="notify-form">
+                <el-form-item>
+                  <el-checkbox v-model="notifySettings.ticketAssigned" disabled>
+                    工单分派给我时
+                  </el-checkbox>
+                </el-form-item>
+                <el-form-item>
+                  <el-checkbox v-model="notifySettings.ticketApproval" disabled>
+                    有待我审批的工单时
+                  </el-checkbox>
+                </el-form-item>
+                <el-form-item>
+                  <el-checkbox v-model="notifySettings.ticketComment" disabled>
+                    我关注的工单有新评论时
+                  </el-checkbox>
+                </el-form-item>
+                <el-form-item>
+                  <el-checkbox v-model="notifySettings.ticketSlaWarn" disabled>
+                    工单 SLA 临期/违约提醒
+                  </el-checkbox>
+                </el-form-item>
+                <el-form-item>
+                  <el-checkbox v-model="notifySettings.alertCritical" disabled>
+                    严重级别告警（P0/P1）
+                  </el-checkbox>
+                </el-form-item>
+              </el-form>
+            </div>
+
+            <div class="notify-section">
+              <div class="notify-section__title">邮件通知</div>
+              <div class="notify-section__desc">配置是否接收邮件提醒</div>
+              <el-form label-width="0" class="notify-form">
+                <el-form-item>
+                  <el-checkbox v-model="notifySettings.emailEnabled" disabled>
+                    启用邮件通知
+                  </el-checkbox>
+                </el-form-item>
+                <el-form-item>
+                  <el-checkbox v-model="notifySettings.emailDailyDigest" disabled>
+                    每日工单摘要邮件
+                  </el-checkbox>
+                </el-form-item>
+              </el-form>
+            </div>
+
+            <el-alert
+              title="通知设置功能即将开放，当前为占位展示"
+              type="info"
+              :closable="false"
+              show-icon
+              class="notify-alert"
+            />
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -174,10 +236,21 @@ import type { PasswordPolicy, AuditLog } from '../../api/types'
 const userStore = useUserStore()
 const route = useRoute()
 
-const activeTab = ref<'profile' | 'password' | 'history'>('profile')
+const activeTab = ref<'profile' | 'password' | 'history' | 'notifications'>('profile')
 
 // 强制改密：URL 带 forceChange=1 或 store.passwordExpired 时自动切到密码 tab
 const forceChange = computed(() => route.query.forceChange === '1' || userStore.passwordExpired)
+
+// 通知设置（占位）
+const notifySettings = reactive({
+  ticketAssigned: true,
+  ticketApproval: true,
+  ticketComment: true,
+  ticketSlaWarn: true,
+  alertCritical: true,
+  emailEnabled: false,
+  emailDailyDigest: false,
+})
 
 const avatarText = computed(() => {
   const name = userStore.user?.displayName || userStore.user?.username || '?'
@@ -395,6 +468,13 @@ onMounted(() => {
   if (forceChange.value) {
     activeTab.value = 'password'
   }
+  // URL 参数指定 tab
+  const tabParam = route.query.tab as string
+  if (tabParam === 'notifications') {
+    activeTab.value = 'notifications'
+  } else if (tabParam === 'history' && canReadAudit.value) {
+    activeTab.value = 'history'
+  }
 })
 </script>
 
@@ -521,5 +601,34 @@ onMounted(() => {
 
 .muted {
   color: #c0c4cc;
+}
+
+/* 通知设置 */
+.notify-settings {
+  max-width: 600px;
+}
+.notify-section {
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  background: #fafbfc;
+  border-radius: 8px;
+  border: 1px solid #ebeef5;
+}
+.notify-section__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+.notify-section__desc {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 12px;
+}
+.notify-form .el-form-item {
+  margin-bottom: 10px;
+}
+.notify-alert {
+  margin-top: 16px;
 }
 </style>

@@ -100,9 +100,52 @@
         </el-card>
       </el-col>
 
-      <!-- 右侧：系统信息 -->
+      <!-- 右侧：系统信息 + LLM 配置 -->
       <el-col :span="8">
         <el-card shadow="never" class="info-card">
+          <template #header>
+            <div class="card-header">
+              <span class="header-title">🤖 AIOps · LLM 诊断</span>
+              <el-tag v-if="!canUpdate" type="info" size="small">只读模式</el-tag>
+            </div>
+          </template>
+          <el-form label-width="100px" size="default" class="llm-form">
+            <el-form-item label="启用 LLM">
+              <el-switch v-model="form.aiops_llm_enabled" :disabled="!canUpdate" />
+              <span class="form-hint">开启后 AIOps 页面可用 AI 诊断助手</span>
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="form.aiops_llm_api_key"
+                type="password"
+                show-password
+                placeholder="sk-..."
+                :disabled="!canUpdate"
+              />
+            </el-form-item>
+            <el-form-item label="API 地址">
+              <el-input
+                v-model="form.aiops_llm_api_url"
+                placeholder="https://api.openai.com/v1/chat/completions"
+                :disabled="!canUpdate"
+              />
+            </el-form-item>
+            <el-form-item label="模型">
+              <el-input
+                v-model="form.aiops_llm_model"
+                placeholder="gpt-4o / deepseek-chat 等"
+                :disabled="!canUpdate"
+              />
+            </el-form-item>
+            <el-form-item v-if="canUpdate">
+              <el-button type="primary" size="default" :loading="saving" @click="handleSave">
+                保存 LLM 配置
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <el-card shadow="never" class="info-card" style="margin-top: 16px">
           <template #header><span class="header-title">📊 系统信息</span></template>
           <el-descriptions :column="1" size="small" border>
             <el-descriptions-item label="版本">MeridianOps v0.1.0</el-descriptions-item>
@@ -158,10 +201,15 @@ const form = reactive({
   login_lockout_minutes: 15,
   password_expiry_days: 90,
   session_timeout_minutes: 60,
+  // AIOps LLM
+  aiops_llm_enabled: false,
+  aiops_llm_api_key: '',
+  aiops_llm_api_url: '',
+  aiops_llm_model: '',
 })
 
 // 配置项元数据：key → 类型，用于把后端字符串还原为表单值
-const SETTING_KEYS: { key: keyof typeof form; type: 'number' | 'bool' }[] = [
+const SETTING_KEYS: { key: keyof typeof form; type: 'number' | 'bool' | 'string' }[] = [
   { key: 'password_min_length', type: 'number' },
   { key: 'password_require_uppercase', type: 'bool' },
   { key: 'password_require_lowercase', type: 'bool' },
@@ -171,6 +219,10 @@ const SETTING_KEYS: { key: keyof typeof form; type: 'number' | 'bool' }[] = [
   { key: 'login_lockout_minutes', type: 'number' },
   { key: 'password_expiry_days', type: 'number' },
   { key: 'session_timeout_minutes', type: 'number' },
+  { key: 'aiops_llm_enabled', type: 'bool' },
+  { key: 'aiops_llm_api_key', type: 'string' },
+  { key: 'aiops_llm_api_url', type: 'string' },
+  { key: 'aiops_llm_model', type: 'string' },
 ]
 
 async function loadSettings() {
@@ -196,8 +248,10 @@ function applySettings(settings: SystemSetting[]) {
     if (meta.type === 'number') {
       const n = parseInt(raw, 10)
       if (!isNaN(n)) (form[meta.key] as number) = n
-    } else {
+    } else if (meta.type === 'bool') {
       (form[meta.key] as boolean) = raw === 'true'
+    } else {
+      (form[meta.key] as string) = raw
     }
   }
 }
@@ -307,5 +361,13 @@ onMounted(() => {
   text-align: center;
   color: #c0c4cc;
   font-size: 13px;
+}
+
+.llm-form {
+  padding: 4px 0;
+}
+
+.llm-form .el-form-item {
+  margin-bottom: 16px;
 }
 </style>

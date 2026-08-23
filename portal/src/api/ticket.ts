@@ -132,14 +132,27 @@ export interface TicketAlertLink {
   alertSeverity?: string | null
 }
 
+export interface TicketAttachment {
+  id: string
+  fileName: string
+  fileSize: number
+  contentType?: string | null
+  uploaderId: string
+  uploaderName?: string | null
+  createdAt: string
+}
+
 export interface TicketDetail {
   ticket: TicketSummary & {
     templateName?: string | null
     templateDefinition?: any
+    isWatched?: boolean
+    customFields?: Record<string, any> | null
   }
   workflowNodes: TicketNode[]
   comments: TicketComment[]
   alertLinks: TicketAlertLink[]
+  attachments: TicketAttachment[]
   sla: { mttaHours: number; mttrHours: number }
 }
 
@@ -201,6 +214,18 @@ export interface TicketKpis {
   slaBreached: number
   byPriority: Record<string, number>
   byType: Record<string, number>
+}
+
+/** 工单统计看板数据 */
+export interface TicketStats {
+  total: number
+  pending: number
+  closed: number
+  newThisMonth: number
+  avgResolveHours: number
+  byType: Array<{ name: string; value: number }>
+  byStatus: Array<{ name: string; value: number }>
+  trend30d: Array<{ date: string; count: number }>
 }
 
 /* ============= 快捷 HTTP 封装 ============= */
@@ -270,4 +295,126 @@ export function cancelTicket(
   data?: { comment?: string }
 ): Promise<void> {
   return request.post(`/tickets/${id}/cancel`, data ?? {})
+}
+
+/* ============= 我的待办/已办 ============= */
+
+export interface MyTodoItem extends TicketSummary {
+  activeNodeKey?: string | null
+  activeNodeName?: string | null
+}
+
+export interface MyDoneItem extends TicketSummary {
+  doneNodeKey?: string | null
+  doneNodeName?: string | null
+  doneDecision?: string | null
+  doneAt?: string | null
+}
+
+export function getMyTodos(pageSize = 5): Promise<MyTodoItem[]> {
+  return request.get('/tickets/my-todos', { params: { pageSize } })
+}
+
+export function getMyDone(pageSize = 5): Promise<MyDoneItem[]> {
+  return request.get('/tickets/my-done', { params: { pageSize } })
+}
+
+export interface BatchActionResult {
+  ticketId: string
+  ok: boolean
+  currentNodeKey?: string | null
+  done?: boolean
+  error?: string
+}
+
+/* ============= 附件管理 ============= */
+
+export function listAttachments(ticketId: string): Promise<TicketAttachment[]> {
+  return request.get(`/tickets/${ticketId}/attachments`)
+}
+
+export function uploadAttachment(ticketId: string, file: File): Promise<TicketAttachment> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post(`/tickets/${ticketId}/attachments`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export function deleteAttachment(attachmentId: string): Promise<void> {
+  return request.delete(`/tickets/attachments/${attachmentId}`)
+}
+
+export function getAttachmentDownloadUrl(attachmentId: string): string {
+  return `/api/tickets/attachments/${attachmentId}/download`
+}
+
+/* ============= 工单关注 ============= */
+
+export function watchTicket(ticketId: string, watched: boolean): Promise<void> {
+  return request.post(`/tickets/${ticketId}/watch`, { watched })
+}
+
+/* ============= 统计看板 ============= */
+
+export function getTicketStats(): Promise<TicketStats> {
+  return request.get('/tickets/stats/overview')
+}
+
+/* ============= 知识推荐 ============= */
+
+export interface KnowledgeSuggestion {
+  id: string
+  title: string
+  summary?: string | null
+  category?: string | null
+  score?: number
+  updatedAt?: string
+}
+
+export function getKnowledgeSuggestions(ticketId: string): Promise<KnowledgeSuggestion[]> {
+  return request.get(`/tickets/${ticketId}/knowledge-suggestions`)
+}
+
+/* ============= 工单导出 ============= */
+
+/**
+ * 导出工单 CSV
+ * 直接返回下载 URL（带 token 参数，供 a 标签 / window.open 使用）
+ */
+export function getExportUrl(params?: TicketListQuery): string {
+  const token = localStorage.getItem('meridianops_token') || ''
+  const search = new URLSearchParams()
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') {
+        search.append(k, String(v))
+      }
+    }
+  }
+  search.append('token', token)
+  return `/api/tickets/export?${search.toString()}`
+}
+
+/* ============= 自定义字段 ============= */
+
+export function updateCustomFields(ticketId: string, fields: Record<string, any>): Promise<void> {
+  return request.put(`/tickets/${ticketId}/custom-fields`, { fields })
+}
+
+/* ============= 批量操作（扩展） ============= */
+
+export type BatchDecision = 'approve' | 'reject' | 'assign' | 'close' | 'priority'
+
+export function batchAction(
+  ticketIds: string[],
+  decision: BatchDecision,
+  opts?: {
+    comment?: string
+    assigneeId?: string
+    resolution?: string
+    priority?: TicketPriority
+  }
+): Promise<{ total: number; success: number; results: BatchActionResult[] }> {
+  return request.post('/tickets/batch-action', { ticketIds, decision, ...opts })
 }

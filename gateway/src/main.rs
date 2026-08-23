@@ -1,3 +1,4 @@
+mod aiops_routes;
 mod alert_routes;
 mod audit;
 mod audit_routes;
@@ -22,7 +23,9 @@ mod routes;
 mod ssh_executor;
 mod system_routes;
 mod template_routes;
+mod notification_routes;
 mod ticket_routes;
+mod ticket_scheduler;
 mod token_routes;
 mod workflow_engine;
 
@@ -112,6 +115,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 3.1 一次性任务：用 jieba 重新分词知识库 content_text（幂等，已执行则跳过）
     tokio::spawn(knowledge_routes::resegment_knowledge_content(state.db.clone()));
+
+    // 3.2 启动 SLA 超时自动升级后台任务
+    tokio::spawn(ticket_scheduler::start_scheduler(state.db.clone()));
 
     // 4. 启动 + graceful shutdown
     let listener = tokio::net::TcpListener::bind(&bind).await?;

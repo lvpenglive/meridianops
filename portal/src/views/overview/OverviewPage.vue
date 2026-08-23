@@ -73,8 +73,8 @@
             <el-table-column prop="createdAt" label="时间" width="170" />
             <el-table-column width="100">
               <template #default="{ row }">
-                <el-tag :type="row.status === 'firing' ? 'danger' : row.status === 'acknowledged' ? 'warning' : 'success'" size="small">
-                  {{ row.status === 'firing' ? '活动' : row.status === 'acknowledged' ? '处理中' : '已解决' }}
+                <el-tag :type="alertStatusTag(row.status)" size="small">
+                  {{ alertStatusLabel(row.status) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -106,8 +106,8 @@
             <el-table-column prop="ip" label="IP" width="130" />
             <el-table-column width="100">
               <template #default="{ row }">
-                <el-tag :type="row.status === 'online' ? 'success' : 'info'" size="small">
-                  {{ row.status === 'online' ? '在线' : '离线' }}
+                <el-tag :type="agentStatusTag(row.status)" size="small">
+                  {{ agentStatusLabel(row.status) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -141,8 +141,8 @@
               <div class="system-info">
                 <div class="system-name">{{ sys.name }}</div>
                 <div class="system-meta">
-                  <el-tag :type="sys.status === 'online' ? 'success' : 'info'" size="small">
-                    {{ sys.status === 'online' ? '在线' : '离线' }}
+                  <el-tag :type="agentStatusTag(sys.status)" size="small">
+                    {{ agentStatusLabel(sys.status) }}
                   </el-tag>
                   <span v-if="sys.version" class="version">v{{ sys.version }}</span>
                 </div>
@@ -160,6 +160,9 @@ import { ref, onMounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { mockOverview, mockAgents, mockSystems } from '../../mock/data'
 import type { AgentInfo, SystemInfo } from '../../api/types'
+import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
+
+const dicts = useSystemDicts()
 
 const overview = ref(mockOverview)
 const agents = ref<AgentInfo[]>(mockAgents)
@@ -172,11 +175,28 @@ function getSeverityType(severity: string) {
 }
 
 function getSeverityLabel(severity: string) {
-  return { critical: '严重', warning: '警告', info: '信息', resolved: '恢复' }[severity] || severity
+  return labelOf(dicts.alertSeverities.value, severity)
 }
 
 function getSourceLabel(source: string) {
-  return { eventide: 'Eventide', zabbix: 'Zabbix', axleops: 'AxleOps', prometheus: 'Prometheus', elk: 'ELK' }[source] || source
+  return labelOf(dicts.alertSources.value, source)
+}
+
+function alertStatusLabel(s: string) {
+  return labelOf(dicts.alertStatuses.value, s)
+}
+
+function alertStatusTag(s: string) {
+  const map: Record<string, string> = { firing: 'danger', acknowledged: 'warning', resolved: 'success' }
+  return map[s] || 'info'
+}
+
+function agentStatusLabel(s: string) {
+  return labelOf(dicts.agentStatuses.value, s)
+}
+
+function agentStatusTag(s: string) {
+  return s === 'online' ? 'success' : 'info'
 }
 
 function getProgressColor(percent: number) {
@@ -190,6 +210,7 @@ function getSystemIcon(type: string) {
 }
 
 onMounted(async () => {
+  await dicts.load('alert_severity', 'alert_status', 'alert_source', 'agent_status')
   await nextTick()
   if (chartRef.value) {
     chart = echarts.init(chartRef.value)

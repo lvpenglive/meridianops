@@ -62,9 +62,42 @@
             prefix-icon="Search"
             class="search-input"
           />
-          <el-badge :value="alertCount" :hidden="alertCount === 0" class="alert-badge">
-            <el-icon class="header-icon" :size="20"><Bell /></el-icon>
-          </el-badge>
+          <el-popover
+            :visible="notifVisible"
+            placement="bottom-end"
+            :width="380"
+            trigger="click"
+            popper-class="notif-popover"
+            @show="loadNotifList"
+          >
+            <template #reference>
+              <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99" class="alert-badge" @click="toggleNotif">
+                <el-icon class="header-icon" :size="20"><Bell /></el-icon>
+              </el-badge>
+            </template>
+            <div class="notif-panel">
+              <div class="notif-panel__header">
+                <span class="notif-panel__title">消息通知</span>
+                <el-button v-if="unreadCount > 0" link type="primary" size="small" @click="markAllRead">全部已读</el-button>
+              </div>
+              <div v-loading="notifLoading" class="notif-panel__body">
+                <div
+                  v-for="n in notifList"
+                  :key="n.id"
+                  :class="['notif-item', { 'notif-item--unread': !n.isRead }]"
+                  @click="handleNotifClick(n)"
+                >
+                  <div class="notif-item__dot" v-if="!n.isRead"></div>
+                  <div class="notif-item__content">
+                    <div class="notif-item__title">{{ n.title }}</div>
+                    <div class="notif-item__desc" v-if="n.content">{{ n.content }}</div>
+                    <div class="notif-item__time">{{ formatNotifTime(n.createdAt) }}</div>
+                  </div>
+                </div>
+                <el-empty v-if="notifList.length === 0 && !notifLoading" description="暂无通知" :image-size="60" />
+              </div>
+            </div>
+          </el-popover>
           <el-dropdown @command="handleCommand">
             <span class="user-info">
               <el-avatar :size="32">{{ username.charAt(0).toUpperCase() }}</el-avatar>
@@ -74,6 +107,7 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="profile">个人中心</el-dropdown-item>
+                <el-dropdown-item command="notifications">通知设置</el-dropdown-item>
                 <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -124,11 +158,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore, PERPETUAL_DAYS } from '../stores/user'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import { WarningFilled } from '@element-plus/icons-vue'
+import {
+  getUnreadCount,
+  getNotifications,
+  markRead,
+  markAllRead as markAllReadApi,
+  type NotificationItem,
+} from '../api/notification'
 
 const route = useRoute()
 const router = useRouter()
@@ -136,8 +177,155 @@ const userStore = useUserStore()
 
 const isCollapse = ref(false)
 const searchQuery = ref('')
-const alertCount = ref(5)
 const username = computed(() => userStore.user?.displayName || userStore.user?.username || 'Admin')
+
+// ---- 站内通知 ----
+const unreadCount = ref(0)
+const notifList = ref<NotificationItem[]>([])
+const notifLoading = ref(false)
+const notifVisible = ref(false)
+let notifTimer: ReturnType<typeof setInterval> | null = null
+let notifEventSource: EventSource | null = null
+let sseConnected = ref(false)
+
+async function loadUnreadCount() {
+  try {
+    const res = await getUnreadCount()
+    unreadCount.value = res.count
+  } catch {
+    // 忽略
+  }
+}
+
+async function loadNotifList() {
+  notifLoading.value = true
+  try {
+    const res = await getNotifications({ unreadOnly: false, page: 1, pageSize: 10 })
+    notifList.value = res.list
+  } catch {
+    // 忽略
+  } finally {
+    notifLoading.value = false
+  }
+}
+
+/** 立即刷新未读数和通知列表（面板打开时） */
+async function refreshNotifications() {
+  await loadUnreadCount()
+  if (notifVisible.value) {
+    await loadNotifList()
+  }
+}
+
+/** 建立 SSE 实时通知连接，失败则回退到轮询 */
+function connectSse() {
+  const token = localStorage.getItem('meridianops_token')
+  if (!token) return
+
+  try {
+    const url = `/api/notifications/stream?token=${encodeURIComponent(token)}`
+    notifEventSource = new EventSource(url)
+
+    notifEventSource.onopen = () => {
+      sseConnected.value = true
+    }
+
+    notifEventSource.addEventListener('notification', (event: any) => {
+      try {
+        const data = JSON.parse(event.data) as NotificationItem
+        // 更新未读数
+        if (!data.isRead) {
+          unreadCount.value++
+        }
+        // 如果通知面板打开着，插入列表顶部
+        if (notifVisible.value) {
+          notifList.value = [data, ...notifList.value].slice(0, 50)
+        }
+        // 弹提示
+        ElMessage({
+          message: data.title,
+          type: 'info',
+          duration: 3000,
+          offset: 60,
+        })
+      } catch {
+        // 解析失败，刷新一下未读数
+        void loadUnreadCount()
+      }
+    })
+
+    notifEventSource.onerror = () => {
+      // SSE 连接失败或断开，关闭并回退到轮询
+      if (notifEventSource) {
+        notifEventSource.close()
+        notifEventSource = null
+      }
+      sseConnected.value = false
+      // 如果轮询还没启动，启动它
+      if (!notifTimer) {
+        notifTimer = setInterval(loadUnreadCount, 30000)
+      }
+    }
+  } catch {
+    // EventSource 不支持或创建失败，回退到轮询
+    sseConnected.value = false
+    if (!notifTimer) {
+      notifTimer = setInterval(loadUnreadCount, 30000)
+    }
+  }
+}
+
+function disconnectSse() {
+  if (notifEventSource) {
+    notifEventSource.close()
+    notifEventSource = null
+  }
+  sseConnected.value = false
+}
+
+function toggleNotif() {
+  notifVisible.value = !notifVisible.value
+}
+
+async function handleNotifClick(n: NotificationItem) {
+  if (!n.isRead) {
+    try {
+      await markRead(n.id)
+      n.isRead = true
+      unreadCount.value = Math.max(0, unreadCount.value - 1)
+    } catch {
+      // 忽略
+    }
+  }
+  notifVisible.value = false
+  if (n.link) {
+    router.push(n.link)
+  }
+}
+
+async function markAllRead() {
+  try {
+    const res = await markAllReadApi()
+    unreadCount.value = 0
+    notifList.value.forEach((n) => { n.isRead = true })
+    void res
+  } catch {
+    // 忽略
+  }
+}
+
+function formatNotifTime(s: string): string {
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return s
+  const now = Date.now()
+  const diff = now - d.getTime()
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  if (diff < 86400000 * 7) return `${Math.floor(diff / 86400000)} 天前`
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 // 菜单分组：态势中心独立一级，其余按运维场景分 4 组（资产/监控/运维/后台）
 type MenuItem = { path: string; title: string; icon: string; permission?: string }
@@ -184,6 +372,7 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/jobs', title: '作业中心', icon: 'List' },
       { path: '/system/credentials', title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' },
       { path: '/tickets', title: '工单系统', icon: 'Tickets', permission: 'ticket:read' },
+      { path: '/tickets/stats', title: '工单统计', icon: 'DataAnalysis', permission: 'ticket:read' },
       { path: '/workflows', title: '流程模板', icon: 'Share', permission: 'workflow:read' },
       { path: '/knowledge', title: '知识库', icon: 'Collection', permission: 'knowledge:read' },
     ]
@@ -293,6 +482,14 @@ onMounted(async () => {
     // 启动会话 idle 计时（从 localStorage 恢复 sessionTimeoutMinutes）
     userStore.startIdleTimer()
     userStore.updateLastActivity()
+    // 拉取未读通知数
+    await loadUnreadCount()
+    // 尝试建立 SSE 实时连接，失败则回退到 30 秒轮询
+    connectSse()
+    // 兜底：如果 SSE 未连接，启动轮询
+    if (!sseConnected.value && !notifTimer) {
+      notifTimer = setInterval(loadUnreadCount, 30000)
+    }
   }
   // 密码过期强制跳改密页
   if (userStore.passwordExpired && route.path !== '/profile') {
@@ -300,9 +497,19 @@ onMounted(async () => {
   }
 })
 
+onUnmounted(() => {
+  if (notifTimer) {
+    clearInterval(notifTimer)
+    notifTimer = null
+  }
+  disconnectSse()
+})
+
 async function handleCommand(command: string) {
   if (command === 'profile') {
     router.push('/profile')
+  } else if (command === 'notifications') {
+    router.push('/profile?tab=notifications')
   } else if (command === 'logout') {
     await ElMessageBox.confirm('确定要退出登录吗？', '提示', { type: 'warning' })
     await userStore.logout()
@@ -411,6 +618,79 @@ async function handleCommand(command: string) {
 .header-icon {
   color: #606266;
   cursor: pointer;
+}
+
+/* ---- 通知面板 ---- */
+.notif-panel {
+  max-height: 480px;
+  display: flex;
+  flex-direction: column;
+}
+.notif-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #ebeef5;
+}
+.notif-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+.notif-panel__body {
+  overflow-y: auto;
+  max-height: 420px;
+}
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 4px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f2f5;
+  transition: background 0.15s;
+}
+.notif-item:hover {
+  background: #f5f7fa;
+}
+.notif-item--unread {
+  background: #ecf5ff;
+}
+.notif-item__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f56c6c;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+.notif-item__content {
+  flex: 1;
+  min-width: 0;
+}
+.notif-item__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notif-item__desc {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.notif-item__time {
+  font-size: 11px;
+  color: #c0c4cc;
+  margin-top: 4px;
 }
 
 .user-info {

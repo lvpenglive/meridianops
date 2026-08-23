@@ -260,6 +260,9 @@ import {
   updateSyncSource,
   listSyncLogs,
 } from '../../api/cmdb'
+import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
+
+const dicts = useSystemDicts()
 import type { SyncSource, SyncLog, SyncLogPage } from '../../api/types'
 import { useUserStore } from '../../stores/user'
 
@@ -311,8 +314,7 @@ function syncStatusType(s: string): string {
   return 'info'
 }
 function syncStatusLabel(s: string): string {
-  const map: Record<string, string> = { success: '成功', partial: '部分', failed: '失败' }
-  return map[s] ?? s
+  return labelOf(dicts.syncStatuses.value, s)
 }
 function actionTagType(a: string): string {
   if (a === 'webhook') return 'success'
@@ -320,8 +322,7 @@ function actionTagType(a: string): string {
   return 'info'
 }
 function actionLabel(a: string): string {
-  const map: Record<string, string> = { webhook: '推送', pull: '拉取', upsert: '更新' }
-  return map[a] ?? a
+  return labelOf(dicts.syncActions.value, a)
 }
 function logStatusType(s: string): string {
   if (s === 'success') return 'success'
@@ -572,6 +573,7 @@ async function onDelete(src: SyncSource) {
 
 // ---- 初始化 ----
 onMounted(async () => {
+  await dicts.load('sync_action', 'sync_status')
   await fetchSources()
   await fetchLogs()
 })

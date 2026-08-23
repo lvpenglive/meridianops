@@ -348,7 +348,9 @@ import {
 import { listAuditLogs } from '../../api/audit'
 import type { CiInstance, CiModelAttr, CiRelation, CiRelationType, SyncLog, AuditLog } from '../../api/types'
 import { useUserStore } from '../../stores/user'
+import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
 
+const dicts = useSystemDicts()
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
@@ -633,16 +635,10 @@ function statusTagType(s: string): string {
   return map[s] ?? 'info'
 }
 function sourceLabel(s: string): string {
-  const map: Record<string, string> = { blueking: '蓝鲸', external_cmdb: '外部CMDB' }
-  return map[s] ?? s
+  return labelOf(dicts.syncSourceTypes.value, s)
 }
 function actionLabel(a: string): string {
-  const map: Record<string, string> = {
-    create_ci: '创建', update_ci: '更新', delete_ci: '删除',
-    sync_ci: '同步', pull_ci: '拉取',
-    create_ci_relation: '建立关系', delete_ci_relation: '删除关系',
-  }
-  return map[a] || a
+  return labelOf(dicts.cmdbActions.value, a)
 }
 function actionTagType(a: string): string {
   if (a.startsWith('create')) return 'success'
@@ -660,7 +656,8 @@ function formatTime(t: string): string {
   try { return new Date(t).toLocaleString('zh-CN', { hour12: false }) } catch { return t }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await dicts.load('cmdb_action', 'sync_source_type')
   fetchInstance()
   fetchRelationTypes()
   fetchRelations()

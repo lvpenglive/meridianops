@@ -572,6 +572,54 @@ cd gateway && cargo run
 
 ---
 
+## AIOps 智能运维实现方案
+
+> 基于 Eventide 告警数据 + CMDB 拓扑 + 知识库全文检索，实现四层 AIOps 分析能力。
+
+### 四层架构
+
+| 层级 | 名称 | 后端 API | 智能来源 | 依赖 |
+|------|------|---------|---------|------|
+| 第一层 | 相似案例推荐 | `GET /api/aiops/recommend` | MySQL FULLTEXT + jieba | 知识库 + 工单 |
+| 第二层 | 异常趋势检测 | `GET /api/aiops/anomalies` | SQL 聚合 + 3-sigma | 告警 + 审计日志 |
+| 第三层 | 根因分析 | `GET /api/aiops/rca/:alertId` | 图遍历 + 打分 | 告警 + CMDB 拓扑 |
+| 第四层 | LLM 诊断 | `POST /api/aiops/llm-diagnose` | RAG + 外部 LLM API | 前三层结果 + LLM |
+
+### 第一层：相似案例推荐
+
+- 输入：告警 ID 或关键词
+- 逻辑：提取告警标题/描述关键词 → jieba 分词 → 知识库 FULLTEXT 检索 Top 3 + 历史工单 Top 3
+- 不依赖外部系统，纯 SQL 实现
+
+### 第二层：异常趋势检测
+
+- 告警量突变：取近 7 天每小时告警数，算均值 + 标准差，今日某小时 > μ+3σ → 异常
+- 重复告警：同一 fingerprint 在 1 小时内 fire_count > 5 → 重复
+- MTTR 退化：近 7 天已解决告警的平均解决时间，今日 > 3x 均值 → 退化
+- 告警风暴：近 30 分钟活跃告警 > 50 条 → 风暴
+
+### 第三层：根因分析 (RCA)
+
+- 取指定告警 ±30 分钟内所有活跃告警
+- 按 ci_id 关联 CMDB 拓扑，沿 ci_relations 追溯上下游
+- 打分算法：`score = 0.4×下游告警数 + 0.3×告警最高级别 + 0.2×(1/拓扑深度) + 0.1×时间接近度`
+- 最高分 CI = 疑似根因，用根因关键词检索知识库 Top 3
+
+### 第四层：LLM 大模型诊断 (RAG)
+
+- 组装上下文：告警详情 + CMDB 拓扑 + 知识库匹配 + 历史工单
+- 调用 OpenAI 兼容 API（可配置 DeepSeek / 通义千问 / 私有化模型）
+- 配置存在 system_settings 表（`aiops_llm_enabled` / `aiops_llm_api_url` / `aiops_llm_api_key` / `aiops_llm_model`）
+- 银行场景：LLM API 地址可指向内网私有化部署，调用前敏感数据脱敏
+- 若 `aiops_llm_enabled = false`，第四层隐藏，前三层照常工作
+
+### 数据库
+
+- `aiops_analysis_logs` 表：记录分析结果（可审计）
+- `system_settings` 新增配置项：LLM 开关 / API 地址 / API Key / 模型名
+
+---
+
 ## 默认账号（首次启动自动种子）
 
 | 角色 | 用户名 | 默认密码 | 说明 |

@@ -259,8 +259,10 @@ import {
 } from '../../api/cmdb'
 import type { CiModel, CiModelAttr, CreateCiModelAttrRequest } from '../../api/types'
 import { useUserStore } from '../../stores/user'
+import { useSystemDicts } from '../../composables/useSystemDicts'
 
 const userStore = useUserStore()
+const dicts = useSystemDicts()
 const hasPermission = (code: string) => userStore.hasPermission(code)
 
 // ---- 模型列表 ----
@@ -312,7 +314,7 @@ async function fetchAttrs() {
 }
 
 // ---- 图标 ----
-const iconOptions = ['Monitor', 'Cpu', 'Coin', 'Connection', 'Grid', 'Box', 'Files', 'List', 'Service', 'Platform', 'Document', 'Folder', 'Setting', 'Cloudy']
+const iconOptions = computed(() => dicts.modelIcons.value.map(i => i.value))
 const iconMap: Record<string, any> = { Monitor, Cpu, Coin, Connection, Grid, Box, Files, List, Service, Platform, Document, Folder, Setting, Cloudy }
 function iconComp(name: string) {
   return iconMap[name] || Monitor
@@ -543,7 +545,8 @@ async function onDeleteAttr(a: CiModelAttr) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await dicts.load('cmdb_model_icon')
   fetchModels()
 })
 </script>

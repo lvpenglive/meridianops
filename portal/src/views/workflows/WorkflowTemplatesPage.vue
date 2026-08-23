@@ -283,7 +283,7 @@
       </el-form-item>
       <el-form-item label="分类">
         <el-select v-model="newForm.category" allow-create filterable style="width:100%" clearable placeholder="例：数据库 / 网络（选填）">
-          <el-option v-for="c in ['数据库','网络','安全','主机','应用','存储','中间件','办公网','监控']" :key="c" :label="c" :value="c" />
+          <el-option v-for="c in dicts.categories.value" :key="c.value" :label="c.label" :value="c.label" />
         </el-select>
       </el-form-item>
       <el-form-item label="描述">
@@ -328,6 +328,7 @@ import {
   type WorkflowTemplateSummary, type WorkflowTemplateDetail,
 } from '../../api/template'
 import { listDictItems, type DictItem } from '../../api/dict'
+import { useTicketDicts } from '../../composables/useTicketDicts'
 
 // 本页面内部使用 扁平节点/连线 定义（与后端 workflow_engine 保存/读取的格式保持一致）
 interface FlatNode {
@@ -423,18 +424,14 @@ async function loadApproverOptions() {
   } catch {}
 }
 
+const dicts = useTicketDicts()
+
 function isApproval(t: string) {
   return t === 'single_approval' || t === 'all_approval' || t === 'any_approval' || t === 'countersign'
 }
 function nodeKindLabel(t: string) {
-  const map: Record<string, string> = {
-    start: '开始', end: '结束', auto_pass: '自动通过',
-    single_approval: '单人审批', all_approval: '会签审批',
-    any_approval: '或签审批', countersign: '加签审批',
-    condition_gateway: '条件网关',
-    parallel_split: '并行分支', parallel_join: '并行汇聚',
-  }
-  return map[t] || t
+  const item = dicts.nodeKinds.value.find(d => d.value === t)
+  return item?.label || t
 }
 
 // 节点图标映射（emoji，轻量方案，避免引入 SVG icon 依赖）
@@ -1367,7 +1364,7 @@ async function deleteTemplateAction(t: WorkflowTemplateSummary) {
   } catch (e: any) { ElMessage.error(e?.message || String(e)) }
 }
 
-onMounted(async () => { await loadTemplates(); await loadApproverOptions(); await loadTicketTypeOptions() })
+onMounted(async () => { await dicts.load(); await loadTemplates(); await loadApproverOptions(); await loadTicketTypeOptions() })
 onBeforeUnmount(() => { if (lf) { try { (lf as any).destroy?.() } catch {}; lf = null } })
 </script>
 

@@ -82,7 +82,27 @@
 
         <!-- 列表 -->
         <el-card shadow="never" class="list-card">
-          <el-table v-loading="listLoading" :data="events" stripe @row-click="openDetail" row-class-name="clickable-row">
+          <!-- 批量操作工具栏 -->
+          <div class="batch-bar" v-if="selectedIds.length > 0 && hasPermission('alert:update')">
+            <span class="batch-info">已选择 <b>{{ selectedIds.length }}</b> 条</span>
+            <el-button size="small" type="primary" :icon="Check" :loading="batchLoading" @click="batchAction('acknowledge')">批量认领</el-button>
+            <el-button size="small" type="success" :icon="CircleCheck" :loading="batchLoading" @click="batchAction('resolve')">批量解决</el-button>
+            <el-button size="small" type="warning" :icon="Lock" :loading="batchLoading" @click="batchAction('suppress')">批量静默</el-button>
+            <el-button v-if="hasPermission('alert:delete')" size="small" type="danger" :icon="Delete" :loading="batchLoading" @click="batchAction('delete')">批量删除</el-button>
+            <el-button size="small" @click="tableRef?.clearSelection()">取消选择</el-button>
+          </div>
+
+          <el-table
+            ref="tableRef"
+            v-loading="listLoading"
+            :data="events"
+            stripe
+            @row-click="openDetail"
+            row-class-name="clickable-row"
+            @selection-change="onSelectionChange"
+            @row-contextmenu="onRowContextMenu"
+          >
+            <el-table-column type="selection" width="48" align="center" />
             <el-table-column label="级别" width="100">
               <template #default="{ row }">
                 <el-tag :type="severityTagType(row.severity)" effect="dark" size="small">
@@ -147,21 +167,6 @@
             <el-table-column label="认领人" width="100">
               <template #default="{ row }">
                 {{ orNA(row.acknowledgedBy) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="340" fixed="right">
-              <template #default="{ row }">
-                <el-button v-if="hasPermission('alert:update') && row.status === 'firing'" link type="primary"
-                  size="small" @click.stop="ackEvent(row)">认领</el-button>
-                <el-button v-if="hasPermission('alert:update') && row.status !== 'resolved'" link type="success"
-                  size="small" @click.stop="openResolveDialog(row)">解决</el-button>
-                <el-button v-if="hasPermission('alert:update') && row.status !== 'resolved' && row.status !== 'suppressed'" link type="warning"
-                  size="small" :icon="Lock" @click.stop="suppressEvent(row)">静默</el-button>
-                <el-button link type="primary" size="small" :icon="View" @click.stop="openDetail(row)">详情</el-button>
-                <el-button v-if="row.ingressChannel === 'webhook' || (row.fingerprint && row.fingerprint.startsWith('eventide:'))"
-                  link size="small" :icon="Open" @click.stop="openInEventide(row)">Eventide</el-button>
-                <el-button v-if="hasPermission('alert:delete')" link type="danger" size="small"
-                  @click.stop="deleteEvent(row)">删除</el-button>
               </template>
             </el-table-column>
             <template #empty>
@@ -807,11 +812,31 @@
         <el-button type="primary" :loading="silenceSaveLoading" @click="submitSilence">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 右键菜单 -->
+    <div v-show="contextMenuVisible" class="context-menu" :style="{ left: contextMenuX + 'px', top: contextMenuY + 'px' }" @click.stop>
+      <div class="ctx-item" @click="ctxDetail">
+        <el-icon><View /></el-icon><span>查看详情</span>
+      </div>
+      <div class="ctx-item" v-if="hasPermission('alert:update') && contextMenuRow?.status === 'firing'" @click="ctxAck">
+        <el-icon><Check /></el-icon><span>认领告警</span>
+      </div>
+      <div class="ctx-item" v-if="hasPermission('alert:update') && contextMenuRow?.status !== 'resolved'" @click="ctxResolve">
+        <el-icon><CircleCheck /></el-icon><span>解决告警</span>
+      </div>
+      <div class="ctx-item" v-if="hasPermission('alert:update') && contextMenuRow?.status !== 'resolved' && contextMenuRow?.status !== 'suppressed'" @click="ctxSuppress">
+        <el-icon><Lock /></el-icon><span>手动静默</span>
+      </div>
+      <div class="ctx-divider"></div>
+      <div class="ctx-item ctx-danger" v-if="hasPermission('alert:delete')" @click="ctxDelete">
+        <el-icon><Delete /></el-icon><span>删除告警</span>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import {
@@ -822,7 +847,7 @@ import {
 import { useUserStore } from '../../stores/user'
 import {
   listAlertEvents, getAlertEvent, createAlertEvent, acknowledgeAlert, resolveAlert, suppressAlert,
-  updateAlertNote, deleteAlertEvent, getAlertStats,
+  updateAlertNote, deleteAlertEvent, getAlertStats, batchAlertAction,
   listAlertSilences, createAlertSilence, updateAlertSilence, deleteAlertSilence,
   fetchIngressOverview, getAlertIngress, updateAlertIngress,
   type AlertEvent, type AlertStats, type AlertSilence, type IngressOverview,
@@ -871,6 +896,124 @@ const filter = reactive({
   source: '',
   keyword: '',
 })
+
+// 多选 & 批量操作
+const selectedIds = ref<string[]>([])
+const batchLoading = ref(false)
+const tableRef = ref()
+function onSelectionChange(rows: AlertEvent[]) {
+  selectedIds.value = rows.map(r => r.id)
+}
+
+// 右键菜单
+const contextMenuVisible = ref(false)
+const contextMenuX = ref(0)
+const contextMenuY = ref(0)
+const contextMenuRow = ref<AlertEvent | null>(null)
+
+function onRowContextMenu(row: AlertEvent, _column: any, e: MouseEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  contextMenuRow.value = row
+  contextMenuX.value = e.clientX
+  contextMenuY.value = e.clientY
+  contextMenuVisible.value = true
+}
+
+function hideContextMenu() {
+  contextMenuVisible.value = false
+  contextMenuRow.value = null
+}
+
+async function batchAction(action: 'acknowledge' | 'resolve' | 'suppress' | 'delete') {
+  if (selectedIds.value.length === 0) {
+    ElMessage.warning('请先选择要操作的告警')
+    return
+  }
+  const actionLabels: Record<string, string> = {
+    acknowledge: '批量认领',
+    resolve: '批量解决',
+    suppress: '批量静默',
+    delete: '批量删除',
+  }
+  const label = actionLabels[action]
+  try {
+    if (action === 'delete') {
+      await ElMessageBox.confirm(
+        `确定要删除选中的 ${selectedIds.value.length} 条告警吗？此操作不可恢复。`,
+        '确认删除',
+        { type: 'warning' }
+      )
+      batchLoading.value = true
+      await batchAlertAction(selectedIds.value, 'delete')
+    } else if (action === 'resolve') {
+      const { value } = await ElMessageBox.prompt(
+        `解决选中的 ${selectedIds.value.length} 条告警`,
+        '批量解决',
+        {
+          confirmButtonText: '确认解决',
+          cancelButtonText: '取消',
+          inputPlaceholder: '请输入解决备注（可选）',
+          inputType: 'textarea',
+          type: 'info',
+        }
+      )
+      batchLoading.value = true
+      await batchAlertAction(selectedIds.value, 'resolve', value)
+    } else {
+      await ElMessageBox.confirm(
+        `确定要${label}选中的 ${selectedIds.value.length} 条告警吗？`,
+        '确认操作',
+        { type: 'info' }
+      )
+      batchLoading.value = true
+      await batchAlertAction(selectedIds.value, action)
+    }
+    ElMessage.success(`${label}成功`)
+    selectedIds.value = []
+    await nextTick()
+    tableRef.value?.clearSelection()
+    loadEvents()
+  } catch (e: unknown) {
+    if ((e as any)?.action !== 'cancel') {
+      ElMessage.error(errMsg(e))
+    }
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+// 右键菜单操作
+function ctxAck() {
+  if (contextMenuRow.value) {
+    ackEvent(contextMenuRow.value)
+    hideContextMenu()
+  }
+}
+function ctxResolve() {
+  if (contextMenuRow.value) {
+    openResolveDialog(contextMenuRow.value)
+    hideContextMenu()
+  }
+}
+function ctxSuppress() {
+  if (contextMenuRow.value) {
+    suppressEvent(contextMenuRow.value)
+    hideContextMenu()
+  }
+}
+function ctxDetail() {
+  if (contextMenuRow.value) {
+    openDetail(contextMenuRow.value)
+    hideContextMenu()
+  }
+}
+function ctxDelete() {
+  if (contextMenuRow.value) {
+    deleteEvent(contextMenuRow.value)
+    hideContextMenu()
+  }
+}
 
 async function loadEvents() {
   listLoading.value = true
@@ -1616,9 +1759,13 @@ function formatMatchLabels(labels: Record<string, unknown> | null): string {
 
 // ============ 初始化 ============
 onMounted(() => {
+  document.addEventListener('click', hideContextMenu)
   loadStats()
   loadEvents()
   loadSilences()
+})
+onUnmounted(() => {
+  document.removeEventListener('click', hideContextMenu)
 })
 </script>
 
@@ -1773,4 +1920,59 @@ onMounted(() => {
   min-width: 200px;
 }
 .text-muted { color: #909399; }
+
+/* 批量操作工具栏 */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 6px;
+}
+.batch-bar .batch-info {
+  color: #409eff;
+  font-size: 13px;
+  margin-right: 8px;
+}
+.batch-bar .batch-info b {
+  font-size: 15px;
+  margin: 0 2px;
+}
+
+/* 右键菜单 */
+.context-menu {
+  position: fixed;
+  z-index: 3000;
+  min-width: 150px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 4px 0;
+  font-size: 13px;
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  color: #303133;
+  transition: background 0.15s;
+}
+.ctx-item:hover {
+  background: #f5f7fa;
+  color: #409eff;
+}
+.ctx-item .el-icon { font-size: 14px; }
+.ctx-item.ctx-danger { color: #f56c6c; }
+.ctx-item.ctx-danger:hover { background: #fef0f0; color: #f56c6c; }
+.ctx-divider {
+  height: 1px;
+  background: #ebeef5;
+  margin: 4px 0;
+}
 </style>

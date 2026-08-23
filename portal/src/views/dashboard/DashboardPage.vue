@@ -128,6 +128,80 @@
       </el-col>
     </el-row>
 
+    <!-- 我的待办 / 我的已办（单卡切换） -->
+    <el-card shadow="never" class="todo-card">
+      <el-tabs v-model="activeTodoTab" class="todo-tabs">
+        <el-tab-pane name="todo">
+          <template #label>
+            <span class="todo-tab__label">
+              📥 我的待办
+              <el-badge v-if="myTodos.length" :value="myTodos.length" :max="99" type="danger" />
+            </span>
+          </template>
+          <div v-loading="todoLoading" class="todo-list">
+            <div
+              v-for="item in myTodos"
+              :key="item.id"
+              class="todo-item todo-item--selectable"
+            >
+              <el-checkbox v-model="todoSelectedSet" :value="item.id" class="todo-item__check" @click.stop />
+              <div class="todo-item__body" @click="go(`/tickets/${item.id}`)">
+                <div class="todo-item__main">
+                  <el-tag :type="priorityTagType(item.priority)" size="small" effect="dark" class="todo-item__priority">
+                    P{{ item.priority }}
+                  </el-tag>
+                  <span class="todo-item__title">{{ item.title }}</span>
+                </div>
+                <div class="todo-item__meta">
+                  <el-tag size="small" type="info" effect="plain">{{ item.ticketNo }}</el-tag>
+                  <el-tag v-if="item.activeNodeName" size="small" type="warning" effect="plain">{{ item.activeNodeName }}</el-tag>
+                  <el-tag v-if="slaInfo(item.slaDueAt, item.priority).text" size="small" :type="slaInfo(item.slaDueAt, item.priority).type" effect="dark">
+                    ⏱ {{ slaInfo(item.slaDueAt, item.priority).text }}
+                  </el-tag>
+                  <span class="todo-item__time">{{ formatTime(item.createdAt) }}</span>
+                </div>
+              </div>
+            </div>
+            <el-empty v-if="!todoLoading && myTodos.length === 0" description="暂无待办工单" :image-size="50" />
+          </div>
+          <div v-if="myTodos.length > 0" class="todo-batch-bar">
+            <span class="todo-batch-bar__count">已选 {{ todoSelectedIds.length }} 项</span>
+            <el-button size="small" type="success" :disabled="todoSelectedIds.length === 0" :loading="batchLoading" @click="batchApprove">批量通过</el-button>
+            <el-button size="small" type="danger" :disabled="todoSelectedIds.length === 0" :loading="batchLoading" @click="batchReject">批量驳回</el-button>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane name="done">
+          <template #label>
+            <span class="todo-tab__label">✅ 我的已办</span>
+          </template>
+          <div v-loading="todoLoading" class="todo-list">
+            <div
+              v-for="item in myDone"
+              :key="item.id"
+              class="todo-item"
+              @click="go(`/tickets/${item.id}`)"
+            >
+              <div class="todo-item__main">
+                <el-tag :type="priorityTagType(item.priority)" size="small" effect="dark" class="todo-item__priority">
+                  P{{ item.priority }}
+                </el-tag>
+                <span class="todo-item__title">{{ item.title }}</span>
+              </div>
+              <div class="todo-item__meta">
+                <el-tag size="small" type="info" effect="plain">{{ item.ticketNo }}</el-tag>
+                <el-tag v-if="item.doneNodeName" size="small" type="success" effect="plain">{{ item.doneNodeName }}</el-tag>
+                <el-tag v-if="item.doneDecision" size="small" :type="item.doneDecision === 'approve' ? 'success' : 'danger'" effect="plain">
+                  {{ item.doneDecision === 'approve' ? '通过' : '驳回' }}
+                </el-tag>
+                <span class="todo-item__time">{{ formatTime(item.doneAt) }}</span>
+              </div>
+            </div>
+            <el-empty v-if="!todoLoading && myDone.length === 0" description="暂无已办记录" :image-size="50" />
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-card>
+
     <el-row :gutter="16" class="main-row">
       <!-- 快捷入口 -->
       <el-col :xs="24" :md="8">
@@ -272,7 +346,12 @@ import { User, UserFilled, OfficeBuilding, Notebook, Tools, Tickets, Document, C
 import * as echarts from 'echarts'
 import { useUserStore } from '../../stores/user'
 import { getDashboard } from '../../api/dashboard'
+import { getMyTodos, getMyDone, batchAction } from '../../api/ticket'
+import type { MyTodoItem, MyDoneItem } from '../../api/ticket'
+import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
 import type { DashboardData, DashboardStats, OpsStats, ModelStatItem, JobRunSummaryItem, AuditLog } from '../../api/types'
+
+const dicts = useSystemDicts()
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -300,6 +379,14 @@ const modelStats = ref<ModelStatItem[]>([])
 const recentJobRuns = ref<JobRunSummaryItem[]>([])
 const recentActivities = ref<AuditLog[]>([])
 const myActivities = ref<AuditLog[]>([])
+const myTodos = ref<MyTodoItem[]>([])
+const myDone = ref<MyDoneItem[]>([])
+const todoLoading = ref(false)
+const activeTodoTab = ref<'todo' | 'done'>('todo')
+const slaNow = ref(Date.now())
+const todoSelectedSet = ref<string[]>([])
+const batchLoading = ref(false)
+const todoSelectedIds = computed(() => todoSelectedSet.value)
 
 const modelChartRef = ref<HTMLElement | null>(null)
 let modelChart: echarts.ECharts | null = null
@@ -312,6 +399,7 @@ function tick() {
   const pad = (n: number) => n.toString().padStart(2, '0')
   const weekday = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()]
   nowText.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 周${weekday} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  slaNow.value = Date.now()
 }
 
 const initial = computed(() => {
@@ -384,6 +472,75 @@ async function load() {
   }
 }
 
+async function loadMyTickets() {
+  todoLoading.value = true
+  try {
+    const [todos, done] = await Promise.all([getMyTodos(5), getMyDone(5)])
+    myTodos.value = todos
+    myDone.value = done
+    todoSelectedSet.value = []
+  } catch {
+    // ignore
+  } finally {
+    todoLoading.value = false
+  }
+}
+
+async function batchApprove() {
+  await doBatchAction('approve')
+}
+async function batchReject() {
+  await doBatchAction('reject')
+}
+async function doBatchAction(decision: 'approve' | 'reject') {
+  if (todoSelectedIds.value.length === 0) return
+  batchLoading.value = true
+  try {
+    const res = await batchAction([...todoSelectedIds.value], decision)
+    ElMessage.success(`操作完成：${res.success}/${res.total} 成功`)
+    await loadMyTickets()
+  } catch {
+    ElMessage.error('批量操作失败')
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+function priorityTagType(p: number): 'danger' | 'warning' | 'primary' | 'info' {
+  if (p === 1) return 'danger'
+  if (p === 2) return 'warning'
+  if (p === 3) return 'primary'
+  return 'info'
+}
+
+function formatTime(t?: string | null): string {
+  if (!t) return ''
+  const d = new Date(t)
+  if (isNaN(d.getTime())) return t
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+const SLA_WARN_HOURS: Record<number, number> = { 1: 1, 2: 2, 3: 8, 4: 24 }
+function slaInfo(slaDueAt?: string | null, priority?: number): { text: string; type: '' | 'danger' | 'warning' | 'success' | 'info' } {
+  void slaNow.value
+  if (!slaDueAt) return { text: '', type: 'info' }
+  const due = new Date(slaDueAt).getTime()
+  if (isNaN(due)) return { text: '', type: 'info' }
+  const diff = due - Date.now()
+  if (diff < 0) {
+    const h = Math.ceil(-diff / 3600000)
+    return { text: `超期 ${h}h`, type: 'danger' }
+  }
+  const warn = SLA_WARN_HOURS[priority || 3] ?? 24
+  const h = Math.floor(diff / 3600000)
+  const m = Math.floor((diff % 3600000) / 60000)
+  if (diff < warn * 3600000) {
+    return { text: `剩余 ${h}h${m}m`, type: 'warning' }
+  }
+  return { text: `剩余 ${h}h${m}m`, type: 'success' }
+}
+
 function initModelChart() {
   if (!modelChartRef.value || modelStats.value.length === 0) return
   if (!modelChart) {
@@ -433,10 +590,7 @@ function handleResize() {
 }
 
 function runStatusLabel(s: string): string {
-  const map: Record<string, string> = {
-    running: '执行中', success: '成功', failed: '失败', partial: '部分成功', timeout: '超时', pending: '等待',
-  }
-  return map[s] || s
+  return labelOf(dicts.jobRunStatuses.value, s)
 }
 
 function runStatusType(s: string): '' | 'success' | 'warning' | 'danger' | 'info' {
@@ -451,17 +605,7 @@ function go(path: string) {
 }
 
 function actionLabel(action: string): string {
-  const map: Record<string, string> = {
-    login: '登录',
-    logout: '登出',
-    create: '创建',
-    update: '更新',
-    enable: '启用',
-    disable: '禁用',
-    reset_password: '重置密码',
-    delete: '删除',
-  }
-  return map[action] || action
+  return labelOf(dicts.auditActions.value, action)
 }
 
 function actionColor(action: string): '' | 'success' | 'warning' | 'danger' | 'info' {
@@ -478,10 +622,12 @@ function actionColor(action: string): '' | 'success' | 'warning' | 'danger' | 'i
   return map[action] || 'info'
 }
 
-onMounted(() => {
+onMounted(async () => {
   tick()
   timer = window.setInterval(tick, 1000)
+  await dicts.load('audit_action', 'job_run_status')
   load()
+  loadMyTickets()
   window.addEventListener('resize', handleResize)
 })
 
@@ -625,6 +771,95 @@ onBeforeUnmount(() => {
 /* 主行 */
 .main-row {
   margin-bottom: 0;
+}
+
+/* 待办/已办区域 */
+.todo-card :deep(.el-card__body) {
+  padding: 0 16px 12px;
+}
+.todo-tabs :deep(.el-tabs__header) {
+  margin: 0 0 8px;
+}
+.todo-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+.todo-tab__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.todo-list {
+  max-height: 340px;
+  overflow-y: auto;
+}
+.todo-item {
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+  border-bottom: 1px solid #f0f0f0;
+}
+.todo-item:hover {
+  background: #f5f7fa;
+}
+.todo-item:last-child {
+  border-bottom: none;
+}
+.todo-item--selectable {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.todo-item__check {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.todo-item__body {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.todo-item__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.todo-item__priority {
+  flex-shrink: 0;
+}
+.todo-item__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.todo-item__time {
+  font-size: 12px;
+  color: #909399;
+  margin-left: auto;
+}
+.todo-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid #ebeef5;
+}
+.todo-batch-bar__count {
+  font-size: 13px;
+  color: #606266;
+  margin-right: auto;
 }
 
 /* 通用卡片头 */

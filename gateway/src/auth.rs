@@ -128,6 +128,7 @@ pub fn issue_token(
 ///
 /// 若 `config.auth.enabled == false`（开发关闭鉴权），返回匿名 admin 用户，
 /// 便于本地不带 token 调试。生产环境必须 enabled=true。
+#[derive(Clone)]
 pub struct AuthUser(pub Claims);
 
 impl AuthUser {

@@ -137,6 +137,11 @@ export function deleteAlertEvent(id: string): Promise<void> {
   return request.delete(`/alerts/events/${id}`)
 }
 
+/** 批量操作告警 */
+export function batchAlertAction(ids: string[], action: 'acknowledge' | 'resolve' | 'suppress' | 'delete', note?: string) {
+  return request.post('/alerts/events/batch-action', { ids, action, note })
+}
+
 /** 获取告警统计 */
 export function getAlertStats(): Promise<AlertStats> {
   return request.get('/alerts/stats')

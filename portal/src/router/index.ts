@@ -123,6 +123,18 @@ const routes = [
         meta: { title: '工单系统', icon: 'Tickets', permission: 'ticket:read' }
       },
       {
+        path: 'tickets/stats',
+        name: 'TicketStats',
+        component: () => import('../views/tickets/TicketStatsPage.vue'),
+        meta: { title: '工单统计', icon: 'DataAnalysis', permission: 'ticket:read' }
+      },
+      {
+        path: 'tickets/:id',
+        name: 'TicketDetail',
+        component: () => import('../views/tickets/TicketDetailPage.vue'),
+        meta: { title: '工单详情', permission: 'ticket:read' }
+      },
+      {
         path: 'workflows',
         name: 'Workflows',
         component: () => import('../views/workflows/WorkflowTemplatesPage.vue'),
@@ -223,6 +235,10 @@ const routes = [
         name: 'System',
         component: () => import('../views/system/SystemPage.vue'),
         meta: { title: '系统设置', icon: 'Tools', permission: 'system:read' }
+      },
+      {
+        path: 'system/settings',
+        redirect: '/system',
       },
       {
         path: 'system/api-tokens',

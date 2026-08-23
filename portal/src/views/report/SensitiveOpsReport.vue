@@ -163,7 +163,9 @@ import {
 } from '../../api/report'
 import type { SensitiveTrendItem, SensitiveTopItem, SensitiveListResponse, AuditLog } from '../../api/types'
 import { exportToExcel } from '../../utils/export'
+import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
 
+const dicts = useSystemDicts()
 const router = useRouter()
 const daysRange = ref(30)
 
@@ -197,20 +199,10 @@ function formatTime(s?: string | null) {
   }
 }
 
-const ACTION_LABELS: Record<string, string> = {
-  delete_user: '删除用户',
-  disable_user: '禁用用户',
-  reset_password: '重置密码',
-  create_role: '创建角色',
-  update_role: '更新角色',
-  delete_role: '删除角色',
-  assign_permission: '权限分配',
-  update_settings: '系统设置变更',
-  change_password: '密码修改',
-}
 function actionLabel(a: string) {
-  return ACTION_LABELS[a] || a
+  return labelOf(dicts.sensitiveActions.value, a)
 }
+
 function actionTagType(a: string): 'danger' | 'warning' | 'info' {
   if (['delete_user', 'delete_role', 'reset_password'].includes(a)) return 'danger'
   if (['disable_user', 'update_role', 'assign_permission', 'update_settings'].includes(a)) return 'warning'
@@ -328,7 +320,8 @@ function handleResize() {
   topChart?.resize()
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await dicts.load('sensitive_action')
   loadAll()
   window.addEventListener('resize', handleResize)
 })

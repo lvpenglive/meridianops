@@ -80,6 +80,11 @@ async fn update_settings(
         "login_lockout_minutes",
         "password_expiry_days",
         "session_timeout_minutes",
+        // AIOps LLM 诊断配置
+        "aiops_llm_enabled",
+        "aiops_llm_api_key",
+        "aiops_llm_api_url",
+        "aiops_llm_model",
     ];
     let updated_by = auth.0.sub.clone();
     let mut entries: Vec<(String, String, String)> = Vec::new();

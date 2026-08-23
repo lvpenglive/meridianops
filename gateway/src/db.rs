@@ -47,6 +47,16 @@ pub async fn connect(cfg: &DatabaseConfig) -> anyhow::Result<DbPool> {
     let pool = MySqlPoolOptions::new()
         .max_connections(cfg.max_connections)
         .min_connections(cfg.min_connections)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                // 移除 ONLY_FULL_GROUP_BY，避免 GROUP BY 表达式与 SELECT 不一致时报错
+                // （VARCHAR 存储 RFC3339 时间 + SUBSTRING 分组场景下容易触发）
+                sqlx::query("SET SESSION sql_mode = REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY', '')")
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(&cfg.url)
         .await?;
     tracing::info!(url = %cfg.url, "mysql connected");

@@ -9,14 +9,10 @@
               v-model="filters.action"
               placeholder="操作类型"
               clearable
+              filterable
               style="width: 140px"
             >
-              <el-option label="登录" value="login" />
-              <el-option label="创建" value="create" />
-              <el-option label="更新" value="update" />
-              <el-option label="启用" value="enable" />
-              <el-option label="禁用" value="disable" />
-              <el-option label="重置密码" value="reset_password" />
+              <el-option v-for="a in dicts.auditActions.value" :key="a.value" :label="a.label" :value="a.value" />
             </el-select>
             <el-select
               v-model="filters.status"
@@ -24,8 +20,7 @@
               clearable
               style="width: 120px"
             >
-              <el-option label="成功" value="success" />
-              <el-option label="失败" value="failure" />
+              <el-option v-for="r in dicts.auditResults.value" :key="r.value" :label="r.label" :value="r.value" />
             </el-select>
             <el-input
               v-model="filters.actor"
@@ -124,6 +119,9 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listAuditLogs } from '../../api/audit'
 import type { AuditLog, AuditQueryParams } from '../../api/types'
+import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
+
+const dicts = useSystemDicts()
 
 const loading = ref(false)
 const items = ref<AuditLog[]>([])
@@ -194,15 +192,7 @@ function formatDetail(detail: string): string {
 }
 
 function getActionLabel(action: string): string {
-  const map: Record<string, string> = {
-    login: '登录',
-    create: '创建',
-    update: '更新',
-    enable: '启用',
-    disable: '禁用',
-    reset_password: '重置密码',
-  }
-  return map[action] || action
+  return labelOf(dicts.auditActions.value, action)
 }
 
 function getActionColor(action: string): string {
@@ -217,7 +207,10 @@ function getActionColor(action: string): string {
   return map[action] || 'info'
 }
 
-onMounted(() => loadLogs())
+onMounted(async () => {
+  await dicts.load('audit_action', 'audit_result')
+  loadLogs()
+})
 </script>
 
 <style scoped>

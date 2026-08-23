@@ -47,6 +47,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/alerts/events/:id/resolve", axum::routing::put(resolve_event))
         .route("/api/alerts/events/:id/suppress", axum::routing::put(suppress_event))
         .route("/api/alerts/events/:id/note", axum::routing::put(add_note))
+        // 批量操作
+        .route("/api/alerts/events/batch-action", axum::routing::post(batch_action))
         // 统计
         .route("/api/alerts/stats", get(get_stats))
         // 静默规则
@@ -759,6 +761,124 @@ async fn delete_event(
     Ok(Json(serde_json::json!({ "code": 0, "data": null })))
 }
 
+// ============ 批量操作 ============
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchActionRequest {
+    pub ids: Vec<String>,
+    pub action: String, // acknowledge / resolve / suppress / delete
+    pub note: Option<String>,
+}
+
+/// POST /api/alerts/events/batch-action — 批量操作告警
+async fn batch_action(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<BatchActionRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if req.ids.is_empty() {
+        return Err(AppError::bad("请选择至少一条告警"));
+    }
+    if req.ids.len() > 500 {
+        return Err(AppError::bad("批量操作最多 500 条"));
+    }
+
+    let action = req.action.as_str();
+    let now = chrono::Utc::now().naive_utc();
+    let operator = &auth.0.sub;
+    let ip = audit::extract_ip(&headers, Some(addr));
+
+    let (affected, permission) = match action {
+        "acknowledge" => {
+            auth::require_permission(&auth, "alert:update")?;
+            let placeholders = req.ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "UPDATE alert_events SET status = 'acknowledged', acknowledged_by = ?, acknowledged_at = ?, updated_at = ? \
+                 WHERE id IN ({}) AND status = 'firing'",
+                placeholders
+            );
+            let mut q = sqlx::query(&sql);
+            q = q.bind(operator);
+            q = q.bind(now);
+            q = q.bind(now);
+            for id in &req.ids {
+                q = q.bind(id);
+            }
+            let r = q.execute(&state.db).await?;
+            (r.rows_affected(), "acknowledge")
+        }
+        "resolve" => {
+            auth::require_permission(&auth, "alert:update")?;
+            let note = req.note.clone().unwrap_or_default();
+            let placeholders = req.ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "UPDATE alert_events SET status = 'resolved', resolved_by = ?, resolved_at = ?, resolution_note = ?, updated_at = ? \
+                 WHERE id IN ({}) AND status NOT IN ('resolved')",
+                placeholders
+            );
+            let mut q = sqlx::query(&sql);
+            q = q.bind(operator);
+            q = q.bind(now);
+            q = q.bind(&note);
+            q = q.bind(now);
+            for id in &req.ids {
+                q = q.bind(id);
+            }
+            let r = q.execute(&state.db).await?;
+            (r.rows_affected(), "resolve")
+        }
+        "suppress" => {
+            auth::require_permission(&auth, "alert:update")?;
+            let placeholders = req.ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "UPDATE alert_events SET status = 'suppressed', updated_at = ? \
+                 WHERE id IN ({}) AND status NOT IN ('resolved', 'suppressed')",
+                placeholders
+            );
+            let mut q = sqlx::query(&sql);
+            q = q.bind(now);
+            for id in &req.ids {
+                q = q.bind(id);
+            }
+            let r = q.execute(&state.db).await?;
+            (r.rows_affected(), "suppress")
+        }
+        "delete" => {
+            auth::require_permission(&auth, "alert:delete")?;
+            let placeholders = req.ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "DELETE FROM alert_events WHERE id IN ({})",
+                placeholders
+            );
+            let mut q = sqlx::query(&sql);
+            for id in &req.ids {
+                q = q.bind(id);
+            }
+            let r = q.execute(&state.db).await?;
+            (r.rows_affected(), "delete")
+        }
+        _ => return Err(AppError::bad("不支持的操作类型")),
+    };
+
+    audit::log_async(
+        &state.db, &auth,
+        &format!("batch_{}_alert_event", permission),
+        "alert_events",
+        &req.ids.join(","), None, &ip, "success",
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "code": 0,
+        "data": {
+            "affected": affected,
+            "total": req.ids.len() as u64,
+        }
+    })))
+}
+
 // ============ 统计 ============
 
 /// GET /api/alerts/stats — 告警统计卡片数据
@@ -1086,6 +1206,7 @@ async fn ingress_overview(
     crate::license_routes::require_active_license(&state.db).await?;
 
     // 1) 按 (ingress_channel, ingress_actor) 分组统计
+    // GROUP BY 使用列别名，兼容 ONLY_FULL_GROUP_BY
     let rows = sqlx::query(
         "SELECT ingress_channel, \
                 COALESCE(ingress_actor, '') AS ing_actor, \
@@ -1096,7 +1217,7 @@ async fn ingress_overview(
                 MIN(first_fired_at) AS first_fired_at, \
                 MAX(fired_at) AS last_fired_at \
          FROM alert_events \
-         GROUP BY ingress_channel, COALESCE(ingress_actor, '') \
+         GROUP BY ingress_channel, ing_actor \
          ORDER BY ingress_channel, total_count DESC",
     )
     .fetch_all(&state.db)
