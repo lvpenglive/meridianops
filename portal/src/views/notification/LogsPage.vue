@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Refresh, Delete } from '@element-plus/icons-vue'
 import {
   listNotificationLogs,
   listChannels,
@@ -9,7 +10,7 @@ import {
   type NotificationLog,
   type NotificationChannel,
   type NotificationCleanerConfig,
-} from '@/api/notification'
+} from '../../api/notification'
 
 const loading = ref(false)
 const logs = ref<NotificationLog[]>([])
@@ -406,7 +407,6 @@ onMounted(async () => {
 </template>
 
 <script lang="ts">
-import { Refresh, Delete } from '@element-plus/icons-vue'
 export default { name: 'NotificationLogsPage' }
 </script>
 
