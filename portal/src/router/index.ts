@@ -87,6 +87,24 @@ const routes = [
         meta: { title: '告警大屏', icon: 'Monitor', fullscreen: true }
       },
       {
+        path: 'notification/channels',
+        name: 'NotificationChannels',
+        component: () => import('../views/notification/ChannelsPage.vue'),
+        meta: { title: '通知通道', icon: 'Message', permission: 'notification:read' }
+      },
+      {
+        path: 'notification/rules',
+        name: 'NotificationRules',
+        component: () => import('../views/notification/RulesPage.vue'),
+        meta: { title: '通知规则', icon: 'Setting', permission: 'notification:read' }
+      },
+      {
+        path: 'notification/logs',
+        name: 'NotificationLogs',
+        component: () => import('../views/notification/LogsPage.vue'),
+        meta: { title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' }
+      },
+      {
         path: 'logs',
         name: 'Logs',
         component: () => import('../views/logs/LogsPage.vue'),

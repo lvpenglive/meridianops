@@ -23,6 +23,8 @@ mod routes;
 mod ssh_executor;
 mod system_routes;
 mod template_routes;
+mod notification_cleaner;
+mod notification_engine;
 mod notification_routes;
 mod ticket_routes;
 mod ticket_scheduler;
@@ -119,6 +121,12 @@ async fn main() -> anyhow::Result<()> {
     // 3.2 启动 SLA 超时自动升级后台任务
     tokio::spawn(ticket_scheduler::start_scheduler(state.db.clone()));
 
+    // 3.3 启动通知发送日志自动清理后台任务
+    tokio::spawn(notification_cleaner::start_scheduler(
+        state.db.clone(),
+        state.config.notification_cleaner.clone(),
+    ));
+
     // 4. 启动 + graceful shutdown
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(
@@ -173,6 +181,26 @@ async fn run_migrations_ignore_checksum(pool: &sqlx::MySqlPool) -> anyhow::Resul
             "ALTER TABLE alert_events \
              ADD COLUMN ingress_actor VARCHAR(128) NULL \
              COMMENT '接入者身份（通道名/用户名/token 名）' AFTER ingress_channel",
+        )
+        .execute(pool)
+        .await
+        .ok();
+    }
+
+    // 预执行：确保 alert_events 的 external_id 列存在（Eventide 双向回写所需）
+    let has_external_id: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS \
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'alert_events' AND COLUMN_NAME = 'external_id'",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    if has_external_id.is_none() {
+        tracing::info!("adding alert_events.external_id column");
+        sqlx::query(
+            "ALTER TABLE alert_events \
+             ADD COLUMN external_id VARCHAR(128) NULL \
+             COMMENT '外部系统告警 ID（Eventide alertId）用于双向回写' AFTER fingerprint",
         )
         .execute(pool)
         .await

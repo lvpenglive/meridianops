@@ -75,6 +75,13 @@
               <el-button :icon="Refresh" @click="resetFilter">重置</el-button>
               <el-button v-if="hasPermission('alert:create')" type="success" :icon="Plus"
                 @click="openCreateDialog">新建告警</el-button>
+              <el-button
+                v-if="hasPermission('alert:create')"
+                :icon="RefreshRight"
+                :loading="pullingEventide"
+                @click="onPullFromEventide"
+                title="主动拉取 Eventide 中的活跃告警"
+              >从 Eventide 拉取</el-button>
               <el-button :icon="Monitor" @click="router.push('/alerts/screen')" title="打开大屏模式">告警大屏</el-button>
             </el-form-item>
           </el-form>
@@ -849,7 +856,7 @@ import {
   listAlertEvents, getAlertEvent, createAlertEvent, acknowledgeAlert, resolveAlert, suppressAlert,
   updateAlertNote, deleteAlertEvent, getAlertStats, batchAlertAction,
   listAlertSilences, createAlertSilence, updateAlertSilence, deleteAlertSilence,
-  fetchIngressOverview, getAlertIngress, updateAlertIngress,
+  fetchIngressOverview, getAlertIngress, updateAlertIngress, pullFromEventide,
   type AlertEvent, type AlertStats, type AlertSilence, type IngressOverview,
   type AlertIngressConfig,
 } from '../../api/alert'
@@ -903,6 +910,32 @@ const batchLoading = ref(false)
 const tableRef = ref()
 function onSelectionChange(rows: AlertEvent[]) {
   selectedIds.value = rows.map(r => r.id)
+}
+
+// 从 Eventide 主动拉取告警
+const pullingEventide = ref(false)
+async function onPullFromEventide() {
+  try {
+    await ElMessageBox.confirm(
+      '将从 Eventide 主动拉取活跃告警并合并到本系统，是否继续？',
+      '拉取确认',
+      { type: 'info' },
+    )
+  } catch {
+    return
+  }
+  pullingEventide.value = true
+  try {
+    const r = await pullFromEventide()
+    ElMessage.success(
+      `拉取完成：共 ${r.pulled} 条，新增 ${r.inserted} 条，更新 ${r.updated} 条${r.errors ? `，失败 ${r.errors} 条` : ''}`,
+    )
+    await loadEvents()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '从 Eventide 拉取失败')
+  } finally {
+    pullingEventide.value = false
+  }
 }
 
 // 右键菜单

@@ -251,3 +251,19 @@ export function getAlertIngress(): Promise<AlertIngressConfig> {
 export function updateAlertIngress(data: UpdateAlertIngressRequest): Promise<UpdateAlertIngressResponse> {
   return request.put('/system/alert-ingress', data)
 }
+
+// ============ Eventide 双向回写 ============
+
+/** 主动从 Eventide 拉取告警结果 */
+export interface PullFromEventideResult {
+  pulled: number
+  inserted: number
+  updated: number
+  errors: number
+  message?: string
+}
+
+/** 主动从 Eventide 拉取告警（alert:create 权限） */
+export function pullFromEventide(): Promise<PullFromEventideResult> {
+  return request.post('/alerts/pull-from-eventide', {})
+}

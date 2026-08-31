@@ -363,6 +363,9 @@ const allMenuGroups: MenuGroup[] = [
     type: 'sub', title: '监控告警', icon: 'Bell', children: [
       { path: '/alerts', title: '告警中心', icon: 'BellFilled' },
       { path: '/alerts/screen', title: '告警大屏', icon: 'Monitor' },
+      { path: '/notification/channels', title: '通知通道', icon: 'Message', permission: 'notification:read' },
+      { path: '/notification/rules', title: '通知规则', icon: 'Setting', permission: 'notification:read' },
+      { path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
       { path: '/logs', title: '日志中心', icon: 'Document' },
       { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
     ]

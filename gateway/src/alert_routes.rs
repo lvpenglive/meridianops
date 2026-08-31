@@ -61,6 +61,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/alerts/ingress-overview", get(ingress_overview))
         // Eventide webhook 接收端（无 JWT 鉴权，用共享 token）
         .route("/api/alerts/ingress/eventide", axum::routing::post(ingress_eventide))
+        // Eventide 双向回写：主动拉取告警
+        .route("/api/alerts/pull-from-eventide", axum::routing::post(pull_from_eventide))
 }
 
 // ============ 请求 / 响应结构 ============
@@ -261,7 +263,7 @@ async fn list_events(
 
     // 列表查询：LEFT JOIN ci_instances 获取资产责任人(owner_id → users.username)
     let list_sql = format!(
-        "SELECT e.id, e.fingerprint, e.source, e.ingress_channel, e.ingress_actor, e.severity, e.status, e.title, e.message, e.labels, e.ci_id, e.ci_name_snapshot, \
+        "SELECT e.id, e.fingerprint, e.external_id, e.source, e.ingress_channel, e.ingress_actor, e.severity, e.status, e.title, e.message, e.labels, e.ci_id, e.ci_name_snapshot, \
          e.fire_count, e.first_fired_at, e.fired_at, e.ends_at, e.acknowledged_by, e.acknowledged_at, e.resolved_by, e.resolved_at, \
          e.resolution_note, e.created_at, e.updated_at, \
          u.username AS contact_name \
@@ -297,6 +299,7 @@ async fn list_events(
             serde_json::json!({
                 "id": r.try_get::<String, _>("id").unwrap_or_default(),
                 "fingerprint": r.try_get::<String, _>("fingerprint").unwrap_or_default(),
+                "externalId": r.try_get::<Option<String>, _>("external_id").ok().flatten(),
                 "source": r.try_get::<String, _>("source").unwrap_or_default(),
                 "ingressChannel": r.try_get::<String, _>("ingress_channel").unwrap_or_else(|_| "manual".to_string()),
                 "ingressActor": r.try_get::<Option<String>, _>("ingress_actor").unwrap_or(None),
@@ -344,7 +347,7 @@ async fn get_event(
     crate::license_routes::require_active_license(&state.db).await?;
 
     let row = sqlx::query(
-        "SELECT id, fingerprint, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
+        "SELECT id, fingerprint, external_id, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
          fire_count, first_fired_at, fired_at, ends_at, acknowledged_by, acknowledged_at, resolved_by, resolved_at, \
          resolution_note, created_at, updated_at \
          FROM alert_events WHERE id = ?",
@@ -364,6 +367,7 @@ async fn get_event(
                 "data": {
                     "id": r.try_get::<String, _>("id").unwrap_or_default(),
                     "fingerprint": r.try_get::<String, _>("fingerprint").unwrap_or_default(),
+                    "externalId": r.try_get::<Option<String>, _>("external_id").ok().flatten(),
                     "source": r.try_get::<String, _>("source").unwrap_or_default(),
                     "ingressChannel": r.try_get::<String, _>("ingress_channel").unwrap_or_else(|_| "manual".to_string()),
                     "ingressActor": r.try_get::<Option<String>, _>("ingress_actor").unwrap_or(None),
@@ -544,6 +548,35 @@ async fn create_event(
         &id, Some(&detail), &ip, "success",
     ).await;
 
+    // 通知引擎：人工上报告警触发事件（异步）
+    {
+        let id_clone = id.clone();
+        let title_clone = req.title.clone();
+        let sev_canonical = severity_canonical.clone();
+        let msg_clone = req.message.clone();
+        let actor_clone = auth.0.sub.clone();
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            let sev = severity_for_rule_match(&sev_canonical);
+            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+            let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
+                Some(m) => format!("人工上报告警「{}」由 {} 录入\n严重程度：{}\n{}",
+                    title_clone, actor_clone, sev, m),
+                None => format!("人工上报告警「{}」由 {} 录入\n严重程度：{}",
+                    title_clone, actor_clone, sev),
+            };
+            crate::notification_engine::dispatch_event(
+                &state_clone,
+                "alert_firing",
+                Some(&sev),
+                &format!("新告警: {}", title_clone),
+                &body,
+                &format!("/alerts?id={}", id_clone),
+                &user_ids,
+            ).await;
+        });
+    }
+
     Ok(Json(serde_json::json!({
         "code": 0,
         "data": { "id": id, "fingerprint": fingerprint, "merged": was_merged }
@@ -592,6 +625,47 @@ async fn acknowledge_event(
         &state.db, &auth, "acknowledge_alert", "alert_events",
         &id, Some(&detail), &ip, "success",
     ).await;
+
+    // Eventide 双向回写：如果告警来自 Eventide，同步确认状态
+    if let Some(ext_id) = get_eventide_external_id(&state.db, &id).await {
+        let state_clone = state.clone();
+        let actor_clone = actor.clone();
+        tokio::spawn(async move {
+            sync_to_eventide(&state_clone, &ext_id, "acknowledge", &actor_clone, None).await;
+        });
+    }
+
+    // 通知引擎：触发告警确认事件（异步，不阻塞响应）
+    {
+        let id_clone = id.clone();
+        let actor_clone = actor.clone();
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+                "SELECT title, severity FROM alert_events WHERE id = ?"
+            )
+            .bind(&id_clone)
+            .fetch_optional(&state_clone.db)
+            .await
+            .ok()
+            .flatten();
+            let (title, severity_canonical) = match row {
+                Some((t, s)) => (t.unwrap_or_default(), s.unwrap_or_default()),
+                None => (String::new(), String::new()),
+            };
+            let sev = severity_for_rule_match(&severity_canonical);
+            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+            crate::notification_engine::dispatch_event(
+                &state_clone,
+                "alert_acknowledged",
+                Some(&sev),
+                &format!("告警已认领: {}", title),
+                &format!("告警「{}」已被 {} 认领", title, actor_clone),
+                &format!("/alerts?id={}", id_clone),
+                &user_ids,
+            ).await;
+        });
+    }
 
     Ok(Json(serde_json::json!({ "code": 0, "data": { "id": id } })))
 }
@@ -643,6 +717,53 @@ async fn resolve_event(
         &state.db, &auth, "resolve_alert", "alert_events",
         &id, Some(&detail), &ip, "success",
     ).await;
+
+    // Eventide 双向回写：如果告警来自 Eventide，同步解决状态
+    if let Some(ext_id) = get_eventide_external_id(&state.db, &id).await {
+        let state_clone = state.clone();
+        let actor_clone = actor.clone();
+        let note_clone = req.note.clone();
+        tokio::spawn(async move {
+            sync_to_eventide(&state_clone, &ext_id, "resolve", &actor_clone, note_clone.as_deref()).await;
+        });
+    }
+
+    // 通知引擎：触发告警解决事件（异步，不阻塞响应）
+    {
+        let id_clone = id.clone();
+        let actor_clone = actor.clone();
+        let note_clone = req.note.clone();
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+                "SELECT title, severity FROM alert_events WHERE id = ?"
+            )
+            .bind(&id_clone)
+            .fetch_optional(&state_clone.db)
+            .await
+            .ok()
+            .flatten();
+            let (title, severity_canonical) = match row {
+                Some((t, s)) => (t.unwrap_or_default(), s.unwrap_or_default()),
+                None => (String::new(), String::new()),
+            };
+            let sev = severity_for_rule_match(&severity_canonical);
+            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+            let content = match note_clone.as_ref().filter(|n| !n.is_empty()) {
+                Some(n) => format!("告警「{}」已被 {} 解决\n解决说明：{}", title, actor_clone, n),
+                None => format!("告警「{}」已被 {} 解决", title, actor_clone),
+            };
+            crate::notification_engine::dispatch_event(
+                &state_clone,
+                "alert_resolved",
+                Some(&sev),
+                &format!("告警已解决: {}", title),
+                &content,
+                &format!("/alerts?id={}", id_clone),
+                &user_ids,
+            ).await;
+        });
+    }
 
     Ok(Json(serde_json::json!({ "code": 0, "data": { "id": id } })))
 }
@@ -869,6 +990,56 @@ async fn batch_action(
         "alert_events",
         &req.ids.join(","), None, &ip, "success",
     ).await;
+
+    // 通知引擎：批量认领/解决后，逐条触发事件（异步，最多 500 条，单次 spawn 循环即可）
+    // delete/suppress 不触发通知（前者物理删除/后者静默属人工操作，一般不打扰用户）
+    if matches!(permission, "acknowledge" | "resolve") && affected > 0 {
+        let ids_clone = req.ids.clone();
+        let action_clone = permission.to_string();
+        let actor_clone = operator.clone();
+        let note_clone = req.note.clone();
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            let (event_type, verb) = match action_clone.as_str() {
+                "acknowledge" => ("alert_acknowledged", "认领"),
+                "resolve" => ("alert_resolved", "解决"),
+                _ => return,
+            };
+            for aid in ids_clone.iter().take(500) {
+                let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+                    "SELECT title, severity FROM alert_events WHERE id = ?"
+                )
+                .bind(aid)
+                .fetch_optional(&state_clone.db)
+                .await
+                .ok()
+                .flatten();
+                let (title, sev_raw) = match row {
+                    Some((t, s)) => (t.unwrap_or_default(), s.unwrap_or_default()),
+                    None => continue,
+                };
+                let sev = severity_for_rule_match(&sev_raw);
+                let user_ids = get_alert_owner(&state_clone.db, aid).await;
+                let body = if action_clone == "resolve" {
+                    match note_clone.as_ref().filter(|n| !n.is_empty()) {
+                        Some(n) => format!("告警「{}」已被 {} 批量解决\n解决说明：{}", title, actor_clone, n),
+                        None => format!("告警「{}」已被 {} 批量解决", title, actor_clone),
+                    }
+                } else {
+                    format!("告警「{}」已被 {} 批量认领", title, actor_clone)
+                };
+                crate::notification_engine::dispatch_event(
+                    &state_clone,
+                    event_type,
+                    Some(&sev),
+                    &format!("告警批量{}: {}", verb, title),
+                    &body,
+                    &format!("/alerts?id={}", aid),
+                    &user_ids,
+                ).await;
+            }
+        });
+    }
 
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -1476,17 +1647,17 @@ async fn ingress_eventide(
     let labels_str = json_to_str(&Some(labels));
     let new_id = payload.alert_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    // 5) upsert：按 fingerprint（eventide: 前缀）去重
-    let existing = sqlx::query("SELECT id FROM alert_events WHERE fingerprint = ? AND fingerprint LIKE 'eventide:%'")
+    // 5) upsert：按 fingerprint（eventide: 前缀）去重。先把 id 提取为 String，避免后续多次 move Row。
+    let existing_row = sqlx::query("SELECT id FROM alert_events WHERE fingerprint = ? AND fingerprint LIKE 'eventide:%'")
         .bind(&fingerprint)
         .fetch_optional(&state.db)
         .await?;
-    let was_merged = existing.is_some();
+    let existing_id: Option<String> = existing_row.as_ref().map(|r| r.try_get::<String, _>("id").unwrap_or_default());
+    let was_merged = existing_id.is_some();
 
     if is_resolve {
         // became_resolved：把已有告警标记为 resolved
-        if let Some(r) = existing {
-            let existing_id: String = r.try_get::<String, _>("id").unwrap_or_default();
+        if let Some(existing_id) = existing_id.clone() {
             let actor = "eventide";
             sqlx::query(
                 "UPDATE alert_events \
@@ -1501,6 +1672,33 @@ async fn ingress_eventide(
             .bind(&existing_id)
             .execute(&state.db)
             .await?;
+
+            // 通知引擎：触发告警解决事件（异步）
+            {
+                let id_clone = existing_id.clone();
+                let sev_canonical = severity_canonical.clone();
+                let title_clone = title.clone();
+                let msg_clone = message.clone();
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    let sev = severity_for_rule_match(&sev_canonical);
+                    let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                    let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
+                        Some(m) => format!("告警「{}」已由 Eventide 推送解决\n{}", title_clone, m),
+                        None => format!("告警「{}」已由 Eventide 推送解决", title_clone),
+                    };
+                    crate::notification_engine::dispatch_event(
+                        &state_clone,
+                        "alert_resolved",
+                        Some(&sev),
+                        &format!("告警已解决: {}", title_clone),
+                        &body,
+                        &format!("/alerts?id={}", id_clone),
+                        &user_ids,
+                    ).await;
+                });
+            }
+
             return Ok(Json(serde_json::json!({
                 "code": 0,
                 "data": { "id": existing_id, "fingerprint": fingerprint, "action": "resolved", "merged": true }
@@ -1514,6 +1712,45 @@ async fn ingress_eventide(
         })));
     }
 
+    // became_acknowledged：若存在则把状态改为 acknowledged
+    let is_ack = matches!(payload.transition.as_deref(), Some("became_acknowledged"));
+    if is_ack {
+        if let Some(eid) = existing_id.clone() {
+            let actor = "eventide";
+            sqlx::query(
+                "UPDATE alert_events SET status = 'acknowledged', acknowledged_by = ?, acknowledged_at = ?, updated_at = ? \
+                 WHERE id = ?",
+            )
+            .bind(actor)
+            .bind(&now)
+            .bind(&now)
+            .bind(&eid)
+            .execute(&state.db)
+            .await?;
+
+            // 通知引擎：触发告警确认事件（异步）
+            {
+                let id_clone = eid.clone();
+                let sev_canonical = severity_canonical.clone();
+                let title_clone = title.clone();
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    let sev = severity_for_rule_match(&sev_canonical);
+                    let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                    crate::notification_engine::dispatch_event(
+                        &state_clone,
+                        "alert_acknowledged",
+                        Some(&sev),
+                        &format!("告警已认领: {}", title_clone),
+                        &format!("告警「{}」已在 Eventide 被认领", title_clone),
+                        &format!("/alerts?id={}", id_clone),
+                        &user_ids,
+                    ).await;
+                });
+            }
+        }
+    }
+
     // 接入渠道信息：webhook + Eventide 通道名（从 raw_source 推断或用 "Eventide 推送"）
     let raw_source_actor = payload.labels.clone().and_then(|l| {
         l.get("source").and_then(|v| v.as_str()).map(|s| s.to_string())
@@ -1521,14 +1758,14 @@ async fn ingress_eventide(
     let ing_channel = "webhook".to_string();
     let ing_actor = Some(format!("Eventide/{}", raw_source_actor));
 
-    let id = if let Some(r) = existing {
+    let id = if let Some(eid) = existing_id.clone() {
         // 合并：fire_count + tally（Eventide 累计）+ 1，fired_at 更新为 startsAt
         // 注意：合并不修改 ingress_channel / ingress_actor，保留首次接入的溯源信息
-        let existing_id: String = r.try_get::<String, _>("id").unwrap_or_default();
         let increment = payload.tally.unwrap_or(1).max(1);
         sqlx::query(
             "UPDATE alert_events \
              SET fire_count = fire_count + ?, fired_at = ?, status = ?, severity = ?, \
+                 external_id = COALESCE(?, external_id), \
                  acknowledged_by = NULL, acknowledged_at = NULL, \
                  resolved_by = NULL, resolved_at = NULL, resolution_note = NULL, \
                  message = COALESCE(?, message), ci_id = COALESCE(?, ci_id), \
@@ -1540,27 +1777,29 @@ async fn ingress_eventide(
         .bind(&starts_at)
         .bind(new_status)
         .bind(&severity_canonical)
+        .bind(payload.alert_id.as_deref())  // external_id COALESCE
         .bind(message.as_deref())
         .bind(ci_id.as_deref())
         .bind(ci_name_snapshot.as_deref())
         .bind(&labels_str)
         .bind(ends_at.as_deref())
         .bind(&now)
-        .bind(&existing_id)
+        .bind(&eid)
         .execute(&state.db)
         .await?;
-        existing_id
+        eid
     } else {
         // 新建：写入接入渠道 webhook 和接入者
         sqlx::query(
             "INSERT INTO alert_events \
-             (id, fingerprint, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
+             (id, fingerprint, external_id, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
               fire_count, first_fired_at, fired_at, ends_at, acknowledged_by, acknowledged_at, resolved_by, resolved_at, \
               resolution_note, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)",
         )
         .bind(&new_id)
         .bind(&fingerprint)
+        .bind(&payload.alert_id)  // external_id：Eventide 端告警 ID
         .bind(&source)
         .bind(&ing_channel)
         .bind(ing_actor.as_deref())
@@ -1597,6 +1836,40 @@ async fn ingress_eventide(
         "webhook",
         "success",
     ).await;
+
+    // 通知引擎：告警触发事件（合并/新建均触发，便于重复触发也能分发到规则）
+    {
+        let state_clone = state.clone();
+        let title_clone = title.clone();
+        let sev_canonical = severity_canonical.clone();
+        let id_clone = id.clone();
+        let msg_clone = message.clone();
+        let merged_clone = was_merged;
+        tokio::spawn(async move {
+            let sev = severity_for_rule_match(&sev_canonical);
+            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+            let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
+                Some(m) => format!("告警「{}」已触发{}\n严重程度：{}\n{}",
+                    title_clone,
+                    if merged_clone { "（重复触发）" } else { "" },
+                    sev,
+                    m),
+                None => format!("告警「{}」已触发{}\n严重程度：{}",
+                    title_clone,
+                    if merged_clone { "（重复触发）" } else { "" },
+                    sev),
+            };
+            crate::notification_engine::dispatch_event(
+                &state_clone,
+                "alert_firing",
+                Some(&sev),
+                &format!("新告警: {}", title_clone),
+                &body,
+                &format!("/alerts?id={}", id_clone),
+                &user_ids,
+            ).await;
+        });
+    }
 
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -1672,6 +1945,38 @@ fn normalize_severity(s: Option<&str>) -> String {
     normalize_level_canonical(s)
 }
 
+/// 把 canonical 级别的 Zabbix 0-5 数字映射为通知规则可读的枚举字符串。
+/// 规则 severity_filter 前端预设：disaster(5) / critical(4) / warning(2,3) / info(0,1)。
+fn severity_for_rule_match(canonical: &str) -> String {
+    match canonical {
+        "5" => "disaster".to_string(),
+        "4" => "critical".to_string(),
+        "3" | "2" => "warning".to_string(),
+        "1" | "0" => "info".to_string(),
+        s => s.to_string(),
+    }
+}
+
+/// 查告警对应的资产 owner_id（用于站内信推送给责任人），若无法关联则返回空 Vec。
+async fn get_alert_owner(pool: &sqlx::MySqlPool, alert_id: &str) -> Vec<String> {
+    let owner = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT ci.owner_id \
+         FROM alert_events e \
+         LEFT JOIN ci_instances ci ON e.ci_id = ci.id \
+         WHERE e.id = ? AND ci.owner_id IS NOT NULL AND ci.owner_id <> ''",
+    )
+    .bind(alert_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+    match owner {
+        Some(u) => vec![u],
+        None => Vec::new(),
+    }
+}
+
 /// 用 IP 在 ci_instances 表反查资产（按动态属性 attrs 里的 ip 字段匹配）。
 /// 返回 (Option<ci_id>, Option<name>)
 async fn lookup_ci_by_ip(pool: &sqlx::MySqlPool, ip: &str) -> anyhow::Result<(Option<String>, Option<String>)> {
@@ -1696,4 +2001,298 @@ async fn lookup_ci_by_ip(pool: &sqlx::MySqlPool, ip: &str) -> anyhow::Result<(Op
         )),
         None => Ok((None, None)),
     }
+}
+
+// ============================================================
+// Eventide 双向回写 + 主动拉取
+// ============================================================
+
+/// 查询告警是否来自 Eventide（ingress_channel=webhook + ingress_actor 以 Eventide/ 开头）
+/// 返回 Some(external_id) 如果是 Eventide 来源且有 external_id。
+async fn get_eventide_external_id(pool: &sqlx::MySqlPool, alert_id: &str) -> Option<String> {
+    let row = sqlx::query(
+        "SELECT external_id, ingress_channel, ingress_actor \
+         FROM alert_events WHERE id = ?",
+    )
+    .bind(alert_id)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+
+    let external_id: Option<String> = row.try_get("external_id").ok().flatten();
+    let channel: String = row.try_get("ingress_channel").unwrap_or_default();
+    let actor: Option<String> = row.try_get("ingress_actor").ok().flatten();
+
+    if channel == "webhook"
+        && actor.as_deref().map(|a| a.starts_with("Eventide/")).unwrap_or(false)
+    {
+        external_id
+    } else {
+        None
+    }
+}
+
+/// 向 Eventide 回写告警状态变更（确认/解决）。
+///
+/// 调用 Eventide API：
+///   POST {base_url}/api/alerts/{external_id}/{action}
+///   Header: Authorization: Bearer {token}
+///
+/// 失败时仅记录日志，不阻断主流程（best-effort 同步）。
+async fn sync_to_eventide(
+    state: &Arc<AppState>,
+    external_id: &str,
+    action: &str,  // "acknowledge" | "resolve"
+    actor: &str,
+    note: Option<&str>,
+) {
+    let eventide_cfg = state.config.system_by_id("eventide");
+    let eventide = match eventide_cfg {
+        Some(c) => c,
+        None => {
+            tracing::warn!(target: "eventide_writeback", "Eventide 系统未在配置中找到，跳过回写");
+            return;
+        }
+    };
+
+    let token = eventide.auth_token.as_deref().unwrap_or("");
+    if token.is_empty() || token.starts_with("change-me") {
+        tracing::warn!(target: "eventide_writeback", "Eventide auth_token 未配置，跳过回写");
+        return;
+    }
+
+    let url = format!("{}/api/alerts/{}/{}", eventide.base_url, external_id, action);
+    let payload = serde_json::json!({
+        "actor": actor,
+        "note": note,
+        "source": "meridianops",
+    });
+
+    let client = &state.client;
+    match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                tracing::info!(
+                    target: "eventide_writeback",
+                    external_id = %external_id,
+                    action = %action,
+                    "Eventide 回写成功"
+                );
+            } else {
+                tracing::warn!(
+                    target: "eventide_writeback",
+                    external_id = %external_id,
+                    action = %action,
+                    status = %resp.status(),
+                    "Eventide 回写返回非 2xx"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "eventide_writeback",
+                external_id = %external_id,
+                action = %action,
+                error = %e,
+                "Eventide 回写请求失败"
+            );
+        }
+    }
+}
+
+/// POST /api/alerts/pull-from-eventide — 主动从 Eventide 拉取告警列表并 upsert。
+///
+/// 调用 Eventide API：GET {base_url}/api/alerts?status=firing&limit=100
+/// 拉取后复用 ingress_eventide 的 upsert 逻辑写入 alert_events。
+async fn pull_from_eventide(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "alert:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+
+    let eventide = state.config.system_by_id("eventide").ok_or_else(|| {
+        AppError::internal("Eventide 系统未配置")
+    })?;
+
+    let token = eventide.auth_token.as_deref().unwrap_or("");
+    if token.is_empty() || token.starts_with("change-me") {
+        return Err(AppError::internal("Eventide auth_token 未配置"));
+    }
+
+    let url = format!("{}/api/alerts?status=firing&limit=100", eventide.base_url);
+    let client = &state.client;
+
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| AppError::internal(&format!("请求 Eventide 失败: {}", e)))?;
+
+    if !resp.status().is_success() {
+        return Err(AppError::internal(&format!(
+            "Eventide 返回非 2xx: {}",
+            resp.status()
+        )));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        AppError::internal(&format!("解析 Eventide 响应失败: {}", e))
+    })?;
+
+    let alerts = body.get("alerts")
+        .or_else(|| body.get("data").and_then(|d| d.get("alerts")))
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut created: u32 = 0;
+    let mut merged: u32 = 0;
+    let mut errors: u32 = 0;
+
+    for alert in &alerts {
+        // 将 Eventide 告警格式转为 ingress payload 并复用 upsert 逻辑
+        let alert_id = alert.get("alertId").or_else(|| alert.get("alert_id"))
+            .and_then(|v| v.as_str()).map(|s| s.to_string());
+        let fingerprint = alert.get("fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let severity = alert.get("severity").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let status = alert.get("status").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let labels = alert.get("labels").cloned();
+        let annotations = alert.get("annotations").cloned();
+        let starts_at = alert.get("startsAt").or_else(|| alert.get("starts_at"))
+            .and_then(|v| v.as_str()).map(|s| s.to_string());
+        let ends_at = alert.get("endsAt").or_else(|| alert.get("ends_at"))
+            .and_then(|v| v.as_str()).map(|s| s.to_string());
+        let tally = alert.get("tally").and_then(|v| v.as_i64());
+
+        // 计算 fingerprint（如 Eventide 未提供）
+        let fp = match fingerprint {
+            Some(fp) => format!("eventide:{}", fp),
+            None => {
+                let (src, alertname, alert_ip, _hostname) = extract_label_fields(&labels.clone().unwrap_or(serde_json::Value::Null));
+                let title = alertname.clone().unwrap_or_else(|| "未命名告警".to_string());
+                calc_fingerprint("eventide:", &src, &None, &title, &labels)
+            }
+        };
+
+        // 查是否已存在
+        let existing = sqlx::query("SELECT id FROM alert_events WHERE fingerprint = ? AND fingerprint LIKE 'eventide:%'")
+            .bind(&fp)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::internal(&format!("查询已有告警失败: {}", e)))?;
+
+        // 提取标题
+        let (src, alertname, alert_ip, hostname) = extract_label_fields(&labels.clone().unwrap_or(serde_json::Value::Null));
+        let title = alertname.clone().unwrap_or_else(|| "未命名告警".to_string());
+        let message = extract_summary(&annotations.clone().unwrap_or(serde_json::Value::Null)).or_else(|| alertname.clone());
+        let (ci_id, ci_name_snapshot) = match alert_ip.as_deref() {
+            Some(ip) if !ip.is_empty() => lookup_ci_by_ip(&state.db, ip).await.unwrap_or((None, None)),
+            _ => (None, hostname.clone()),
+        };
+        let labels_str = json_to_str(&labels);
+        let severity_canonical = normalize_level_canonical(severity.as_deref());
+
+        if let Some(r) = existing {
+            // 合并
+            let existing_id: String = r.try_get::<String, _>("id").unwrap_or_default();
+            sqlx::query(
+                "UPDATE alert_events \
+                 SET fire_count = fire_count + ?, fired_at = ?, status = ?, severity = ?, \
+                     external_id = COALESCE(?, external_id), \
+                     message = COALESCE(?, message), ci_id = COALESCE(?, ci_id), \
+                     ci_name_snapshot = COALESCE(?, ci_name_snapshot), labels = ?, \
+                     ends_at = ?, updated_at = ? \
+                 WHERE id = ?",
+            )
+            .bind(tally.unwrap_or(1).max(1))
+            .bind(starts_at.as_deref().unwrap_or(&now))
+            .bind(status.as_deref().unwrap_or("firing"))
+            .bind(&severity_canonical)
+            .bind(alert_id.as_deref())
+            .bind(message.as_deref())
+            .bind(ci_id.as_deref())
+            .bind(ci_name_snapshot.as_deref())
+            .bind(&labels_str)
+            .bind(ends_at.as_deref())
+            .bind(&now)
+            .bind(&existing_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::internal(&format!("更新告警失败: {}", e)))?;
+            merged += 1;
+        } else {
+            // 新建
+            let new_id = alert_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+            let ing_actor = Some(format!("Eventide/{}", src));
+            sqlx::query(
+                "INSERT INTO alert_events \
+                 (id, fingerprint, external_id, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
+                  fire_count, first_fired_at, fired_at, ends_at, acknowledged_by, acknowledged_at, resolved_by, resolved_at, \
+                  resolution_note, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)",
+            )
+            .bind(&new_id)
+            .bind(&fp)
+            .bind(alert_id.as_deref())
+            .bind(&src)
+            .bind("webhook")
+            .bind(ing_actor.as_deref())
+            .bind(&severity_canonical)
+            .bind(status.as_deref().unwrap_or("firing"))
+            .bind(&title)
+            .bind(message.as_deref())
+            .bind(&labels_str)
+            .bind(ci_id.as_deref())
+            .bind(ci_name_snapshot.as_deref())
+            .bind(tally.unwrap_or(1))
+            .bind(starts_at.as_deref().unwrap_or(&now))
+            .bind(starts_at.as_deref().unwrap_or(&now))
+            .bind(ends_at.as_deref())
+            .bind(&now)
+            .bind(&now)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::internal(&format!("新建告警失败: {}", e)))?;
+            created += 1;
+        }
+    }
+
+    // 审计
+    let detail = serde_json::json!({
+        "total": alerts.len(),
+        "created": created,
+        "merged": merged,
+        "errors": errors,
+    });
+    let _ = db::insert_audit_log(
+        &state.db,
+        &auth.0.sub,
+        "pull_from_eventide",
+        "alert_events",
+        "",
+        Some(&detail),
+        "",
+        "success",
+    ).await;
+
+    Ok(Json(serde_json::json!({
+        "code": 0,
+        "data": {
+            "total": alerts.len(),
+            "created": created,
+            "merged": merged,
+            "errors": errors,
+        }
+    })))
 }

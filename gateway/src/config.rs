@@ -9,7 +9,34 @@ pub struct GatewayConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub alerts: AlertsConfig,
+    #[serde(default)]
+    pub notification_cleaner: NotificationCleanerConfig,
     pub systems: Vec<SystemConfig>,
+}
+
+/// 通知发送日志自动清理
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationCleanerConfig {
+    /// 是否启用自动清理（默认开）
+    pub enabled: bool,
+    /// 保留天数（默认 30 天）。小于等于 0 表示按 30 天保底
+    pub retention_days: u32,
+    /// 执行间隔（秒），默认 86400 = 每 24 小时一次
+    pub interval_secs: u64,
+    /// 每批删除上限，避免长事务锁表；默认 1000
+    pub batch_size: u32,
+}
+
+impl Default for NotificationCleanerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            retention_days: 30,
+            interval_secs: 86400,
+            batch_size: 1000,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +164,7 @@ impl Default for GatewayConfig {
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
             alerts: AlertsConfig::default(),
+            notification_cleaner: NotificationCleanerConfig::default(),
             systems: vec![
                 SystemConfig {
                     id: "axleops".to_string(),
@@ -253,6 +281,26 @@ impl GatewayConfig {
         if let Ok(v) = std::env::var("MERIDIANOPS_ALERT_INGRESS_ENABLED") {
             if let Ok(b) = v.parse::<bool>() {
                 self.alerts.ingress_enabled = b;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_NOTIF_CLEAN_ENABLED") {
+            if let Ok(b) = v.parse::<bool>() {
+                self.notification_cleaner.enabled = b;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_NOTIF_CLEAN_RETENTION_DAYS") {
+            if let Ok(n) = v.parse::<u32>() {
+                self.notification_cleaner.retention_days = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_NOTIF_CLEAN_INTERVAL_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                self.notification_cleaner.interval_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_NOTIF_CLEAN_BATCH_SIZE") {
+            if let Ok(n) = v.parse::<u32>() {
+                self.notification_cleaner.batch_size = n;
             }
         }
     }
