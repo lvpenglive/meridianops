@@ -35,7 +35,7 @@ meridianops/
 
 > **所有告警数据统一走 Eventide**：天旦交易监控、优云 BPM、Zabbix 综合监控、华为 NPM、平行线机房监控等告警源，**全部由 Eventide 统一接入和汇聚**，MeridianOps 只对接 Eventide 的告警 API，不直连任何监控系统。
 >
-> **非告警类数据按需直连**：资产配置（优云 CMDB）、日志检索（ELK）、服务管理（AxleOps）等 Eventide 不覆盖的领域，由 MeridianOps Gateway 直接代理。
+> **非告警类数据按需直连**：资产配置（优云 CMDB）、日志检索（ClickHouse + Loki，见下方「日志平台集成方案」）、服务管理（AxleOps）等 Eventide 不覆盖的领域，由 MeridianOps Gateway 直接代理。
 >
 > **上游系统双向对接**：2oauth SSO、优云 ITIL、理想自动化、中国移动短信、帕拉迪堡垒机等上游系统，MeridianOps 提供双向接口（接收工单/触发作业/推送操作记录/下发通知）。
 
@@ -46,7 +46,8 @@ meridianops/
 | **Eventide** | 告警中枢（**唯一告警入口**） | ✅ Gateway 直连 | 汇聚全行 6+ 监控系统告警，提供统一告警列表/确认/关闭/分级统计 API |
 | **AxleOps** | 服务管理 / 发布 / 作业执行 | ✅ Gateway 直连 | 服务元数据、发布状态、剧本执行通道 |
 | **优云 CMDB** | 资产配置 / 业务拓扑 / 配置关系 | ✅ Gateway 直连 | 主机归属、业务链路、负责人、配置项关联 |
-| **ELK** | 日志分析 | ✅ Gateway 直连（iframe + 检索跳转） | 告警详情快捷跳 Kibana、日志检索 |
+| **ClickHouse + Loki** | 日志分析（**推荐日志方案**） | ✅ Gateway 直连（SQL 代理 + Loki API） | 全量日志存 ClickHouse 做 SQL 分析，ERROR+ 同步 Loki 做 Grafana 联动；详见下方「日志平台集成方案」 |
+| **ELK** | 日志分析（**存量/可选**） | ✅ Gateway 直连（iframe + 检索跳转） | 行内已有 ELK 集群时可继续用，MeridianOps 做统一入口；新部署优先 ClickHouse + Loki |
 | **帕拉迪堡垒机** | 操作审计 | ⚡ 对接预留 | 操作记录回流 MeridianOps 审计中心 |
 | **天旦交易监控** | 交易系统告警 | ❌ 不直连（经 Eventide） | Eventide 上游数据源 |
 | **优云 BPM** | BPM 告警 | ❌ 不直连（经 Eventide） | Eventide 上游数据源 |
@@ -70,7 +71,7 @@ meridianops/
 
 - **Node.js** >= 18
 - **Rust** >= 1.75
-- **MySQL** >= 5.7（120.26.105.115:3306，独立库 `meridianops`）
+- **MySQL** >= 5.7（120.26.67.180:3306，独立库 `meridianops`）
 - **pnpm / npm**（前端包管理）
 
 ### 启动前端门户
@@ -750,6 +751,185 @@ MIT
 - JWT (HS256) + 24 小时有效期 + localStorage 持久化
 - 密码哈希：Argon2id（内存 64MB, 迭代 3, 并行 1）
 - 传输安全：生产环境需部署 HTTPS 反向代理（Nginx/Caddy）
+
+## 日志平台集成方案
+
+MeridianOps 对日志的定位是**分层纳管，不重复造轮子**：业务级日志（审计、通知发送）自主 MySQL 存储合规留存；系统/应用/中间件日志走专用日志平台（推荐 ClickHouse + Loki 组合）。Eventide 是纯告警中枢，不覆盖全量日志领域。
+
+### 方案选型
+
+| 方案 | 资源消耗 | 分析能力 | 运维复杂度 | 银行私有化 | 推荐场景 |
+|------|---------|---------|-----------|-----------|---------|
+| **🥇 ClickHouse + Loki** | 🟢 极低 | SQL 全栈 + Grafana 联动 | 🟢 简单 | ✅ | 新部署首选，与 Grafana 告警天然联动 |
+| **🥈 ELK Stack** | 🔴 极高 | 全文检索 + ML 异常 | 🔴 复杂 | ✅ | 行内已有 ELK 集群时继续用 |
+| **🥉 Grafana Loki（单用）** | 🟢 极低 | LogQL 基础检索 | 🟢 最简单 | ✅ | 最小化部署，只做运维查日志 |
+
+### 推荐架构：Vector → ClickHouse（全量）+ Loki（ERROR+）
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          各主机 / 容器                               │
+│                                                                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌───────────┐  │
+│  │ 应用日志     │  │ 系统日志     │  │ Nginx/MySQL │  │ 中间件日志│  │
+│  │ (stdout/文件)│  │ (syslog/journald)│ (access/error)│(Redis等)│  │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └─────┬─────┘  │
+│         │                │                │               │        │
+│         ▼                ▼                ▼               ▼        │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │           Vector Agent（Rust 单二进制，MB 级内存）            │    │
+│  │                                                             │    │
+│  │  sources: file / journald / syslog / kubernetes              │    │
+│  │  transforms: remap(归一化) → regex(结构化解析) → route(分流) │    │
+│  │  sinks:  ↓ 全量 → ClickHouse   ↓ ERROR+/WARN → Loki         │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+          ┌─────────────────┐               ┌─────────────────┐
+          │   ClickHouse     │               │      Loki       │
+          │   集群 (3节点)   │               │   单节点起步     │
+          │                  │               │                  │
+          │  MergeTree 引擎  │               │  TSDB + 对象存储 │
+          │  列式压缩 10:1   │               │  标签索引        │
+          │  支持 SQL + JSON │               │  LogQL 查询      │
+          │  TTL 自动清理    │               │  pattern 模式    │
+          └────────┬─────────┘               └────────┬─────────┘
+                   │                                  │
+          ┌────────┴─────────┐               ┌────────┴─────────┐
+          │  Superset /      │               │    Grafana       │
+          │  DBeaver /       │               │                  │
+          │  MeridianOps API │               │  Explore 日志     │
+          │  (SQL 代理)      │               │  告警+日志同面板  │
+          └──────────────────┘               └──────────────────┘
+```
+
+#### 为什么 ClickHouse + Loki 组合？
+
+- **存储分离**：ClickHouse 扛全量日志（列式压缩 10:1，MySQL 存储量的 1/10），Loki 只存 ERROR+/WARN 级别（量 1-5%），各自职责清晰
+- **分析分离**：ClickHouse 用标准 SQL 做聚合/跨表关联/模式挖掘（L2-L3），Loki 用 LogQL 在 Grafana 面板里快速过滤（L1-L2）
+- **告警联动**：Loki 与 Grafana 同属一个生态，告警面板直接查关联日志；MeridianOps 告警详情一键跳转 Grafana Explore
+- **资源友好**：单节点 4C8G 就能跑 ClickHouse + Loki，比 ELK 的 16C32G 起步轻很多
+
+#### Vector 管道配置要点
+
+```toml
+# 分流逻辑：全量进 ClickHouse，ERROR+/WARN 同步进 Loki
+[transforms.split_by_level.routes.error_plus]
+condition = '.level == "error" || .level == "critical" || .level == "fatal" || .level == "warn"'
+
+[transforms.split_by_level.routes.all]
+condition = 'true'  # 全量
+
+# INFO/DEBUG 采样：生产环境采 10% 足够（减少 90% 存储）
+[transforms.sample_info]
+type = "sample"
+rate = 0.1
+key_field = "message"
+
+# ClickHouse 批量写入（10MB / 5000 条 / 5 秒）
+[sinks.clickhouse_all]
+batch.max_events = 5000
+batch.max_bytes = 10485760
+batch.timeout_secs = 5
+```
+
+#### ClickHouse 表结构
+
+```sql
+CREATE DATABASE meridianops_logs;
+
+CREATE TABLE meridianops_logs.all_logs
+(
+    timestamp    DateTime64(3) NOT NULL,
+    hostname     LowCardinality(String) NOT NULL,
+    service      LowCardinality(String) NOT NULL,
+    source       LowCardinality(String) NOT NULL,
+    level        LowCardinality(String) NOT NULL,
+    message      String NOT NULL,
+    trace_id     Nullable(String),
+    ip           Nullable(String),
+    extra        Map(String, String) DEFAULT map(),
+    raw_json     String
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (hostname, service, level, toDate(timestamp))
+TTL timestamp + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192;
+
+-- 跳数索引加速按 level 过滤
+ALTER TABLE meridianops_logs.all_logs 
+ADD INDEX idx_level level TYPE set(4) GRANULARITY 4;
+
+-- 时间范围查询加速
+ALTER TABLE meridianops_logs.all_logs 
+ADD INDEX idx_ts timestamp TYPE minmax GRANULARITY 1;
+```
+
+#### 日志查询能力
+
+| 分析层次 | 示例 | ClickHouse | Loki |
+|---------|------|-----------|------|
+| L1 基础检索 | `host=db01 AND error AND "connection refused"` | `WHERE hostname='db01' AND level='error' AND message ILIKE '%connection refused%'` | `{hostname="db01", level="error"} \|= "connection refused"` |
+| L2 聚合统计 | 近 7 天各服务 ERROR TOP10 | `GROUP BY service ORDER BY count() DESC LIMIT 10` | `topk(10, sum by (service) (count_over_time({level="error"} [7d])))` |
+| L3 模式挖掘 | 归一化重复日志模板 | `regexp_replace(message, '\d+', 'N') GROUP BY template` | Loki 2.9+ 内置 `pattern` 自动提取 |
+| L4 智能分析 | 告警后 5 分钟 error 激增 | `JOIN alerts ON hostname + 时间窗口 HAVING count() > 50` | 需 Grafana 告警联动 + 规则配置 |
+
+#### MeridianOps 集成点
+
+```
+MeridianOps Gateway
+├── 日志代理 API
+│   GET  /api/logs           → ClickHouse SQL：基础检索（L1）
+│   GET  /api/logs/stats     → ClickHouse SQL：聚合统计（L2）
+│   GET  /api/logs/patterns  → ClickHouse SQL：模式挖掘（L3）
+│
+├── 告警详情页
+│   ├── "查看关联日志" 按钮 → 查 ClickHouse（同 hostname + 时间窗口内 error）
+│   ├── 日志趋势小图 → ClickHouse GROUP BY hour → 返回 JSON
+│   └── "跳转 Grafana" → Loki {hostname=...} |= "error"
+│
+└── 告警-日志自动关联
+    Eventide 推告警 → MeridianOps 写 alert_events
+    → 异步任务查 ClickHouse（同 hostname + 告警前后 5 分钟 error 日志）
+    → 关联到 alert_events.clue_logs 字段
+    → 告警详情直接展示关联日志摘要
+```
+
+#### 部署步骤
+
+```
+Phase 1（1 天）：搭 ClickHouse + Loki 单节点
+  docker run clickhouse / loki / vector
+  → 验证日志能写入两边
+
+Phase 2（2 天）：MeridianOps 集成
+  后端加 ClickHouse 连接池 + 日志代理 API
+  前端日志页面从 mock 改真实数据
+  告警详情加"查看关联日志"按钮
+
+Phase 3（1 天）：优化
+  ClickHouse 加跳数索引、TTL、采样
+  Vector 加 Nginx/MySQL 解析规则
+  Grafana 做日志 Dashboard + 告警联动面板
+
+Phase 4（按需）：生产化
+  ClickHouse 改 3 节点集群
+  Loki 改分布式（或继续单节点，量小够了）
+  Vector 改 K8s DaemonSet
+  加日志告警（ERROR 突增自动触发通知规则）
+```
+
+#### 资源估算
+
+| 组件 | 最小部署 | 银行规模（日均 10GB 日志） |
+|------|---------|--------------------------|
+| Vector Agent | 每台主机 1 个，50MB 内存 | 同左（Rust 高性能） |
+| ClickHouse | 单节点 4C8G + 200G SSD | 3C16G + 4T SSD（集群） |
+| Loki | 单节点 2C4G + 100G SSD | 2C4G + 500G SSD（只存 ERROR） |
+| Grafana | 复用现有 | 已部署 |
 
 ## 部署架构建议
 

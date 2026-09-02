@@ -108,7 +108,7 @@ const routes = [
         path: 'logs',
         name: 'Logs',
         component: () => import('../views/logs/LogsPage.vue'),
-        meta: { title: '日志中心', icon: 'Document' }
+        meta: { title: '日志中心', icon: 'Document', permission: 'log:read' }
       },
       {
         path: 'config',

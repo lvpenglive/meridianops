@@ -17,6 +17,8 @@ mod knowledge_routes;
 mod license_crypto;
 mod license_routes;
 mod job_routes;
+mod log_alert_scheduler;
+mod log_routes;
 mod report_routes;
 mod role_routes;
 mod routes;
@@ -126,6 +128,9 @@ async fn main() -> anyhow::Result<()> {
         state.db.clone(),
         state.config.notification_cleaner.clone(),
     ));
+
+    // 3.4 启动日志告警联动后台任务（Phase 5，默认关闭，需在 [logs.alerting] 显式开启）
+    tokio::spawn(log_alert_scheduler::start_scheduler(state.clone()));
 
     // 4. 启动 + graceful shutdown
     let listener = tokio::net::TcpListener::bind(&bind).await?;

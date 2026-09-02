@@ -56,3 +56,28 @@ token_ttl_hours = 24
 seed_username = "admin"
 seed_password = "CHANGE_ON_FIRST_LOGIN"
 enabled = true
+
+[logs]
+# ClickHouse + Loki 日志平台对接（参见 README 日志平台集成方案）
+# ClickHouse 用于全量日志存储 + SQL 分析（L1-L3 检索/聚合/模式挖掘）
+clickhouse_url = "http://127.0.0.1:8123"
+clickhouse_database = "meridianops_logs"
+# Loki 用于 ERROR+ 级别日志 + Grafana 联动（生成跳转 URL）
+loki_url = "http://127.0.0.1:3100"
+# 单次查询最大返回行数（防止前端拉爆）
+max_query_rows = 1000
+# 查询超时（秒），HTTP POST SQL 给 ClickHouse 的 reqwest 超时
+query_timeout_secs = 30
+
+[logs.alerting]
+# 日志告警联动（Phase 5）：监控 ClickHouse ERROR+ 突增，触发告警回流 MeridianOps
+# 默认关闭，需显式开启；启用后调度器每 check_interval_secs 秒查一次 ClickHouse
+enabled = false
+check_interval_secs = 60
+window_minutes = 5
+# 触发的级别（逗号分隔），对应 all_logs.level 字段值
+levels = "error,critical,fatal"
+# 窗口内日志数超过此阈值触发告警
+error_threshold = 50
+# 同主机告警后静默时间（分钟），避免重复触发
+silence_minutes = 30

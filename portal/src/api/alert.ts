@@ -14,6 +14,15 @@ export interface AlertEvent {
   title: string
   message: string | null
   labels: Record<string, unknown> | null
+  /** 关联日志摘要：告警前后5分钟内同主机error日志（Phase 3 自动关联） */
+  clueLogs: Array<{
+    timestamp: string
+    level: string
+    service: string
+    message: string
+    traceId?: string | null
+    ip?: string | null
+  }> | null
   ciId: string | null
   ciName: string | null
   fireCount: number

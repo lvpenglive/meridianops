@@ -11,7 +11,72 @@ pub struct GatewayConfig {
     pub alerts: AlertsConfig,
     #[serde(default)]
     pub notification_cleaner: NotificationCleanerConfig,
+    #[serde(default)]
+    pub logs: LogsConfig,
     pub systems: Vec<SystemConfig>,
+}
+
+/// 日志平台对接配置（ClickHouse + Loki 组合方案，详见 README 日志平台集成方案）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LogsConfig {
+    /// ClickHouse HTTP 接口地址（如 http://10.0.5.21:8123）
+    pub clickhouse_url: String,
+    /// ClickHouse 数据库名（默认 meridianops_logs）
+    pub clickhouse_database: String,
+    /// Loki HTTP 接口地址（用于生成 Grafana Explore 跳转 URL，不直接查询）
+    pub loki_url: String,
+    /// 单次查询最大返回行数（防止前端拉爆）
+    pub max_query_rows: u32,
+    /// 查询超时（秒）
+    pub query_timeout_secs: u64,
+    /// 日志告警联动配置（Phase 5）
+    #[serde(default)]
+    pub alerting: LogsAlertingConfig,
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self {
+            clickhouse_url: "http://127.0.0.1:8123".to_string(),
+            clickhouse_database: "meridianops_logs".to_string(),
+            loki_url: "http://127.0.0.1:3100".to_string(),
+            max_query_rows: 1000,
+            query_timeout_secs: 30,
+            alerting: LogsAlertingConfig::default(),
+        }
+    }
+}
+
+/// 日志告警联动配置：监控 ClickHouse 中 ERROR+ 级别日志突增，触发告警回流 MeridianOps
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LogsAlertingConfig {
+    /// 总开关（默认关，需显式开启）
+    pub enabled: bool,
+    /// 检查间隔（秒），默认 60
+    pub check_interval_secs: u64,
+    /// 统计窗口（分钟），默认 5
+    pub window_minutes: u32,
+    /// 触发的级别（逗号分隔），默认 error,critical,fatal
+    pub levels: String,
+    /// 窗口内日志数超过此阈值触发告警，默认 50
+    pub error_threshold: u32,
+    /// 同主机告警后静默时间（分钟），避免重复触发，默认 30
+    pub silence_minutes: u32,
+}
+
+impl Default for LogsAlertingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            check_interval_secs: 60,
+            window_minutes: 5,
+            levels: "error,critical,fatal".to_string(),
+            error_threshold: 50,
+            silence_minutes: 30,
+        }
+    }
 }
 
 /// 通知发送日志自动清理
@@ -77,7 +142,7 @@ pub struct DatabaseConfig {
 
 fn default_mysql_url() -> String {
     // 与 Eventide 共用同一 MySQL 实例，独立库名 meridianops
-    "mysql://root:886363@120.26.105.115:3306/meridianops".to_string()
+    "mysql://root:886363@120.26.67.180:3306/meridianops".to_string()
 }
 fn default_max_conn() -> u32 {
     10
@@ -165,6 +230,7 @@ impl Default for GatewayConfig {
             auth: AuthConfig::default(),
             alerts: AlertsConfig::default(),
             notification_cleaner: NotificationCleanerConfig::default(),
+            logs: LogsConfig::default(),
             systems: vec![
                 SystemConfig {
                     id: "axleops".to_string(),
@@ -301,6 +367,45 @@ impl GatewayConfig {
         if let Ok(v) = std::env::var("MERIDIANOPS_NOTIF_CLEAN_BATCH_SIZE") {
             if let Ok(n) = v.parse::<u32>() {
                 self.notification_cleaner.batch_size = n;
+            }
+        }
+        // 日志平台覆盖
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOGS_CLICKHOUSE_URL") {
+            self.logs.clickhouse_url = v;
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOGS_CLICKHOUSE_DB") {
+            self.logs.clickhouse_database = v;
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOGS_LOKI_URL") {
+            self.logs.loki_url = v;
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOGS_MAX_ROWS") {
+            if let Ok(n) = v.parse::<u32>() {
+                self.logs.max_query_rows = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOGS_TIMEOUT_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                self.logs.query_timeout_secs = n;
+            }
+        }
+        // 日志告警联动覆盖
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOG_ALERT_ENABLED") {
+            self.logs.alerting.enabled = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOG_ALERT_INTERVAL") {
+            if let Ok(n) = v.parse::<u64>() {
+                self.logs.alerting.check_interval_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOG_ALERT_THRESHOLD") {
+            if let Ok(n) = v.parse::<u32>() {
+                self.logs.alerting.error_threshold = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_LOG_ALERT_SILENCE") {
+            if let Ok(n) = v.parse::<u32>() {
+                self.logs.alerting.silence_minutes = n;
             }
         }
     }

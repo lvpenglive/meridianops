@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import {
   listNotificationLogs,
-  listChannels,
+  listAllChannels,
   getNotificationCleanerConfig,
   runNotificationCleaner,
   type NotificationLog,
@@ -104,7 +104,7 @@ const severityTagType = (s?: string | null) =>
 
 async function loadChannels() {
   try {
-    channels.value = await listChannels()
+    channels.value = await listAllChannels()
   } catch (e) {
     // 权限不足可忽略
   }

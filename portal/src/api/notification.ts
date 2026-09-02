@@ -1,4 +1,5 @@
 import request from './request'
+import { listDictItems, type DictItem } from './dict'
 
 export interface NotificationItem {
   id: string
@@ -57,8 +58,27 @@ export interface NotificationChannel {
   updatedAt: string
 }
 
-export function listChannels(): Promise<NotificationChannel[]> {
-  return request.get('/notification/channels')
+export interface NotificationChannelPage {
+  list: NotificationChannel[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export function listChannels(params?: {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  channelType?: string
+  enabled?: boolean
+}): Promise<NotificationChannelPage> {
+  return request.get('/notification/channels', { params })
+}
+
+/// 便捷方法：一次性取最多 1000 条通道（用于下拉选择场景）
+export async function listAllChannels(): Promise<NotificationChannel[]> {
+  const r = await listChannels({ pageSize: 1000 })
+  return r.list
 }
 
 export function createChannel(data: {
@@ -95,7 +115,11 @@ export interface NotificationRule {
   id: string
   name: string
   eventType: string
+  triggerScene: string
   severityFilter: string[] | null
+  severityOp: string
+  hostFilter: string
+  nameKeyword: string
   channelIds: string[]
   recipientList: string
   enabled: boolean
@@ -104,14 +128,47 @@ export interface NotificationRule {
   updatedAt: string
 }
 
-export function listRules(): Promise<NotificationRule[]> {
-  return request.get('/notification/rules')
+export interface NotificationRulePage {
+  list: NotificationRule[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export function listRules(params?: {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  eventType?: string
+  triggerScene?: string
+  enabled?: boolean
+}): Promise<NotificationRulePage> {
+  return request.get('/notification/rules', { params })
+}
+
+/// 触发场景（系统内置 6 个生命周期，不来自字典）
+export const TRIGGER_SCENES: { value: string; label: string }[] = [
+  { value: 'alert_firing',       label: '告警触发' },
+  { value: 'alert_acknowledged', label: '告警认领' },
+  { value: 'alert_resolved',     label: '告警恢复' },
+  { value: 'ticket_assigned',    label: '工单分派' },
+  { value: 'ticket_closed',      label: '工单关闭' },
+  { value: 'job_failed',         label: '作业失败' },
+]
+
+/// 事件类型从字典 event_type 读取
+export function listEventTypes(): Promise<DictItem[]> {
+  return listDictItems('event_type')
 }
 
 export function createRule(data: {
   name: string
-  eventType: string
+  eventType?: string
+  triggerScene?: string
   severityFilter?: string[]
+  severityOp?: string
+  hostFilter?: string
+  nameKeyword?: string
   channelIds: string[]
   recipientList?: string
   enabled?: boolean
@@ -122,13 +179,28 @@ export function createRule(data: {
 export function updateRule(id: string, data: Partial<{
   name: string
   eventType: string
+  triggerScene: string
   severityFilter: string[]
+  severityOp: string
+  hostFilter: string
+  nameKeyword: string
   channelIds: string[]
   recipientList: string
   enabled: boolean
 }>): Promise<void> {
   return request.put(`/notification/rules/${id}`, data)
 }
+
+/// 级别比较运算符选项（与后端 severity_op 字段一致）
+export const SEVERITY_OPS: { value: string; label: string; desc: string }[] = [
+  { value: 'in',      label: '包含于', desc: '多选包含匹配（默认）' },
+  { value: 'gte',     label: '≥ 大于等于', desc: '告警级别 ≥ 选定级别' },
+  { value: 'gt',      label: '> 大于', desc: '告警级别 > 选定级别' },
+  { value: 'eq',      label: '= 等于', desc: '告警级别 = 选定级别' },
+  { value: 'lte',     label: '≤ 小于等于', desc: '告警级别 ≤ 选定级别' },
+  { value: 'lt',      label: '< 小于', desc: '告警级别 < 选定级别' },
+  { value: 'between', label: '区间', desc: '告警级别在 [min, max] 闭区间内' },
+]
 
 export function deleteRule(id: string): Promise<void> {
   return request.delete(`/notification/rules/${id}`)

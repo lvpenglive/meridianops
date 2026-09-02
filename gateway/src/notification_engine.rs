@@ -247,28 +247,33 @@ pub async fn send_webhook(config_str: &str, title: &str, content: &str, event_ty
 /// 事件分发入口 — 供其他模块调用。
 ///
 /// 参数：
-/// - `event_type`: 事件类型，如 `alert_firing`, `alert_acknowledged`, `alert_resolved`,
-///   `ticket_assigned`, `ticket_closed`, `job_failed` 等
+/// - `event_type`: 事件分类（来自字典 event_type），如 `host`/`software`/`database`/`ticket`/`job` 等
+///   规则 event_type 为空时匹配所有事件分类
+/// - `trigger_scene`: 触发场景，6 个生命周期之一：`alert_firing`/`alert_acknowledged`/`alert_resolved`
+///   /`ticket_assigned`/`ticket_closed`/`job_failed`；规则 trigger_scene 为空时匹配所有场景
 /// - `severity`: 严重程度（可选，用于规则过滤），如 `disaster`, `critical`, `warning`
 /// - `title`: 通知标题
 /// - `content`: 通知内容（支持简单 Markdown）
 /// - `link`: 跳转链接（站内信用）
 /// - `user_ids`: 需要发站内信的用户 ID 列表
+/// - `host`: 可选，告警关联的设备 IP / 主机名，用于规则 host_filter 匹配
 pub async fn dispatch_event(
     state: &Arc<AppState>,
     event_type: &str,
+    trigger_scene: &str,
     severity: Option<&str>,
     title: &str,
     content: &str,
     link: &str,
     user_ids: &[String],
+    host: Option<&str>,
 ) {
-    // 1) 站内信：对指定用户发
+    // 1) 站内信：对指定用户发（站内信用 trigger_scene 作为 type，便于前端按生命周期分类展示）
     for uid in user_ids {
         crate::notification_routes::create_notification(
             &state.db,
             uid,
-            event_type,
+            trigger_scene,
             title,
             content,
             link,
@@ -277,7 +282,7 @@ pub async fn dispatch_event(
     }
 
     // 2) 外部通道：查规则 + 通道
-    let rules = match fetch_matching_rules(&state.db, event_type, severity).await {
+    let rules = match fetch_matching_rules(&state.db, event_type, trigger_scene, severity, title, host).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(target: "notification_engine", "查询通知规则失败: {}", e);
@@ -344,6 +349,7 @@ pub async fn dispatch_event(
                     channel_name: ch.name.clone(),
                     channel_type: ch.channel_type.clone(),
                     event_type: event_type.to_string(),
+                    trigger_scene: Some(trigger_scene.to_string()),
                     severity: severity.map(|s| s.to_string()),
                     recipients: recipients_str,
                     title: title.chars().take(500).collect(),
@@ -403,6 +409,7 @@ pub struct NotificationLogEntry {
     pub channel_name: String,
     pub channel_type: String,
     pub event_type: String,
+    pub trigger_scene: Option<String>,
     pub severity: Option<String>,
     pub recipients: Option<String>,
     pub title: String,
@@ -422,9 +429,9 @@ async fn insert_notification_log(
 ) -> Result<(), String> {
     sqlx::query(
         "INSERT INTO notification_logs \
-         (id, rule_id, rule_name, channel_id, channel_name, channel_type, event_type, severity, \
+         (id, rule_id, rule_name, channel_id, channel_name, channel_type, event_type, trigger_scene, severity, \
           recipients, title, content, link, status, error_msg, response_snippet, duration_ms, triggered_by, sent_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(&entry.id)
     .bind(entry.rule_id.as_deref())
@@ -433,6 +440,7 @@ async fn insert_notification_log(
     .bind(&entry.channel_name)
     .bind(&entry.channel_type)
     .bind(&entry.event_type)
+    .bind(entry.trigger_scene.as_deref())
     .bind(entry.severity.as_deref())
     .bind(entry.recipients.as_deref())
     .bind(&entry.title)
@@ -483,6 +491,7 @@ pub async fn log_manual_send(
             channel_name: channel_name.to_string(),
             channel_type: channel_type.to_string(),
             event_type: event_type.to_string(),
+            trigger_scene: None,
             severity: None,
             recipients: recipients.map(|s| s.to_string()),
             title: title_s,
@@ -520,19 +529,144 @@ struct RuleInfo {
     channels: Vec<ChannelInfo>,
 }
 
+/// 把告警 severity（canonical）映射为 Zabbix 0-5 原始数值。
+/// - 输入 "0".."5" → 直接返回 0..5
+/// - 输入 disaster/critical/warning/info → 映射为 5/4/2/1
+/// - 其他 → None
+fn severity_to_num(s: &str) -> Option<i64> {
+    if let Ok(n) = s.parse::<i64>() {
+        return Some(n.clamp(0, 5));
+    }
+    let v = match s.to_lowercase().as_str() {
+        "disaster" => 5,
+        "critical" => 4,
+        "warning" => 2,
+        "info" => 1,
+        "uncategorized" | "not_classified" => 0,
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 按 severity_op 比较 severity（告警级别）与 severity_filter（规则配置）。
+/// - op = in（默认）：filter 为字符串数组，任一匹配 severity 即命中；空数组 = 匹配所有
+/// - op = gte / gt / lte / lt / eq：filter 为单值（字符串或 JSON 数组首元素），数值比较
+/// - op = between：filter 为数组 [min, max]，闭区间匹配
+/// - filter 解析失败或值为空：视为"不筛选"，命中
+fn severity_match(op: &str, filter_json: &str, severity: &str) -> bool {
+    let filter: serde_json::Value = match serde_json::from_str(filter_json) {
+        Ok(v) => v,
+        Err(_) => return true, // 解析失败 = 不筛选
+    };
+    if filter.is_null() {
+        return true;
+    }
+
+    let op_norm = if op.is_empty() { "in" } else { op };
+
+    match op_norm {
+        "in" => {
+            // filter: ["disaster","critical"]，空数组 = 匹配所有
+            let arr = match filter.as_array() {
+                Some(a) => a,
+                None => return true,
+            };
+            if arr.is_empty() {
+                return true;
+            }
+            arr.iter().any(|v| {
+                v.as_str()
+                    .map(|s| s.eq_ignore_ascii_case(severity))
+                    .unwrap_or(false)
+            })
+        }
+        "gte" | "gt" | "lte" | "lt" | "eq" => {
+            // filter：单值（字符串，如 "critical"）；也兼容 JSON 数组取首元素
+            let filter_str: String = if let Some(arr) = filter.as_array() {
+                arr.first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            } else if let Some(s) = filter.as_str() {
+                s.to_string()
+            } else {
+                return true;
+            };
+            if filter_str.is_empty() {
+                return true;
+            }
+            let sev_n = match severity_to_num(severity) {
+                Some(n) => n,
+                None => return false,
+            };
+            let filter_n = match severity_to_num(&filter_str) {
+                Some(n) => n,
+                None => return false,
+            };
+            match op_norm {
+                "gte" => sev_n >= filter_n,
+                "gt" => sev_n > filter_n,
+                "lte" => sev_n <= filter_n,
+                "lt" => sev_n < filter_n,
+                "eq" => sev_n == filter_n,
+                _ => false,
+            }
+        }
+        "between" => {
+            // filter: ["warning","critical"] 或 ["2","4"]
+            let arr = match filter.as_array() {
+                Some(a) if a.len() >= 2 => a,
+                _ => return true,
+            };
+            let min_str = arr.first().and_then(|v| v.as_str()).unwrap_or("");
+            let max_str = arr.get(1).and_then(|v| v.as_str()).unwrap_or("");
+            if min_str.is_empty() || max_str.is_empty() {
+                return true;
+            }
+            let sev_n = match severity_to_num(severity) {
+                Some(n) => n,
+                None => return false,
+            };
+            let min_n = match severity_to_num(min_str) {
+                Some(n) => n,
+                None => return false,
+            };
+            let max_n = match severity_to_num(max_str) {
+                Some(n) => n,
+                None => return false,
+            };
+            sev_n >= min_n && sev_n <= max_n
+        }
+        _ => true, // 未知 op = 不筛选
+    }
+}
+
 /// 查询匹配的规则 + 关联通道
+///
+/// 匹配维度：
+/// - event_type：规则 event_type 为空（或 NULL/''）时匹配所有事件分类；否则必须相等
+/// - trigger_scene：规则 trigger_scene 为空（或 NULL/''）时匹配所有触发场景；否则必须相等
+/// - severity：规则 severity_filter 为空时匹配所有级别；否则必须包含当前级别
+/// - host_filter / name_keyword：见下
 async fn fetch_matching_rules(
     pool: &sqlx::MySqlPool,
     event_type: &str,
+    trigger_scene: &str,
     severity: Option<&str>,
+    title: &str,
+    host: Option<&str>,
 ) -> Result<Vec<RuleInfo>, String> {
-    // 1) 查启用的规则
+    // 1) 查启用的规则，按 event_type + trigger_scene 双维度过滤
+    //    event_type / trigger_scene 在规则中为空（NULL 或 ''）时表示"匹配所有"
     let rows = sqlx::query(
-        "SELECT id, name, channel_ids, recipient_list, severity_filter \
+        "SELECT id, name, channel_ids, recipient_list, severity_filter, severity_op, host_filter, name_keyword, event_type, trigger_scene \
          FROM notification_rules \
-         WHERE event_type = ? AND enabled = 1",
+         WHERE enabled = 1 \
+           AND (event_type IS NULL OR event_type = '' OR event_type = ?) \
+           AND (trigger_scene IS NULL OR trigger_scene = '' OR trigger_scene = ?)",
     )
     .bind(event_type)
+    .bind(trigger_scene)
     .fetch_all(pool)
     .await
     .map_err(|e| format!("查询通知规则失败: {}", e))?;
@@ -544,14 +678,52 @@ async fn fetch_matching_rules(
         let channel_ids_str: String = row.try_get("channel_ids").unwrap_or_else(|_| "[]".to_string());
         let recipient_list: String = row.try_get("recipient_list").unwrap_or_default();
         let severity_filter_str: String = row.try_get("severity_filter").unwrap_or_else(|_| "null".to_string());
+        let severity_op: String = row.try_get::<Option<String>, _>("severity_op").ok().flatten().unwrap_or_else(|| "in".to_string());
 
-        // 严重程度过滤
+        // 严重程度过滤（按 severity_op 分支）
         if let Some(sev) = severity {
-            let filter: Option<Vec<String>> = serde_json::from_str(&severity_filter_str).unwrap_or(None);
-            if let Some(filter_list) = filter {
-                if !filter_list.is_empty() && !filter_list.iter().any(|s| s.eq_ignore_ascii_case(sev)) {
-                    continue; // 不匹配严重程度，跳过
+            if !severity_match(&severity_op, &severity_filter_str, sev) {
+                continue;
+            }
+        }
+
+        // host_filter 过滤：空值 = 不筛；支持逗号分隔多值 + % 通配符
+        if let Ok(Some(hf)) = row.try_get::<Option<String>, _>("host_filter") {
+            let hf = hf.trim();
+            if !hf.is_empty() {
+                let host_val = host.unwrap_or("");
+                let hit = hf
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .any(|pattern| {
+                        if pattern.contains('%') {
+                            // 简化 LIKE：%foo% → contains；%foo → ends_with；foo% → starts_with
+                            let body = pattern.replace('%', "");
+                            if pattern.starts_with('%') && pattern.ends_with('%') {
+                                host_val.contains(&body)
+                            } else if pattern.starts_with('%') {
+                                host_val.ends_with(&body)
+                            } else if pattern.ends_with('%') {
+                                host_val.starts_with(&body)
+                            } else {
+                                host_val == pattern
+                            }
+                        } else {
+                            host_val == pattern
+                        }
+                    });
+                if !hit {
+                    continue;
                 }
+            }
+        }
+
+        // name_keyword 过滤：title 包含关键字（大小写不敏感）；空值 = 不筛
+        if let Ok(Some(kw)) = row.try_get::<Option<String>, _>("name_keyword") {
+            let kw = kw.trim();
+            if !kw.is_empty() && !title.to_lowercase().contains(&kw.to_lowercase()) {
+                continue;
             }
         }
 

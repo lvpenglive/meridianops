@@ -679,6 +679,54 @@
           </el-descriptions-item>
         </el-descriptions>
 
+        <!-- 关联日志（Phase 3：自动从 ClickHouse 拉取同主机告警前后5分钟 ERROR+ 日志） -->
+        <div class="clue-logs-block">
+          <div class="block-title">
+            <el-icon><Connection /></el-icon>
+            <span>关联日志</span>
+            <span v-if="detail.clueLogs && detail.clueLogs.length" class="block-sub">
+              {{ detail.clueLogs.length }} 条 · 告警前后5分钟同主机 ERROR+ 级别
+            </span>
+            <span v-else class="block-sub">无关联日志数据</span>
+            <el-button
+              v-if="detail.clueLogs && detail.clueLogs.length"
+              :icon="Link"
+              size="small"
+              type="primary"
+              plain
+              @click="openClueInGrafana(detail)"
+            >在 Grafana 查看</el-button>
+          </div>
+          <el-table
+            v-if="detail.clueLogs && detail.clueLogs.length"
+            :data="detail.clueLogs"
+            size="small"
+            stripe
+            max-height="320"
+            style="margin-top: 8px;"
+          >
+            <el-table-column label="时间" prop="timestamp" width="180" />
+            <el-table-column label="级别" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="levelTagType(row.level)" effect="dark">
+                  {{ levelLabel(row.level) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="服务" prop="service" width="140" show-overflow-tooltip />
+            <el-table-column label="消息" prop="message" min-width="300" show-overflow-tooltip />
+          </el-table>
+          <el-alert
+            v-else
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-top: 8px;"
+          >
+            <span>暂无关联日志（ClickHouse 未配置、无匹配数据，或告警无 hostname 信息）</span>
+          </el-alert>
+        </div>
+
         <div class="detail-actions" style="display:flex;gap:8px;flex-wrap:wrap">
           <template v-if="hasPermission('alert:update') && detail.status !== 'resolved'">
             <el-button v-if="detail.status === 'firing'" type="primary" :icon="Check" @click="ackEvent(detail, true)">认领告警</el-button>
@@ -849,7 +897,7 @@ import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import {
   Bell, Warning, CircleClose, Plus, Search, Refresh, Check, CircleCheck,
   EditPen, Delete, Connection, Key, DataLine, Monitor, CopyDocument, RefreshRight, Lock,
-  Open, View,
+  Open, View, Link,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../../stores/user'
 import {
@@ -860,6 +908,7 @@ import {
   type AlertEvent, type AlertStats, type AlertSilence, type IngressOverview,
   type AlertIngressConfig,
 } from '../../api/alert'
+import { levelTagType, levelLabel, getGrafanaLink } from '../../api/logs'
 import { listCiInstances } from '../../api/cmdb'
 import type { CiInstance } from '../../api/types'
 import {
@@ -1298,6 +1347,39 @@ async function suppressEvent(row: AlertEvent | null) {
 function openInEventide(row: { fingerprint?: string | null; ingressChannel?: string | null }) {
   const url = eventideAlertUrl(row as AlertEvent)
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+// ============ 关联日志跳转 Grafana ============
+async function openClueInGrafana(row: AlertEvent) {
+  try {
+    const labels = (row.labels ?? {}) as Record<string, unknown>
+    // 优先用 labels.hostname / alertIp，否则退到 labels.instance / ip
+    const host =
+      (labels.hostname as string) ||
+      (labels.alertIp as string) ||
+      (labels.ip as string) ||
+      (labels.instance as string) ||
+      ''
+    const firedAt = row.firedAt || row.firstFiredAt || ''
+    const params: Parameters<typeof getGrafanaLink>[0] = {
+      level: 'error',
+    }
+    if (host) params.hostname = host
+    if (firedAt) {
+      // 时间窗口前后 5 分钟
+      const t = new Date(firedAt)
+      if (!isNaN(t.getTime())) {
+        const from = new Date(t.getTime() - 5 * 60 * 1000)
+        const to = new Date(t.getTime() + 5 * 60 * 1000)
+        params.startTime = from.toISOString()
+        params.endTime = to.toISOString()
+      }
+    }
+    const r = await getGrafanaLink(params)
+    window.open(r.url, '_blank', 'noopener,noreferrer')
+  } catch (e: any) {
+    ElMessage.error(e?.message ?? '生成 Grafana 链接失败')
+  }
 }
 
 // ============ 备注 ============
@@ -1850,6 +1932,33 @@ onUnmounted(() => {
 
 .detail-body { padding: 0 8px; }
 .msg-block { white-space: pre-wrap; word-break: break-word; color: #606266; }
+
+/* 关联日志区块 */
+.clue-logs-block {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  background: #fafafa;
+}
+.clue-logs-block .block-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+}
+.clue-logs-block .block-title .el-icon {
+  color: #409eff;
+}
+.clue-logs-block .block-sub {
+  font-weight: normal;
+  font-size: 12px;
+  color: #909399;
+  margin-left: 8px;
+  flex: 1;
+}
 .labels-block { display: flex; flex-wrap: wrap; gap: 6px; }
 .label-tag { font-size: 12px; }
 .asset-link { color: #409eff; text-decoration: none; }

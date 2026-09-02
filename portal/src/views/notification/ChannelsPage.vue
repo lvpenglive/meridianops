@@ -21,10 +21,48 @@
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <span>通道列表（{{ list.length }}）</span>
+          <span>通道列表（{{ total }}）</span>
           <el-button :icon="Refresh" size="small" @click="fetchList">刷新</el-button>
         </div>
       </template>
+
+      <!-- 筛选栏 -->
+      <div class="filter-bar">
+        <el-input
+          v-model="filters.keyword"
+          placeholder="通道名称关键字"
+          clearable
+          size="default"
+          style="width: 220px;"
+          @keyup.enter="onSearch"
+          @clear="onSearch"
+        />
+        <el-select
+          v-model="filters.channelType"
+          placeholder="全部类型"
+          clearable
+          size="default"
+          style="width: 140px;"
+          @change="onSearch"
+        >
+          <el-option label="邮件" value="email" />
+          <el-option label="飞书" value="feishu" />
+          <el-option label="Webhook" value="webhook" />
+        </el-select>
+        <el-select
+          v-model="filters.enabled"
+          placeholder="全部状态"
+          clearable
+          size="default"
+          style="width: 140px;"
+          @change="onSearch"
+        >
+          <el-option label="启用" :value="true" />
+          <el-option label="禁用" :value="false" />
+        </el-select>
+        <el-button type="primary" size="default" :icon="Search" @click="onSearch">查询</el-button>
+        <el-button size="default" @click="onReset">重置</el-button>
+      </div>
 
       <el-table :data="list" v-loading="loading" stripe size="default">
         <el-table-column prop="name" label="通道名称" min-width="160" show-overflow-tooltip />
@@ -71,6 +109,20 @@
       </el-table>
       <div v-if="!loading && list.length === 0" class="empty-tip">
         <el-empty description="暂无通知通道" />
+      </div>
+
+      <!-- 分页 -->
+      <div class="pagination-wrap">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :total="total"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          @size-change="onSizeChange"
+          @current-change="fetchList"
+        />
       </div>
     </el-card>
 
@@ -157,7 +209,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Refresh, Message } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search, Message } from '@element-plus/icons-vue'
 import {
   listChannels,
   createChannel,
@@ -173,17 +225,59 @@ const hasPermission = (code: string) => userStore.hasPermission(code)
 
 const loading = ref(false)
 const list = ref<NotificationChannel[]>([])
+const total = ref(0)
 const testingId = ref<string | null>(null)
+
+// 筛选 + 分页
+const filters = reactive({
+  keyword: '',
+  channelType: '' as '' | 'email' | 'feishu' | 'webhook',
+  enabled: null as boolean | null,
+})
+const pagination = reactive({
+  page: 1,
+  pageSize: 20,
+})
+
+function buildParams() {
+  const params: Record<string, any> = {
+    page: pagination.page,
+    pageSize: pagination.pageSize,
+  }
+  if (filters.keyword.trim()) params.keyword = filters.keyword.trim()
+  if (filters.channelType) params.channelType = filters.channelType
+  if (filters.enabled !== null) params.enabled = filters.enabled
+  return params
+}
 
 async function fetchList() {
   loading.value = true
   try {
-    list.value = await listChannels()
+    const res = await listChannels(buildParams())
+    list.value = res.list
+    total.value = res.total
   } catch (e: any) {
     ElMessage.error(e?.message || '加载通道失败')
   } finally {
     loading.value = false
   }
+}
+
+function onSearch() {
+  pagination.page = 1
+  fetchList()
+}
+function onReset() {
+  filters.keyword = ''
+  filters.channelType = ''
+  filters.enabled = null
+  pagination.page = 1
+  fetchList()
+}
+function onSizeChange(size: number) {
+  pagination.pageSize = size
+  pagination.page = 1
+  fetchList()
 }
 
 // ---- 通道类型映射 ----
@@ -422,4 +516,17 @@ onMounted(() => {
 }
 
 .empty-tip { padding: 20px 0; }
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 0 0;
+}
 </style>

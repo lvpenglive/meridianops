@@ -263,7 +263,7 @@ async fn list_events(
 
     // 列表查询：LEFT JOIN ci_instances 获取资产责任人(owner_id → users.username)
     let list_sql = format!(
-        "SELECT e.id, e.fingerprint, e.external_id, e.source, e.ingress_channel, e.ingress_actor, e.severity, e.status, e.title, e.message, e.labels, e.ci_id, e.ci_name_snapshot, \
+        "SELECT e.id, e.fingerprint, e.external_id, e.source, e.ingress_channel, e.ingress_actor, e.severity, e.status, e.title, e.message, e.labels, e.clue_logs, e.ci_id, e.ci_name_snapshot, \
          e.fire_count, e.first_fired_at, e.fired_at, e.ends_at, e.acknowledged_by, e.acknowledged_at, e.resolved_by, e.resolved_at, \
          e.resolution_note, e.created_at, e.updated_at, \
          u.username AS contact_name \
@@ -296,6 +296,10 @@ async fn list_events(
                 .try_get::<Option<serde_json::Value>, _>("labels")
                 .unwrap_or(None)
                 .unwrap_or(serde_json::Value::Null);
+            let clue_logs_val: serde_json::Value = r
+                .try_get::<Option<serde_json::Value>, _>("clue_logs")
+                .unwrap_or(None)
+                .unwrap_or(serde_json::Value::Null);
             serde_json::json!({
                 "id": r.try_get::<String, _>("id").unwrap_or_default(),
                 "fingerprint": r.try_get::<String, _>("fingerprint").unwrap_or_default(),
@@ -308,6 +312,7 @@ async fn list_events(
                 "title": r.try_get::<String, _>("title").unwrap_or_default(),
                 "message": r.try_get::<Option<String>, _>("message").unwrap_or(None),
                 "labels": labels_val,
+                "clueLogs": clue_logs_val,
                 "ciId": r.try_get::<Option<String>, _>("ci_id").unwrap_or(None),
                 "ciName": r.try_get::<Option<String>, _>("ci_name_snapshot").unwrap_or(None),
                 "fireCount": r.try_get::<i64, _>("fire_count").unwrap_or(0),
@@ -347,7 +352,7 @@ async fn get_event(
     crate::license_routes::require_active_license(&state.db).await?;
 
     let row = sqlx::query(
-        "SELECT id, fingerprint, external_id, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
+        "SELECT id, fingerprint, external_id, source, ingress_channel, ingress_actor, severity, status, title, message, labels, clue_logs, ci_id, ci_name_snapshot, \
          fire_count, first_fired_at, fired_at, ends_at, acknowledged_by, acknowledged_at, resolved_by, resolved_at, \
          resolution_note, created_at, updated_at \
          FROM alert_events WHERE id = ?",
@@ -360,6 +365,10 @@ async fn get_event(
         Some(r) => {
             let labels_val: serde_json::Value = r
                 .try_get::<Option<serde_json::Value>, _>("labels")
+                .unwrap_or(None)
+                .unwrap_or(serde_json::Value::Null);
+            let clue_logs_val: serde_json::Value = r
+                .try_get::<Option<serde_json::Value>, _>("clue_logs")
                 .unwrap_or(None)
                 .unwrap_or(serde_json::Value::Null);
             Ok(Json(serde_json::json!({
@@ -376,6 +385,7 @@ async fn get_event(
                     "title": r.try_get::<String, _>("title").unwrap_or_default(),
                     "message": r.try_get::<Option<String>, _>("message").unwrap_or(None),
                     "labels": labels_val,
+                    "clueLogs": clue_logs_val,
                     "ciId": r.try_get::<Option<String>, _>("ci_id").unwrap_or(None),
                     "ciName": r.try_get::<Option<String>, _>("ci_name_snapshot").unwrap_or(None),
                     "fireCount": r.try_get::<i64, _>("fire_count").unwrap_or(0),
@@ -549,31 +559,36 @@ async fn create_event(
     ).await;
 
     // 通知引擎：人工上报告警触发事件（异步）
-    {
-        let id_clone = id.clone();
-        let title_clone = req.title.clone();
-        let sev_canonical = severity_canonical.clone();
-        let msg_clone = req.message.clone();
-        let actor_clone = auth.0.sub.clone();
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            let sev = severity_for_rule_match(&sev_canonical);
-            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
-            let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
-                Some(m) => format!("人工上报告警「{}」由 {} 录入\n严重程度：{}\n{}",
-                    title_clone, actor_clone, sev, m),
-                None => format!("人工上报告警「{}」由 {} 录入\n严重程度：{}",
-                    title_clone, actor_clone, sev),
-            };
-            crate::notification_engine::dispatch_event(
-                &state_clone,
-                "alert_firing",
-                Some(&sev),
-                &format!("新告警: {}", title_clone),
-                &body,
-                &format!("/alerts?id={}", id_clone),
-                &user_ids,
-            ).await;
+        {
+            let id_clone = id.clone();
+            let title_clone = req.title.clone();
+            let sev_canonical = severity_canonical.clone();
+            let msg_clone = req.message.clone();
+            let actor_clone = auth.0.sub.clone();
+            let state_clone = state.clone();
+            let (_src, _alertname, ip_from_labels, hostname_from_labels) = extract_label_fields(req.labels.as_ref().unwrap_or(&serde_json::Value::Null));
+            let host = ip_from_labels.or(hostname_from_labels);
+            let event_type = infer_event_type(req.labels.as_ref().unwrap_or(&serde_json::Value::Null)).to_string();
+            tokio::spawn(async move {
+                let sev = severity_for_rule_match(&sev_canonical);
+                let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
+                    Some(m) => format!("人工上报告警「{}」由 {} 录入\n严重程度：{}\n{}",
+                        title_clone, actor_clone, sev, m),
+                    None => format!("人工上报告警「{}」由 {} 录入\n严重程度：{}",
+                        title_clone, actor_clone, sev),
+                };
+                crate::notification_engine::dispatch_event(
+                    &state_clone,
+                    &event_type,
+                    "alert_firing",
+                    Some(&sev),
+                    &format!("新告警: {}", title_clone),
+                    &body,
+                    &format!("/alerts?id={}", id_clone),
+                    &user_ids,
+                    host.as_deref(),
+                ).await;
         });
     }
 
@@ -636,34 +651,46 @@ async fn acknowledge_event(
     }
 
     // 通知引擎：触发告警确认事件（异步，不阻塞响应）
-    {
-        let id_clone = id.clone();
-        let actor_clone = actor.clone();
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-                "SELECT title, severity FROM alert_events WHERE id = ?"
-            )
-            .bind(&id_clone)
-            .fetch_optional(&state_clone.db)
-            .await
-            .ok()
-            .flatten();
-            let (title, severity_canonical) = match row {
-                Some((t, s)) => (t.unwrap_or_default(), s.unwrap_or_default()),
-                None => (String::new(), String::new()),
-            };
-            let sev = severity_for_rule_match(&severity_canonical);
-            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
-            crate::notification_engine::dispatch_event(
-                &state_clone,
-                "alert_acknowledged",
-                Some(&sev),
-                &format!("告警已认领: {}", title),
-                &format!("告警「{}」已被 {} 认领", title, actor_clone),
-                &format!("/alerts?id={}", id_clone),
-                &user_ids,
-            ).await;
+        {
+            let id_clone = id.clone();
+            let actor_clone = actor.clone();
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+                    "SELECT title, severity, labels FROM alert_events WHERE id = ?"
+                )
+                .bind(&id_clone)
+                .fetch_optional(&state_clone.db)
+                .await
+                .ok()
+                .flatten();
+                let (title, severity_canonical, labels_str) = match row {
+                    Some((t, s, l)) => (t.unwrap_or_default(), s.unwrap_or_default(), l),
+                    None => (String::new(), String::new(), None),
+                };
+                let host = labels_str
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .map(|v| extract_label_fields(&v))
+                    .and_then(|(_, _, ip, hn)| ip.or(hn));
+                let event_type = labels_str
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .map(|v| infer_event_type(&v).to_string())
+                    .unwrap_or_else(|| "host".to_string());
+                let sev = severity_for_rule_match(&severity_canonical);
+                let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                crate::notification_engine::dispatch_event(
+                    &state_clone,
+                    &event_type,
+                    "alert_acknowledged",
+                    Some(&sev),
+                    &format!("告警已认领: {}", title),
+                    &format!("告警「{}」已被 {} 认领", title, actor_clone),
+                    &format!("/alerts?id={}", id_clone),
+                    &user_ids,
+                    host.as_deref(),
+                ).await;
         });
     }
 
@@ -729,39 +756,51 @@ async fn resolve_event(
     }
 
     // 通知引擎：触发告警解决事件（异步，不阻塞响应）
-    {
-        let id_clone = id.clone();
-        let actor_clone = actor.clone();
-        let note_clone = req.note.clone();
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-                "SELECT title, severity FROM alert_events WHERE id = ?"
-            )
-            .bind(&id_clone)
-            .fetch_optional(&state_clone.db)
-            .await
-            .ok()
-            .flatten();
-            let (title, severity_canonical) = match row {
-                Some((t, s)) => (t.unwrap_or_default(), s.unwrap_or_default()),
-                None => (String::new(), String::new()),
-            };
-            let sev = severity_for_rule_match(&severity_canonical);
-            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
-            let content = match note_clone.as_ref().filter(|n| !n.is_empty()) {
-                Some(n) => format!("告警「{}」已被 {} 解决\n解决说明：{}", title, actor_clone, n),
-                None => format!("告警「{}」已被 {} 解决", title, actor_clone),
-            };
-            crate::notification_engine::dispatch_event(
-                &state_clone,
-                "alert_resolved",
-                Some(&sev),
-                &format!("告警已解决: {}", title),
-                &content,
-                &format!("/alerts?id={}", id_clone),
-                &user_ids,
-            ).await;
+        {
+            let id_clone = id.clone();
+            let actor_clone = actor.clone();
+            let note_clone = req.note.clone();
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+                    "SELECT title, severity, labels FROM alert_events WHERE id = ?"
+                )
+                .bind(&id_clone)
+                .fetch_optional(&state_clone.db)
+                .await
+                .ok()
+                .flatten();
+                let (title, severity_canonical, labels_str) = match row {
+                    Some((t, s, l)) => (t.unwrap_or_default(), s.unwrap_or_default(), l),
+                    None => (String::new(), String::new(), None),
+                };
+                let host = labels_str
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .map(|v| extract_label_fields(&v))
+                    .and_then(|(_, _, ip, hn)| ip.or(hn));
+                let event_type = labels_str
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .map(|v| infer_event_type(&v).to_string())
+                    .unwrap_or_else(|| "host".to_string());
+                let sev = severity_for_rule_match(&severity_canonical);
+                let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                let content = match note_clone.as_ref().filter(|n| !n.is_empty()) {
+                    Some(n) => format!("告警「{}」已被 {} 解决\n解决说明：{}", title, actor_clone, n),
+                    None => format!("告警「{}」已被 {} 解决", title, actor_clone),
+                };
+                crate::notification_engine::dispatch_event(
+                    &state_clone,
+                    &event_type,
+                    "alert_resolved",
+                    Some(&sev),
+                    &format!("告警已解决: {}", title),
+                    &content,
+                    &format!("/alerts?id={}", id_clone),
+                    &user_ids,
+                    host.as_deref(),
+                ).await;
         });
     }
 
@@ -1000,43 +1039,55 @@ async fn batch_action(
         let note_clone = req.note.clone();
         let state_clone = state.clone();
         tokio::spawn(async move {
-            let (event_type, verb) = match action_clone.as_str() {
+            let (trigger_scene, verb) = match action_clone.as_str() {
                 "acknowledge" => ("alert_acknowledged", "认领"),
                 "resolve" => ("alert_resolved", "解决"),
                 _ => return,
             };
             for aid in ids_clone.iter().take(500) {
-                let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-                    "SELECT title, severity FROM alert_events WHERE id = ?"
-                )
-                .bind(aid)
-                .fetch_optional(&state_clone.db)
-                .await
-                .ok()
-                .flatten();
-                let (title, sev_raw) = match row {
-                    Some((t, s)) => (t.unwrap_or_default(), s.unwrap_or_default()),
-                    None => continue,
-                };
-                let sev = severity_for_rule_match(&sev_raw);
-                let user_ids = get_alert_owner(&state_clone.db, aid).await;
-                let body = if action_clone == "resolve" {
-                    match note_clone.as_ref().filter(|n| !n.is_empty()) {
-                        Some(n) => format!("告警「{}」已被 {} 批量解决\n解决说明：{}", title, actor_clone, n),
-                        None => format!("告警「{}」已被 {} 批量解决", title, actor_clone),
-                    }
-                } else {
-                    format!("告警「{}」已被 {} 批量认领", title, actor_clone)
-                };
-                crate::notification_engine::dispatch_event(
-                    &state_clone,
-                    event_type,
-                    Some(&sev),
-                    &format!("告警批量{}: {}", verb, title),
-                    &body,
-                    &format!("/alerts?id={}", aid),
-                    &user_ids,
-                ).await;
+                    let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+                        "SELECT title, severity, labels FROM alert_events WHERE id = ?"
+                    )
+                    .bind(aid)
+                    .fetch_optional(&state_clone.db)
+                    .await
+                    .ok()
+                    .flatten();
+                    let (title, sev_raw, labels_str) = match row {
+                        Some((t, s, l)) => (t.unwrap_or_default(), s.unwrap_or_default(), l),
+                        None => continue,
+                    };
+                    let host = labels_str
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .map(|v| extract_label_fields(&v))
+                        .and_then(|(_, _, ip, hn)| ip.or(hn));
+                    let event_type = labels_str
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .map(|v| infer_event_type(&v).to_string())
+                        .unwrap_or_else(|| "host".to_string());
+                    let sev = severity_for_rule_match(&sev_raw);
+                    let user_ids = get_alert_owner(&state_clone.db, aid).await;
+                    let body = if action_clone == "resolve" {
+                        match note_clone.as_ref().filter(|n| !n.is_empty()) {
+                            Some(n) => format!("告警「{}」已被 {} 批量解决\n解决说明：{}", title, actor_clone, n),
+                            None => format!("告警「{}」已被 {} 批量解决", title, actor_clone),
+                        }
+                    } else {
+                        format!("告警「{}」已被 {} 批量认领", title, actor_clone)
+                    };
+                    crate::notification_engine::dispatch_event(
+                        &state_clone,
+                        &event_type,
+                        trigger_scene,
+                        Some(&sev),
+                        &format!("告警批量{}: {}", verb, title),
+                        &body,
+                        &format!("/alerts?id={}", aid),
+                        &user_ids,
+                        host.as_deref(),
+                    ).await;
             }
         });
     }
@@ -1644,6 +1695,7 @@ async fn ingress_eventide(
         _ => (None, hostname.clone()),
     };
 
+    let labels_for_event_type = labels.clone();
     let labels_str = json_to_str(&Some(labels));
     let new_id = payload.alert_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
 
@@ -1674,28 +1726,32 @@ async fn ingress_eventide(
             .await?;
 
             // 通知引擎：触发告警解决事件（异步）
-            {
-                let id_clone = existing_id.clone();
-                let sev_canonical = severity_canonical.clone();
-                let title_clone = title.clone();
-                let msg_clone = message.clone();
-                let state_clone = state.clone();
-                tokio::spawn(async move {
-                    let sev = severity_for_rule_match(&sev_canonical);
-                    let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
-                    let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
-                        Some(m) => format!("告警「{}」已由 Eventide 推送解决\n{}", title_clone, m),
-                        None => format!("告警「{}」已由 Eventide 推送解决", title_clone),
-                    };
-                    crate::notification_engine::dispatch_event(
-                        &state_clone,
-                        "alert_resolved",
-                        Some(&sev),
-                        &format!("告警已解决: {}", title_clone),
-                        &body,
-                        &format!("/alerts?id={}", id_clone),
-                        &user_ids,
-                    ).await;
+                {
+                    let id_clone = existing_id.clone();
+                    let sev_canonical = severity_canonical.clone();
+                    let title_clone = title.clone();
+                    let msg_clone = message.clone();
+                    let host = alert_ip.clone().or(hostname.clone());
+                    let event_type = infer_event_type(&labels_for_event_type).to_string();
+                    let state_clone = state.clone();
+                    tokio::spawn(async move {
+                        let sev = severity_for_rule_match(&sev_canonical);
+                        let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                        let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
+                            Some(m) => format!("告警「{}」已由 Eventide 推送解决\n{}", title_clone, m),
+                            None => format!("告警「{}」已由 Eventide 推送解决", title_clone),
+                        };
+                        crate::notification_engine::dispatch_event(
+                            &state_clone,
+                            &event_type,
+                            "alert_resolved",
+                            Some(&sev),
+                            &format!("告警已解决: {}", title_clone),
+                            &body,
+                            &format!("/alerts?id={}", id_clone),
+                            &user_ids,
+                            host.as_deref(),
+                        ).await;
                 });
             }
 
@@ -1729,25 +1785,36 @@ async fn ingress_eventide(
             .await?;
 
             // 通知引擎：触发告警确认事件（异步）
-            {
-                let id_clone = eid.clone();
-                let sev_canonical = severity_canonical.clone();
-                let title_clone = title.clone();
-                let state_clone = state.clone();
-                tokio::spawn(async move {
-                    let sev = severity_for_rule_match(&sev_canonical);
-                    let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
-                    crate::notification_engine::dispatch_event(
-                        &state_clone,
-                        "alert_acknowledged",
-                        Some(&sev),
-                        &format!("告警已认领: {}", title_clone),
-                        &format!("告警「{}」已在 Eventide 被认领", title_clone),
-                        &format!("/alerts?id={}", id_clone),
-                        &user_ids,
-                    ).await;
+                {
+                    let id_clone = eid.clone();
+                    let sev_canonical = severity_canonical.clone();
+                    let title_clone = title.clone();
+                    let host = alert_ip.clone().or(hostname.clone());
+                    let event_type = infer_event_type(&labels_for_event_type).to_string();
+                    let state_clone = state.clone();
+                    tokio::spawn(async move {
+                        let sev = severity_for_rule_match(&sev_canonical);
+                        let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                        crate::notification_engine::dispatch_event(
+                            &state_clone,
+                            &event_type,
+                            "alert_acknowledged",
+                            Some(&sev),
+                            &format!("告警已认领: {}", title_clone),
+                            &format!("告警「{}」已在 Eventide 被认领", title_clone),
+                            &format!("/alerts?id={}", id_clone),
+                            &user_ids,
+                            host.as_deref(),
+                        ).await;
                 });
             }
+            // Phase 3: 异步获取告警关联日志写入 clue_logs
+            spawn_clue_logs_fetch(
+                &state,
+                &eid,
+                alert_ip.clone().or(hostname.clone()),
+                starts_at.clone(),
+            );
         }
     }
 
@@ -1838,38 +1905,50 @@ async fn ingress_eventide(
     ).await;
 
     // 通知引擎：告警触发事件（合并/新建均触发，便于重复触发也能分发到规则）
-    {
-        let state_clone = state.clone();
-        let title_clone = title.clone();
-        let sev_canonical = severity_canonical.clone();
-        let id_clone = id.clone();
-        let msg_clone = message.clone();
-        let merged_clone = was_merged;
-        tokio::spawn(async move {
-            let sev = severity_for_rule_match(&sev_canonical);
-            let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
-            let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
-                Some(m) => format!("告警「{}」已触发{}\n严重程度：{}\n{}",
-                    title_clone,
-                    if merged_clone { "（重复触发）" } else { "" },
-                    sev,
-                    m),
-                None => format!("告警「{}」已触发{}\n严重程度：{}",
-                    title_clone,
-                    if merged_clone { "（重复触发）" } else { "" },
-                    sev),
-            };
-            crate::notification_engine::dispatch_event(
-                &state_clone,
-                "alert_firing",
-                Some(&sev),
-                &format!("新告警: {}", title_clone),
-                &body,
-                &format!("/alerts?id={}", id_clone),
-                &user_ids,
-            ).await;
+        {
+            let state_clone = state.clone();
+            let title_clone = title.clone();
+            let sev_canonical = severity_canonical.clone();
+            let id_clone = id.clone();
+            let msg_clone = message.clone();
+            let merged_clone = was_merged;
+            let host = alert_ip.clone().or(hostname.clone());
+            let event_type = infer_event_type(&labels_for_event_type).to_string();
+            tokio::spawn(async move {
+                let sev = severity_for_rule_match(&sev_canonical);
+                let user_ids = get_alert_owner(&state_clone.db, &id_clone).await;
+                let body = match msg_clone.as_ref().filter(|m| !m.is_empty()) {
+                    Some(m) => format!("告警「{}」已触发{}\n严重程度：{}\n{}",
+                        title_clone,
+                        if merged_clone { "（重复触发）" } else { "" },
+                        sev,
+                        m),
+                    None => format!("告警「{}」已触发{}\n严重程度：{}",
+                        title_clone,
+                        if merged_clone { "（重复触发）" } else { "" },
+                        sev),
+                };
+                crate::notification_engine::dispatch_event(
+                    &state_clone,
+                    &event_type,
+                    "alert_firing",
+                    Some(&sev),
+                    &format!("新告警: {}", title_clone),
+                    &body,
+                    &format!("/alerts?id={}", id_clone),
+                    &user_ids,
+                    host.as_deref(),
+                ).await;
         });
     }
+
+    // Phase 3: 异步获取告警关联日志写入 clue_logs
+    spawn_clue_logs_fetch(
+        &state,
+        &id,
+        alert_ip.clone().or(hostname.clone()),
+        starts_at.clone(),
+    );
 
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -1912,6 +1991,68 @@ fn extract_summary(annotations: &serde_json::Value) -> Option<String> {
     get_str("summary").or_else(|| get_str("description")).or_else(|| get_str("hint"))
 }
 
+/// 从告警 labels 推断事件类型（用于通知规则匹配）。
+/// 优先级：labels.eventType / labels.category / labels.objectType > source 关键字 > 默认 host
+pub fn infer_event_type(labels: &serde_json::Value) -> &'static str {
+    let s = |key: &str| labels.get(key).and_then(|v| v.as_str());
+    if let Some(v) = s("eventType").or_else(|| s("category")).or_else(|| s("objectType")) {
+        // 字典里预置了 host/software/database/network/middleware/storage/security/ticket/job
+        let v_lower = v.to_lowercase();
+        let match_one = |k: &str, dict_vals: &[&str]| -> bool {
+            dict_vals.iter().any(|d| k == *d)
+        };
+        if match_one(&v_lower, &["host","software","database","network","middleware","storage","security","ticket","job"]) {
+            // 直接返回字典 value（保持原样）
+            return match v_lower.as_str() {
+                "host" => "host",
+                "software" => "software",
+                "database" => "database",
+                "network" => "network",
+                "middleware" => "middleware",
+                "storage" => "storage",
+                "security" => "security",
+                "ticket" => "ticket",
+                "job" => "job",
+                _ => "host",
+            };
+        }
+        // 中文标签归一化
+        return match v_lower.as_str() {
+            "主机" | "host" | "server" | "服务器" => "host",
+            "软件" | "software" | "application" | "应用" => "software",
+            "数据库" | "database" | "db" | "mysql" | "postgres" | "redis" | "oracle" => "database",
+            "网络" | "network" | "switch" | "router" | "交换机" | "路由器" => "network",
+            "中间件" | "middleware" | "kafka" | "tomcat" | "weblogic" | "mq" => "middleware",
+            "存储" | "storage" => "storage",
+            "安全" | "security" => "security",
+            _ => "host",
+        };
+    }
+    // 通过 alertname / source 关键字推断
+    let text = format!(
+        "{} {} {}",
+        s("alertname").unwrap_or_default().to_lowercase(),
+        s("source").unwrap_or_default().to_lowercase(),
+        s("hostname").unwrap_or_default().to_lowercase(),
+    );
+    if text.contains("mysql") || text.contains("postgres") || text.contains("oracle") || text.contains("redis") || text.contains("database") || text.contains("数据库") {
+        return "database";
+    }
+    if text.contains("kafka") || text.contains("tomcat") || text.contains("weblogic") || text.contains("middleware") || text.contains("中间件") || text.contains("mq") {
+        return "middleware";
+    }
+    if text.contains("switch") || text.contains("router") || text.contains("network") || text.contains("网络") || text.contains("交换机") {
+        return "network";
+    }
+    if text.contains("storage") || text.contains("存储") || text.contains("disk") || text.contains("磁盘") {
+        return "storage";
+    }
+    if text.contains("security") || text.contains("安全") || text.contains("intrusion") {
+        return "security";
+    }
+    "host"
+}
+
 /// 告警级别：与 Zabbix 对齐为 0-5 六级数字。
 /// 0=未分类(最低) 1=信息(information) 2=警告(warning) 3=一般(average) 4=重要(high) 5=灾难(disaster/最高)
 fn normalize_level_canonical(s: Option<&str>) -> String {
@@ -1948,11 +2089,15 @@ fn normalize_severity(s: Option<&str>) -> String {
 /// 把 canonical 级别的 Zabbix 0-5 数字映射为通知规则可读的枚举字符串。
 /// 规则 severity_filter 前端预设：disaster(5) / critical(4) / warning(2,3) / info(0,1)。
 fn severity_for_rule_match(canonical: &str) -> String {
+    // 直接使用 Zabbix 0-5 原始数字字符串作为级别，前端展示为 1-5 级。
+    // severity_to_num 同时兼容历史值 disaster/critical/warning/info。
     match canonical {
-        "5" => "disaster".to_string(),
-        "4" => "critical".to_string(),
-        "3" | "2" => "warning".to_string(),
-        "1" | "0" => "info".to_string(),
+        "0" | "1" | "2" | "3" | "4" | "5" => canonical.to_string(),
+        // 历史值归一化为数字
+        "disaster" => "5".to_string(),
+        "critical" => "4".to_string(),
+        "warning"  => "2".to_string(),
+        "info"     => "1".to_string(),
         s => s.to_string(),
     }
 }
@@ -2295,4 +2440,68 @@ async fn pull_from_eventide(
             "errors": errors,
         }
     })))
+}
+
+// ============================================================
+// 告警-日志自动关联（Phase 3）
+// ============================================================
+
+/// 异步获取告警关联日志并写入 alert_events.clue_logs。
+///
+/// - host: 告警归属主机名/IP（来自 alert_ip 或 hostname label）
+/// - fired_at: 告警触发时间（RFC3339 或 'YYYY-MM-DD HH:MM:SS'）
+///
+/// 查询 ClickHouse 同主机前后 5 分钟内 error/critical/fatal 级别日志，
+/// 取前 50 条作为 JSON 数组写入 alert_events.clue_logs。
+///
+/// ClickHouse 不可达或无数据时静默忽略，不阻断告警链路。
+pub(crate) fn spawn_clue_logs_fetch(
+    state: &Arc<AppState>,
+    alert_id: &str,
+    host: Option<String>,
+    fired_at: String,
+) {
+    let Some(host) = host else {
+        return;
+    };
+    if host.trim().is_empty() || fired_at.trim().is_empty() {
+        return;
+    }
+    let state_clone = state.clone();
+    let alert_id = alert_id.to_string();
+    tokio::spawn(async move {
+        let logs = crate::log_routes::fetch_clue_logs(&state_clone, &host, &fired_at, 5, 50).await;
+        if logs.is_empty() {
+            // ClickHouse 不可达或无数据：不覆盖已有数据，避免清空
+            return;
+        }
+        let json_str = match serde_json::to_string(&logs) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(target: "clue_logs", "serialize clue logs failed (alert_id={}): {}", alert_id, e);
+                return;
+            }
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let res = sqlx::query(
+            "UPDATE alert_events SET clue_logs = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&json_str)
+        .bind(&now)
+        .bind(&alert_id)
+        .execute(&state_clone.db)
+        .await;
+        match res {
+            Ok(_) => {
+                tracing::info!(
+                    target: "clue_logs",
+                    "alert {} associated with {} clue logs (host={})",
+                    alert_id, logs.len(), host
+                );
+            }
+            Err(e) => {
+                tracing::warn!(target: "clue_logs", "update clue_logs failed (alert_id={}): {}", alert_id, e);
+            }
+        }
+    });
 }

@@ -371,19 +371,65 @@ struct CreateChannelReq {
     enabled: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct ListChannelsQuery {
+    #[serde(default = "default_page")]
+    page: u32,
+    #[serde(default = "default_page_size")]
+    page_size: u32,
+    keyword: Option<String>,           // 名称模糊匹配
+    channel_type: Option<String>,      // email / feishu / webhook
+    enabled: Option<bool>,             // 启用 / 禁用
+}
+
 async fn list_channels(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
+    Query(q): Query<ListChannelsQuery>,
 ) -> Result<Json<Value>, AppError> {
     auth::require_permission(&auth, "notification:read")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
-    let rows = sqlx::query(
+    let page = q.page.max(1) as i64;
+    let page_size = q.page_size.clamp(1, 500) as i64;
+    let offset = (page - 1) * page_size;
+
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
         "SELECT id, name, channel_type, config_json, enabled, created_by, created_at, updated_at \
-         FROM notification_channels ORDER BY created_at DESC",
-    )
-    .fetch_all(&state.db)
-    .await?;
+         FROM notification_channels WHERE 1=1 "
+    );
+    let mut cqb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT COUNT(*) AS c FROM notification_channels WHERE 1=1 "
+    );
+
+    if let Some(kw) = &q.keyword {
+        if !kw.is_empty() {
+            let like = format!("%{}%", kw);
+            qb.push(" AND name LIKE "); qb.push_bind(like.clone());
+            cqb.push(" AND name LIKE "); cqb.push_bind(like);
+        }
+    }
+    if let Some(v) = &q.channel_type {
+        if !v.is_empty() {
+            qb.push(" AND channel_type = "); qb.push_bind(v);
+            cqb.push(" AND channel_type = "); cqb.push_bind(v);
+        }
+    }
+    if let Some(v) = q.enabled {
+        qb.push(" AND enabled = "); qb.push_bind(v);
+        cqb.push(" AND enabled = "); cqb.push_bind(v);
+    }
+
+    let total: i64 = cqb.build().fetch_one(&state.db).await
+        .and_then(|r| r.try_get::<i64, _>("c"))
+        .unwrap_or(0);
+
+    qb.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+    qb.push_bind(page_size);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+
+    let rows = qb.build().fetch_all(&state.db).await?;
 
     let list: Vec<Value> = rows.iter().map(|r| {
         let config_str: String = r.try_get("config_json").unwrap_or_else(|_| "{}".to_string());
@@ -403,7 +449,15 @@ async fn list_channels(
         })
     }).collect();
 
-    Ok(Json(json!({ "code": 0, "data": list })))
+    Ok(Json(json!({
+        "code": 0,
+        "data": {
+            "list": list,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+        }
+    })))
 }
 
 async fn create_channel(
@@ -584,9 +638,17 @@ async fn test_channel(
 #[derive(Deserialize)]
 struct CreateRuleReq {
     name: String,
-    event_type: String,
+    event_type: Option<String>,
+    #[serde(default)]
+    trigger_scene: Option<String>,
     #[serde(default)]
     severity_filter: Option<Value>,
+    #[serde(default)]
+    severity_op: Option<String>,
+    #[serde(default)]
+    host_filter: Option<String>,
+    #[serde(default)]
+    name_keyword: Option<String>,
     channel_ids: Value,
     #[serde(default)]
     recipient_list: Option<String>,
@@ -594,19 +656,72 @@ struct CreateRuleReq {
     enabled: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct ListRulesQuery {
+    #[serde(default = "default_page")]
+    page: u32,
+    #[serde(default = "default_page_size")]
+    page_size: u32,
+    keyword: Option<String>,           // 规则名称模糊匹配
+    event_type: Option<String>,        // host / software / database / ...（来自字典）
+    trigger_scene: Option<String>,     // alert_firing / ticket_assigned / ...
+    enabled: Option<bool>,             // 启用 / 禁用
+}
+
 async fn list_rules(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
+    Query(q): Query<ListRulesQuery>,
 ) -> Result<Json<Value>, AppError> {
     auth::require_permission(&auth, "notification:read")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
-    let rows = sqlx::query(
-        "SELECT id, name, event_type, severity_filter, channel_ids, recipient_list, enabled, created_by, created_at, updated_at \
-         FROM notification_rules ORDER BY created_at DESC",
-    )
-    .fetch_all(&state.db)
-    .await?;
+    let page = q.page.max(1) as i64;
+    let page_size = q.page_size.clamp(1, 500) as i64;
+    let offset = (page - 1) * page_size;
+
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT id, name, event_type, trigger_scene, severity_filter, severity_op, host_filter, name_keyword, channel_ids, recipient_list, enabled, created_by, created_at, updated_at \
+         FROM notification_rules WHERE 1=1 "
+    );
+    let mut cqb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT COUNT(*) AS c FROM notification_rules WHERE 1=1 "
+    );
+
+    if let Some(kw) = &q.keyword {
+        if !kw.is_empty() {
+            let like = format!("%{}%", kw);
+            qb.push(" AND name LIKE "); qb.push_bind(like.clone());
+            cqb.push(" AND name LIKE "); cqb.push_bind(like);
+        }
+    }
+    if let Some(v) = &q.event_type {
+        if !v.is_empty() {
+            qb.push(" AND event_type = "); qb.push_bind(v);
+            cqb.push(" AND event_type = "); cqb.push_bind(v);
+        }
+    }
+    if let Some(v) = &q.trigger_scene {
+        if !v.is_empty() {
+            qb.push(" AND trigger_scene = "); qb.push_bind(v);
+            cqb.push(" AND trigger_scene = "); cqb.push_bind(v);
+        }
+    }
+    if let Some(v) = q.enabled {
+        qb.push(" AND enabled = "); qb.push_bind(v);
+        cqb.push(" AND enabled = "); cqb.push_bind(v);
+    }
+
+    let total: i64 = cqb.build().fetch_one(&state.db).await
+        .and_then(|r| r.try_get::<i64, _>("c"))
+        .unwrap_or(0);
+
+    qb.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+    qb.push_bind(page_size);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+
+    let rows = qb.build().fetch_all(&state.db).await?;
 
     let list: Vec<Value> = rows.iter().map(|r| {
         let sf_str: String = r.try_get("severity_filter").unwrap_or_else(|_| "null".to_string());
@@ -614,8 +729,12 @@ async fn list_rules(
         json!({
             "id": r.try_get::<String, _>("id").unwrap_or_default(),
             "name": r.try_get::<String, _>("name").unwrap_or_default(),
-            "eventType": r.try_get::<String, _>("event_type").unwrap_or_default(),
+            "eventType": r.try_get::<Option<String>, _>("event_type").ok().flatten().unwrap_or_default(),
+            "triggerScene": r.try_get::<Option<String>, _>("trigger_scene").ok().flatten().unwrap_or_default(),
             "severityFilter": serde_json::from_str::<Value>(&sf_str).unwrap_or(Value::Null),
+            "severityOp": r.try_get::<Option<String>, _>("severity_op").ok().flatten().unwrap_or_else(|| "in".to_string()),
+            "hostFilter": r.try_get::<Option<String>, _>("host_filter").ok().flatten().unwrap_or_default(),
+            "nameKeyword": r.try_get::<Option<String>, _>("name_keyword").ok().flatten().unwrap_or_default(),
             "channelIds": serde_json::from_str::<Value>(&ci_str).unwrap_or(json!([])),
             "recipientList": r.try_get::<Option<String>, _>("recipient_list").ok().flatten().unwrap_or_default(),
             "enabled": r.try_get::<bool, _>("enabled").unwrap_or(true),
@@ -625,7 +744,15 @@ async fn list_rules(
         })
     }).collect();
 
-    Ok(Json(json!({ "code": 0, "data": list })))
+    Ok(Json(json!({
+        "code": 0,
+        "data": {
+            "list": list,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+        }
+    })))
 }
 
 async fn create_rule(
@@ -638,21 +765,28 @@ async fn create_rule(
 
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
+    let event_type = req.event_type.as_deref().unwrap_or("").trim().to_string();
+    let trigger_scene = req.trigger_scene.as_deref().unwrap_or("").trim().to_string();
     let severity_json = req.severity_filter
         .as_ref()
         .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()))
         .unwrap_or_else(|| "null".to_string());
     let channel_ids_json = serde_json::to_string(&req.channel_ids).unwrap_or_else(|_| "[]".to_string());
     let recipients = req.recipient_list.unwrap_or_default();
+    let severity_op = req.severity_op.as_deref().unwrap_or("in").trim().to_string();
 
     sqlx::query(
-        "INSERT INTO notification_rules (id, name, event_type, severity_filter, channel_ids, recipient_list, enabled, created_by, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notification_rules (id, name, event_type, trigger_scene, severity_filter, severity_op, host_filter, name_keyword, channel_ids, recipient_list, enabled, created_by, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&req.name)
-    .bind(&req.event_type)
+    .bind(&event_type)
+    .bind(&trigger_scene)
     .bind(&severity_json)
+    .bind(&severity_op)
+    .bind(&req.host_filter)
+    .bind(&req.name_keyword)
     .bind(&channel_ids_json)
     .bind(&recipients)
     .bind(req.enabled)
@@ -670,7 +804,15 @@ struct UpdateRuleReq {
     name: Option<String>,
     event_type: Option<String>,
     #[serde(default)]
+    trigger_scene: Option<String>,
+    #[serde(default)]
     severity_filter: Option<Value>,
+    #[serde(default)]
+    severity_op: Option<String>,
+    #[serde(default)]
+    host_filter: Option<String>,
+    #[serde(default)]
+    name_keyword: Option<String>,
     #[serde(default)]
     channel_ids: Option<Value>,
     #[serde(default)]
@@ -698,9 +840,21 @@ async fn update_rule(
     if let Some(et) = &req.event_type {
         q.push(", event_type = "); q.push_bind(et);
     }
+    if let Some(ts) = &req.trigger_scene {
+        q.push(", trigger_scene = "); q.push_bind(ts);
+    }
     if let Some(sf) = &req.severity_filter {
         let sf_str = serde_json::to_string(sf).unwrap_or_else(|_| "null".to_string());
         q.push(", severity_filter = "); q.push_bind(sf_str);
+    }
+    if let Some(sop) = &req.severity_op {
+        q.push(", severity_op = "); q.push_bind(sop);
+    }
+    if let Some(hf) = &req.host_filter {
+        q.push(", host_filter = "); q.push_bind(hf);
+    }
+    if let Some(nk) = &req.name_keyword {
+        q.push(", name_keyword = "); q.push_bind(nk);
     }
     if let Some(ci) = &req.channel_ids {
         let ci_str = serde_json::to_string(ci).unwrap_or_else(|_| "[]".to_string());
