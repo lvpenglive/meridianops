@@ -366,7 +366,7 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/notification/channels', title: '通知通道', icon: 'Message', permission: 'notification:read' },
       { path: '/notification/rules', title: '通知规则', icon: 'Setting', permission: 'notification:read' },
       { path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
-      { path: '/logs', title: '日志中心', icon: 'Document' },
+      { path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
       { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
     ]
   },

@@ -445,7 +445,7 @@ const allShortcuts: Shortcut[] = [
   { path: '/system', label: '系统设置', icon: Tools, color: '#909399', permission: 'system:read' },
   { path: '/profile', label: '个人中心', icon: User, color: '#9C27B0' },
   { path: '/tickets', label: '工单系统', icon: Tickets, color: '#00BCD4' },
-  { path: '/logs', label: '日志中心', icon: Document, color: '#FF9800' },
+  { path: '/logs', label: '日志中心', icon: Document, color: '#FF9800', permission: 'log:read' },
 ]
 const visibleShortcuts = computed(() =>
   allShortcuts.filter((s) => !s.permission || userStore.hasPermission(s.permission)),
