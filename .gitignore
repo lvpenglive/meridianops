@@ -35,3 +35,18 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# ===== 临时调试 / 验证脚本 =====
+.tmp/
+.workbuddy/
+alerts_check.json
+test_herestring.txt
+test_out.txt
+check_*.py
+fix_*.py
+push_kafka_alerts.py
+unlock_admin.py
+update_route.py
+verify_pipeline.py
+run_ticket_migration.py
+gateway/src/_probe.rs
