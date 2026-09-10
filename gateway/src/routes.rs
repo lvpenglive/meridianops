@@ -43,6 +43,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(crate::ticket_routes::routes())
         .merge(crate::template_routes::routes())
         .merge(crate::notification_routes::routes())
+        .merge(crate::sms_strategy_routes::routes())
+        .merge(crate::alert_group_routes::routes())
         .merge(crate::aiops_routes::routes())
         .merge(crate::log_routes::routes())
         .route("/api/systems", get(list_systems))

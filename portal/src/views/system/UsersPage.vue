@@ -124,6 +124,37 @@
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
+        <el-table-column label="手机号" width="130">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.mobile" content="已脱敏展示，编辑时可查看完整号码" placement="top" :show-after="400">
+              <span>{{ maskMobile(row.mobile) }}</span>
+            </el-tooltip>
+            <span v-else class="text-muted">未填写</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="工号" width="110">
+          <template #default="{ row }">
+            <span v-if="row.employeeNo">{{ row.employeeNo }}</span>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="职位" width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.position">{{ row.position }}</span>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="在职状态" width="100">
+          <template #default="{ row }">
+            <el-tag
+              :type="row.employmentStatus === 'left' ? 'info' : 'success'"
+              size="small"
+              effect="light"
+            >
+              {{ row.employmentStatus === 'left' ? '离职' : '在职' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="row.enabled ? 'success' : 'danger'" size="small" effect="dark" round>
@@ -156,6 +187,9 @@
                   <el-dropdown-item v-permission="'user:reset_password'" command="reset" divided>
                     重置密码
                   </el-dropdown-item>
+                  <el-dropdown-item v-permission="'user:delete'" command="delete" divided>
+                    <span class="danger-item">删除</span>
+                  </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -177,7 +211,7 @@
     </el-card>
 
     <!-- 新增用户对话框 -->
-    <el-dialog v-model="createDialogVisible" width="560px" class="user-dialog" @closed="resetCreateForm">
+    <el-dialog v-model="createDialogVisible" width="760px" class="user-dialog" @closed="resetCreateForm">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon"><Plus :size="20" /></div>
@@ -214,6 +248,71 @@
               </el-form-item>
             </el-col>
           </el-row>
+        </div>
+        <div class="form-section">
+          <div class="form-section__title">联系与人事信息</div>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="手机号" prop="mobile">
+                <el-input v-model="createForm.mobile" placeholder="11 位手机号（必填）" maxlength="11" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="工号" prop="employeeNo">
+                <el-input v-model="createForm.employeeNo" placeholder="工号（可选）" clearable />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="职位" prop="position">
+                <el-input v-model="createForm.position" placeholder="如：高级运维工程师" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="直属上级" prop="managerId">
+                <el-select v-model="createForm.managerId" placeholder="选择直属上级（可选）" clearable filterable style="width: 100%">
+                  <el-option
+                    v-for="u in managerOptions"
+                    :key="u.id"
+                    :label="u.displayName ? `${u.displayName}（${u.username}）` : u.username"
+                    :value="u.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="IM 账号" prop="imAccount">
+                <el-input v-model="createForm.imAccount" placeholder="企业微信/钉钉账号（可选）" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="在职状态" prop="employmentStatus">
+                <el-select v-model="createForm.employmentStatus" style="width: 100%">
+                  <el-option label="在职" value="active" />
+                  <el-option label="离职" value="left" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col v-if="createForm.employmentStatus === 'left'" :span="12">
+              <el-form-item label="离职日期" prop="leaveDate">
+                <el-date-picker
+                  v-model="createForm.leaveDate"
+                  type="date"
+                  placeholder="选择离职日期"
+                  value-format="YYYY-MM-DD"
+                  style="width: 100%"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="备注" prop="remark">
+            <el-input v-model="createForm.remark" type="textarea" :rows="2" maxlength="255" show-word-limit placeholder="如：仅负责 A 机房、外包人员等（可选）" />
+          </el-form-item>
         </div>
         <div class="form-section">
           <div class="form-section__title">权限分配</div>
@@ -260,7 +359,7 @@
     </el-dialog>
 
     <!-- 编辑用户对话框 -->
-    <el-dialog v-model="editDialogVisible" width="560px" class="user-dialog">
+    <el-dialog v-model="editDialogVisible" width="760px" class="user-dialog">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon dialog-header__icon--edit"><EditPen :size="20" /></div>
@@ -292,6 +391,71 @@
               </el-form-item>
             </el-col>
           </el-row>
+        </div>
+        <div class="form-section">
+          <div class="form-section__title">联系与人事信息</div>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="手机号" prop="mobile">
+                <el-input v-model="editForm.mobile" placeholder="11 位手机号" maxlength="11" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="工号" prop="employeeNo">
+                <el-input v-model="editForm.employeeNo" placeholder="工号（可选）" clearable />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="职位" prop="position">
+                <el-input v-model="editForm.position" placeholder="如：高级运维工程师" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="直属上级" prop="managerId">
+                <el-select v-model="editForm.managerId" placeholder="选择直属上级（可选）" clearable filterable style="width: 100%">
+                  <el-option
+                    v-for="u in managerOptions"
+                    :key="u.id"
+                    :label="u.displayName ? `${u.displayName}（${u.username}）` : u.username"
+                    :value="u.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="IM 账号" prop="imAccount">
+                <el-input v-model="editForm.imAccount" placeholder="企业微信/钉钉账号（可选）" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="在职状态" prop="employmentStatus">
+                <el-select v-model="editForm.employmentStatus" style="width: 100%">
+                  <el-option label="在职" value="active" />
+                  <el-option label="离职" value="left" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col v-if="editForm.employmentStatus === 'left'" :span="12">
+              <el-form-item label="离职日期" prop="leaveDate">
+                <el-date-picker
+                  v-model="editForm.leaveDate"
+                  type="date"
+                  placeholder="选择离职日期"
+                  value-format="YYYY-MM-DD"
+                  style="width: 100%"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="备注" prop="remark">
+            <el-input v-model="editForm.remark" type="textarea" :rows="2" maxlength="255" show-word-limit placeholder="如：仅负责 A 机房、外包人员等（可选）" />
+          </el-form-item>
         </div>
         <div class="form-section">
           <div class="form-section__title">权限分配</div>
@@ -372,8 +536,12 @@ import * as usersApi from '../../api/users'
 import * as rolesApi from '../../api/roles'
 import * as deptsApi from '../../api/departments'
 import type { UserInfo, Role, Department, DepartmentNode } from '../../api/types'
+import { useUserStore } from '../../stores/user'
 
 // ---- 基础数据 ----
+const userStore = useUserStore()
+const currentUserId = computed(() => userStore.user?.id ?? '')
+
 const users = ref<UserInfo[]>([])
 const roles = ref<Role[]>([])
 const departments = ref<Department[]>([])
@@ -384,7 +552,8 @@ const submitting = ref(false)
 const filters = reactive({
   keyword: '',
   role: '' as string | boolean,
-  status: null as boolean | null,
+  // 下拉"全部"选项会写入空字符串，故类型需包含 ''
+  status: null as boolean | '' | null,
 })
 
 // ---- 分页 ----
@@ -433,7 +602,10 @@ const filteredUsers = computed(() => {
       const hit =
         u.username.toLowerCase().includes(kw) ||
         (u.displayName?.toLowerCase().includes(kw) ?? false) ||
-        (u.email?.toLowerCase().includes(kw) ?? false)
+        (u.email?.toLowerCase().includes(kw) ?? false) ||
+        (u.mobile?.toLowerCase().includes(kw) ?? false) ||
+        (u.employeeNo?.toLowerCase().includes(kw) ?? false) ||
+        (u.position?.toLowerCase().includes(kw) ?? false)
       if (!hit) return false
     }
     if (filters.role) {
@@ -480,6 +652,14 @@ function getRoleLabel(row: UserInfo) {
 }
 function avatarClass(role: string) {
   return `avatar--${role}`
+}
+
+/** 手机号脱敏展示：138****1234（个人信息保护，完整号码仅在编辑时可见） */
+function maskMobile(m?: string | null) {
+  const s = (m || '').trim()
+  if (!s) return '—'
+  if (s.length !== 11) return s
+  return `${s.slice(0, 3)}****${s.slice(7)}`
 }
 function getInitial(row: UserInfo) {
   return (row.displayName || row.username || '?').charAt(0).toUpperCase()
@@ -529,6 +709,9 @@ function handleAction(cmd: string, row: UserInfo) {
     case 'reset':
       openPasswordDialog(row)
       break
+    case 'delete':
+      handleDelete(row)
+      break
   }
 }
 
@@ -542,6 +725,14 @@ const createForm = reactive({
   email: '',
   roleId: '',
   departmentId: '',
+  mobile: '',
+  employeeNo: '',
+  position: '',
+  managerId: '',
+  imAccount: '',
+  employmentStatus: 'active',
+  leaveDate: '',
+  remark: '',
   enabled: true,
 })
 const createRules: FormRules = {
@@ -551,6 +742,14 @@ const createRules: FormRules = {
     { min: 6, message: '至少 6 位', trigger: 'blur' },
   ],
   roleId: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  mobile: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    {
+      pattern: /^1\d{10}$/,
+      message: '手机号格式不正确，应为 1 开头的 11 位数字',
+      trigger: 'blur',
+    },
+  ],
 }
 
 function openCreateDialog() {
@@ -564,6 +763,14 @@ function resetCreateForm() {
   createForm.email = ''
   createForm.roleId = ''
   createForm.departmentId = ''
+  createForm.mobile = ''
+  createForm.employeeNo = ''
+  createForm.position = ''
+  createForm.managerId = ''
+  createForm.imAccount = ''
+  createForm.employmentStatus = 'active'
+  createForm.leaveDate = ''
+  createForm.remark = ''
   createForm.enabled = true
   createFormRef.value?.clearValidate()
 }
@@ -581,6 +788,14 @@ async function handleCreate() {
         email: createForm.email || undefined,
         roleId: createForm.roleId || undefined,
         departmentId: createForm.departmentId || undefined,
+        mobile: createForm.mobile,
+        employeeNo: createForm.employeeNo || undefined,
+        position: createForm.position || undefined,
+        managerId: createForm.managerId || undefined,
+        imAccount: createForm.imAccount || undefined,
+        employmentStatus: createForm.employmentStatus,
+        leaveDate: createForm.leaveDate || undefined,
+        remark: createForm.remark || undefined,
         enabled: createForm.enabled,
       })
       ElMessage.success('用户创建成功')
@@ -604,10 +819,40 @@ const editForm = reactive({
   email: '',
   roleId: '',
   departmentId: '',
+  mobile: '',
+  employeeNo: '',
+  position: '',
+  managerId: '',
+  imAccount: '',
+  employmentStatus: 'active',
+  leaveDate: '',
+  remark: '',
   enabled: true,
 })
+/** 直属上级候选：排除自己，避免自引用 */
+const managerOptions = computed(() =>
+  editForm.id ? users.value.filter((u) => u.id !== editForm.id) : users.value,
+)
+
 const editRules: FormRules = {
   roleId: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  mobile: [
+    // 存量用户可能尚未补录手机号，此时允许留空以便编辑其他字段；一旦填写必须符合格式
+    {
+      validator: (_r, value, callback) => {
+        if (!value) {
+          callback()
+          return
+        }
+        if (/^1\d{10}$/.test(value)) {
+          callback()
+        } else {
+          callback(new Error('手机号格式不正确，应为 1 开头的 11 位数字'))
+        }
+      },
+      trigger: 'blur',
+    },
+  ],
 }
 
 function openEditDialog(row: UserInfo) {
@@ -617,6 +862,14 @@ function openEditDialog(row: UserInfo) {
   editForm.email = row.email
   editForm.roleId = row.roleId || ''
   editForm.departmentId = row.departmentId || ''
+  editForm.mobile = row.mobile || ''
+  editForm.employeeNo = row.employeeNo || ''
+  editForm.position = row.position || ''
+  editForm.managerId = row.managerId || ''
+  editForm.imAccount = row.imAccount || ''
+  editForm.employmentStatus = row.employmentStatus || 'active'
+  editForm.leaveDate = row.leaveDate || ''
+  editForm.remark = row.remark || ''
   editForm.enabled = row.enabled
   editDialogVisible.value = true
 }
@@ -632,6 +885,14 @@ async function handleEdit() {
         email: editForm.email,
         roleId: editForm.roleId || undefined,
         departmentId: editForm.departmentId || undefined,
+        mobile: editForm.mobile,
+        employeeNo: editForm.employeeNo || undefined,
+        position: editForm.position || undefined,
+        managerId: editForm.managerId || undefined,
+        imAccount: editForm.imAccount || undefined,
+        employmentStatus: editForm.employmentStatus,
+        leaveDate: editForm.leaveDate || undefined,
+        remark: editForm.remark || undefined,
         enabled: editForm.enabled,
       })
       ElMessage.success('保存成功')
@@ -681,6 +942,32 @@ async function handleResetPassword() {
 }
 
 // ---- 启停 ----
+// ---- 删除用户 ----
+async function handleDelete(row: UserInfo) {
+  const isSelf = currentUserId.value === row.id
+  if (isSelf) {
+    ElMessage.warning('不能删除当前登录的账号')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定删除用户 "${row.username}" 吗？\n该操作不可恢复，将同时移除其在告警组中的成员关系、通知记录与 API 令牌。`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '确定删除', confirmButtonClass: 'el-button--danger' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await usersApi.deleteUser(row.id)
+    ElMessage.success('删除成功')
+    if (pagedUsers.value.length === 1 && page.value > 1) page.value -= 1
+    await loadUsers()
+  } catch {
+    // 拦截器已提示
+  }
+}
+
 async function handleToggleEnable(row: UserInfo) {
   const action = row.enabled ? '禁用' : '启用'
   await ElMessageBox.confirm(`确定${action}用户 "${row.username}" 吗？`, '提示', { type: 'warning' })
@@ -965,6 +1252,10 @@ async function handleToggleEnable(row: UserInfo) {
     height: 44px;
   }
 }
+.danger-item {
+  color: var(--el-color-danger);
+}
+
 @media (max-width: 992px) {
   .page-header {
     flex-direction: column;

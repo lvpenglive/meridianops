@@ -1,5 +1,5 @@
 import request from './request'
-import type { CreateUserRequest, UpdateUserRequest, UserInfo, UserRole } from './types'
+import type { CreateUserRequest, UpdateUserRequest, UserInfo } from './types'
 
 /** 列出所有用户（仅 admin） */
 export function listUsers(): Promise<UserInfo[]> {
@@ -24,4 +24,9 @@ export function toggleUserEnable(id: string, enabled: boolean): Promise<void> {
 /** 管理员重置用户密码 */
 export function resetUserPassword(id: string, password: string): Promise<void> {
   return request.post(`/users/${id}/password-reset`, { password })
+}
+
+/** 删除用户（物理删除，后端会级联清理其告警组成员关系/通知/令牌等） */
+export function deleteUser(id: string): Promise<void> {
+  return request.delete(`/users/${id}`)
 }

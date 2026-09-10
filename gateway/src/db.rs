@@ -26,12 +26,34 @@ pub struct User {
     pub role: String,
     pub role_id: Option<String>,
     pub department_id: Option<String>,
+    pub mobile: Option<String>,
+    pub employee_no: Option<String>,
+    pub position: Option<String>,
+    pub manager_id: Option<String>,
+    pub im_account: Option<String>,
+    pub employment_status: String,
+    pub leave_date: Option<String>,
+    pub remark: Option<String>,
     pub enabled: i8,
     pub failed_login_attempts: i32,
     pub locked_until: Option<String>,
     pub last_login_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// 用户扩展基本信息（手机号/工号/职位/上级/IM/在职状态等）。
+/// 与 users 表 20260910000050 迁移对应，全部可空以兼容存量数据。
+#[derive(Debug, Clone, Default)]
+pub struct UserProfileFields {
+    pub mobile: Option<String>,
+    pub employee_no: Option<String>,
+    pub position: Option<String>,
+    pub manager_id: Option<String>,
+    pub im_account: Option<String>,
+    pub employment_status: Option<String>,
+    pub leave_date: Option<String>,
+    pub remark: Option<String>,
 }
 
 impl User {
@@ -167,12 +189,20 @@ pub async fn create_user(
     role_id: Option<&str>,
     department_id: Option<&str>,
     enabled: bool,
+    profile: &UserProfileFields,
 ) -> anyhow::Result<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
+    let status = profile
+        .employment_status
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("active");
     sqlx::query(
-        "INSERT INTO users (id, username, display_name, email, password_hash, password_changed_at, role, role_id, department_id, enabled, last_login_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+        "INSERT INTO users (id, username, display_name, email, password_hash, password_changed_at, role, role_id, department_id,
+                            mobile, employee_no, position, manager_id, im_account, employment_status, leave_date, remark,
+                            enabled, last_login_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
     )
     .bind(&id)
     .bind(username)
@@ -183,6 +213,14 @@ pub async fn create_user(
     .bind(role)
     .bind(role_id)
     .bind(department_id)
+    .bind(profile.mobile.as_deref())
+    .bind(profile.employee_no.as_deref())
+    .bind(profile.position.as_deref())
+    .bind(profile.manager_id.as_deref())
+    .bind(profile.im_account.as_deref())
+    .bind(status)
+    .bind(profile.leave_date.as_deref())
+    .bind(profile.remark.as_deref())
     .bind(if enabled { 1_i8 } else { 0_i8 })
     .bind(&now)
     .bind(&now)
@@ -201,16 +239,33 @@ pub async fn update_user(
     role_id: Option<&str>,
     department_id: Option<&str>,
     enabled: bool,
+    profile: &UserProfileFields,
 ) -> anyhow::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
+    let status = profile
+        .employment_status
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("active");
     let affected = sqlx::query(
-        "UPDATE users SET display_name = ?, email = ?, role = ?, role_id = ?, department_id = ?, enabled = ?, updated_at = ? WHERE id = ?",
+        "UPDATE users SET display_name = ?, email = ?, role = ?, role_id = ?, department_id = ?,
+                          mobile = ?, employee_no = ?, position = ?, manager_id = ?, im_account = ?,
+                          employment_status = ?, leave_date = ?, remark = ?,
+                          enabled = ?, updated_at = ? WHERE id = ?",
     )
     .bind(display_name)
     .bind(email)
     .bind(role)
     .bind(role_id)
     .bind(department_id)
+    .bind(profile.mobile.as_deref())
+    .bind(profile.employee_no.as_deref())
+    .bind(profile.position.as_deref())
+    .bind(profile.manager_id.as_deref())
+    .bind(profile.im_account.as_deref())
+    .bind(status)
+    .bind(profile.leave_date.as_deref())
+    .bind(profile.remark.as_deref())
     .bind(if enabled { 1_i8 } else { 0_i8 })
     .bind(&now)
     .bind(id)
@@ -254,6 +309,144 @@ pub async fn update_password(pool: &DbPool, id: &str, password_hash: &str) -> an
         anyhow::bail!("user not found: {}", id);
     }
     Ok(())
+}
+
+/// 统计启用的 admin 用户数（用于阻止删除最后一个管理员）。
+pub async fn count_enabled_admins(pool: &DbPool) -> anyhow::Result<i64> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin' AND enabled = 1")
+        .fetch_one(pool)
+        .await?;
+    Ok(count)
+}
+
+/// 查找占用指定手机号的用户（排除 `exclude_id` 自身），返回其用户名。
+/// 用于创建/编辑前做唯一性预校验，给出友好提示而非数据库约束报错。
+pub async fn find_user_by_mobile(
+    pool: &DbPool,
+    mobile: &str,
+    exclude_id: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = match exclude_id {
+        Some(id) => {
+            sqlx::query_as("SELECT username FROM users WHERE mobile = ? AND id <> ? LIMIT 1")
+                .bind(mobile)
+                .bind(id)
+                .fetch_optional(pool)
+                .await?
+        }
+        None => {
+            sqlx::query_as("SELECT username FROM users WHERE mobile = ? LIMIT 1")
+                .bind(mobile)
+                .fetch_optional(pool)
+                .await?
+        }
+    };
+    Ok(row.map(|r| r.0))
+}
+
+/// 查找占用指定工号的用户（排除 `exclude_id` 自身），返回其用户名。
+pub async fn find_user_by_employee_no(
+    pool: &DbPool,
+    employee_no: &str,
+    exclude_id: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = match exclude_id {
+        Some(id) => {
+            sqlx::query_as("SELECT username FROM users WHERE employee_no = ? AND id <> ? LIMIT 1")
+                .bind(employee_no)
+                .bind(id)
+                .fetch_optional(pool)
+                .await?
+        }
+        None => {
+            sqlx::query_as("SELECT username FROM users WHERE employee_no = ? LIMIT 1")
+                .bind(employee_no)
+                .fetch_optional(pool)
+                .await?
+        }
+    };
+    Ok(row.map(|r| r.0))
+}
+
+/// 删除用户，并清理其关联数据，避免留下悬挂引用。
+///
+/// 清理范围：
+/// - `alert_group_members`：从所有告警组中移除
+/// - `alert_sms_strategies.recipient_user_ids`：从短信策略收件人 JSON 数组中剔除
+/// - `notifications` / `user_notification_settings`：个人消息与通知偏好
+/// - `api_tokens`：该用户名下的 API 令牌
+/// - `ticket_watchers`：工单关注关系
+/// - `users.manager_id`：把他人的"直属上级"置空
+///
+/// 注意：`ticket_comments`、`audit_logs` 等历史流水保留，不随用户删除。
+///
+/// 返回是否真的删除了一行（false = 用户不存在）。
+pub async fn delete_user(pool: &DbPool, id: &str) -> anyhow::Result<bool> {
+    // 1) 告警组成员关系
+    sqlx::query("DELETE FROM alert_group_members WHERE user_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    // 2) 短信策略收件人（JSON 数组，需逐条解析后回写）
+    let strategies: Vec<(String, Option<serde_json::Value>)> =
+        sqlx::query_as("SELECT id, recipient_user_ids FROM alert_sms_strategies")
+            .fetch_all(pool)
+            .await?;
+    for (sid, raw) in strategies {
+        let Some(value) = raw else { continue };
+        let arr = match value.as_array() {
+            Some(a) => a,
+            None => continue,
+        };
+        let kept: Vec<serde_json::Value> = arr
+            .iter()
+            .filter(|v| v.as_str().map(|s| s != id).unwrap_or(true))
+            .cloned()
+            .collect();
+        if kept.len() == arr.len() {
+            continue;
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("UPDATE alert_sms_strategies SET recipient_user_ids = ?, updated_at = ? WHERE id = ?")
+            .bind(serde_json::json!(kept))
+            .bind(&now)
+            .bind(&sid)
+            .execute(pool)
+            .await?;
+    }
+
+    // 3) 通知 / 偏好 / 令牌 / 工单关注
+    sqlx::query("DELETE FROM notifications WHERE user_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM user_notification_settings WHERE user_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM api_tokens WHERE owner_user_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM ticket_watchers WHERE user_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    // 4) 解除他人对该用户的上级引用
+    sqlx::query("UPDATE users SET manager_id = NULL WHERE manager_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    // 5) 删除用户本体
+    let affected = sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(affected > 0)
 }
 
 /// 登录成功时更新 last_login_at。

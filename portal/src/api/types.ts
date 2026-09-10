@@ -60,6 +60,14 @@ export interface UserInfo {
   role: UserRole
   roleId?: string
   departmentId?: string
+  mobile?: string | null
+  employeeNo?: string | null
+  position?: string | null
+  managerId?: string | null
+  imAccount?: string | null
+  employmentStatus?: string
+  leaveDate?: string | null
+  remark?: string | null
   enabled: boolean
   lastLoginAt?: string | null
   passwordChangedAt?: string | null
@@ -108,6 +116,14 @@ export interface CreateUserRequest {
   role?: UserRole
   roleId?: string
   departmentId?: string
+  mobile?: string
+  employeeNo?: string
+  position?: string
+  managerId?: string
+  imAccount?: string
+  employmentStatus?: string
+  leaveDate?: string
+  remark?: string
   enabled?: boolean
 }
 
@@ -117,6 +133,14 @@ export interface UpdateUserRequest {
   role?: UserRole
   roleId?: string
   departmentId?: string
+  mobile?: string
+  employeeNo?: string
+  position?: string
+  managerId?: string
+  imAccount?: string
+  employmentStatus?: string
+  leaveDate?: string
+  remark?: string
   enabled?: boolean
 }
 

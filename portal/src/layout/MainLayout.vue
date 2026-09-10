@@ -365,6 +365,8 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/alerts/screen', title: '告警大屏', icon: 'Monitor' },
       { path: '/notification/channels', title: '通知通道', icon: 'Message', permission: 'notification:read' },
       { path: '/notification/rules', title: '通知规则', icon: 'Setting', permission: 'notification:read' },
+      { path: '/notification/sms-strategies', title: '告警短信策略', icon: 'BellFilled', permission: 'sms_strategy:read' },
+      { path: '/notification/alert-groups', title: '告警组维护', icon: 'UserFilled', permission: 'alert_group:read' },
       { path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
       { path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
       { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Json;
 use axum::Router;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/auth/change-password", post(change_password))
         // 用户管理：列表+创建（GET/POST 同路径），单条编辑（PUT），启停（PATCH），重置密码（POST）
         .route("/api/users", get(list_users).post(create_user))
-        .route("/api/users/:id", put(update_user))
+        .route("/api/users/:id", put(update_user).delete(delete_user))
         .route("/api/users/:id/enable", patch(toggle_enable))
         .route("/api/users/:id/password-reset", post(reset_password))
 }
@@ -82,6 +82,14 @@ pub struct UserInfo {
     pub role: auth::Role,
     pub role_id: Option<String>,
     pub department_id: Option<String>,
+    pub mobile: Option<String>,
+    pub employee_no: Option<String>,
+    pub position: Option<String>,
+    pub manager_id: Option<String>,
+    pub im_account: Option<String>,
+    pub employment_status: String,
+    pub leave_date: Option<String>,
+    pub remark: Option<String>,
     pub enabled: bool,
     pub last_login_at: Option<String>,
     pub password_changed_at: Option<String>,
@@ -101,6 +109,14 @@ impl From<db::User> for UserInfo {
             role,
             role_id: u.role_id,
             department_id: u.department_id,
+            mobile: u.mobile,
+            employee_no: u.employee_no,
+            position: u.position,
+            manager_id: u.manager_id,
+            im_account: u.im_account,
+            employment_status: u.employment_status,
+            leave_date: u.leave_date,
+            remark: u.remark,
             enabled,
             last_login_at: u.last_login_at,
             password_changed_at: u.password_changed_at,
@@ -453,6 +469,14 @@ pub struct CreateUserRequest {
     pub role: Option<String>,
     pub role_id: Option<String>,
     pub department_id: Option<String>,
+    pub mobile: Option<String>,
+    pub employee_no: Option<String>,
+    pub position: Option<String>,
+    pub manager_id: Option<String>,
+    pub im_account: Option<String>,
+    pub employment_status: Option<String>,
+    pub leave_date: Option<String>,
+    pub remark: Option<String>,
     pub enabled: Option<bool>,
 }
 
@@ -464,7 +488,27 @@ pub struct UpdateUserRequest {
     pub role: Option<String>,
     pub role_id: Option<String>,
     pub department_id: Option<String>,
+    pub mobile: Option<String>,
+    pub employee_no: Option<String>,
+    pub position: Option<String>,
+    pub manager_id: Option<String>,
+    pub im_account: Option<String>,
+    pub employment_status: Option<String>,
+    pub leave_date: Option<String>,
+    pub remark: Option<String>,
     pub enabled: Option<bool>,
+}
+
+/// 手机号格式校验：中国大陆 11 位手机号（1 开头）。
+fn validate_mobile(m: &str) -> Result<(), AppError> {
+    let s = m.trim();
+    if s.is_empty() {
+        return Err(AppError::bad("手机号不能为空"));
+    }
+    if s.len() != 11 || !s.starts_with('1') || !s.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AppError::bad("手机号格式不正确，应为 1 开头的 11 位数字"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -516,6 +560,80 @@ async fn create_user(
     let department_id = req_body.department_id.as_deref().filter(|s| !s.is_empty());
     let enabled = req_body.enabled.unwrap_or(true);
 
+    // 手机号：新建必填且必须合规（短信告警的落点）
+    let mobile = req_body.mobile.as_deref().unwrap_or("").trim().to_string();
+    validate_mobile(&mobile)?;
+
+    // 手机号唯一：不允许与其他用户重复（用户名与手机号均为身份标识）
+    if let Some(owner) = db::find_user_by_mobile(&state.db, &mobile, None).await? {
+        return Err(AppError {
+            status: StatusCode::CONFLICT,
+            code: 409,
+            message: format!("手机号 {} 已被用户 '{}' 使用", mobile, owner),
+        });
+    }
+
+    // 工号唯一（可选字段，填了才校验）
+    let employee_no = req_body
+        .employee_no
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(no) = employee_no.as_deref() {
+        if let Some(owner) = db::find_user_by_employee_no(&state.db, no, None).await? {
+            return Err(AppError {
+                status: StatusCode::CONFLICT,
+                code: 409,
+                message: format!("工号 {} 已被用户 '{}' 使用", no, owner),
+            });
+        }
+    }
+
+    // 直属上级：必须指向已存在的用户
+    let manager_id = req_body.manager_id.as_deref().filter(|s| !s.is_empty());
+    if let Some(mid) = manager_id {
+        if db::find_user_by_id(&state.db, mid).await?.is_none() {
+            return Err(AppError::bad("指定的直属上级不存在"));
+        }
+    }
+
+    // 在职状态：仅允许 active / left
+    let employment_status = req_body
+        .employment_status
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("active");
+    if employment_status != "active" && employment_status != "left" {
+        return Err(AppError::bad("在职状态仅支持 active 或 left"));
+    }
+
+    let profile = db::UserProfileFields {
+        mobile: Some(mobile),
+        employee_no,
+        position: req_body
+            .position
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        manager_id: manager_id.map(|s| s.to_string()),
+        im_account: req_body
+            .im_account
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        employment_status: Some(employment_status.to_string()),
+        leave_date: req_body
+            .leave_date
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        remark: req_body
+            .remark
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+    };
+
     if db::count_by_username(&state.db, &username).await? > 0 {
         return Err(AppError {
             status: StatusCode::CONFLICT,
@@ -535,6 +653,7 @@ async fn create_user(
         role_id.as_deref(),
         department_id,
         enabled,
+        &profile,
     )
     .await?;
     let user = db::find_user_by_id(&state.db, &id)
@@ -599,6 +718,111 @@ async fn update_user(
     let display_name = req_body.display_name.unwrap_or(existing.display_name);
     let email = req_body.email.unwrap_or(existing.email);
 
+    // 手机号：传了就校验格式；不允许把已有号码清空。
+    // 存量用户尚未补录时（原本为空），允许继续为空，避免无法编辑其他字段。
+    let mobile: Option<String> = match req_body.mobile.as_deref() {
+        Some(s) if !s.trim().is_empty() => {
+            validate_mobile(s)?;
+            Some(s.trim().to_string())
+        }
+        Some(_) => {
+            if existing.mobile.as_deref().unwrap_or("").is_empty() {
+                None
+            } else {
+                return Err(AppError::bad("手机号不能清空"));
+            }
+        }
+        None => existing.mobile.clone(),
+    };
+
+    // 手机号唯一：仅当号码发生变化时才查重（编辑其他字段不受影响）
+    if let Some(m) = mobile.as_deref() {
+        if existing.mobile.as_deref() != Some(m) {
+            if let Some(owner) = db::find_user_by_mobile(&state.db, m, Some(&id)).await? {
+                return Err(AppError {
+                    status: StatusCode::CONFLICT,
+                    code: 409,
+                    message: format!("手机号 {} 已被用户 '{}' 使用", m, owner),
+                });
+            }
+        }
+    }
+
+    // 工号唯一：仅当发生变化时才查重
+    let employee_no: Option<String> = req_body
+        .employee_no
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| existing.employee_no.clone());
+    if let Some(no) = employee_no.as_deref() {
+        if existing.employee_no.as_deref() != Some(no) {
+            if let Some(owner) = db::find_user_by_employee_no(&state.db, no, Some(&id)).await? {
+                return Err(AppError {
+                    status: StatusCode::CONFLICT,
+                    code: 409,
+                    message: format!("工号 {} 已被用户 '{}' 使用", no, owner),
+                });
+            }
+        }
+    }
+
+    // 直属上级：不能指向自己，且必须存在
+    let manager_id: Option<String> = match req_body.manager_id.as_deref() {
+        Some(s) if !s.trim().is_empty() => {
+            if s.trim() == id {
+                return Err(AppError::bad("直属上级不能是自己"));
+            }
+            if db::find_user_by_id(&state.db, s.trim()).await?.is_none() {
+                return Err(AppError::bad("指定的直属上级不存在"));
+            }
+            Some(s.trim().to_string())
+        }
+        Some(_) => None,
+        None => existing.manager_id.clone(),
+    };
+
+    let employment_status = req_body
+        .employment_status
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| existing.employment_status.clone());
+    if employment_status != "active" && employment_status != "left" {
+        return Err(AppError::bad("在职状态仅支持 active 或 left"));
+    }
+
+    let profile = db::UserProfileFields {
+        mobile,
+        employee_no,
+        position: req_body
+            .position
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| existing.position.clone()),
+        manager_id,
+        im_account: req_body
+            .im_account
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| existing.im_account.clone()),
+        employment_status: Some(employment_status),
+        leave_date: req_body
+            .leave_date
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| existing.leave_date.clone()),
+        remark: req_body
+            .remark
+            .as_deref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| existing.remark.clone()),
+    };
+
     db::update_user(
         &state.db,
         &id,
@@ -608,6 +832,7 @@ async fn update_user(
         role_id.as_deref(),
         department_id,
         enabled,
+        &profile,
     )
     .await?;
 
@@ -634,6 +859,59 @@ async fn update_user(
         .ok_or_else(|| AppError::internal("更新后回查失败"))?;
     tracing::info!(user_id = %id, by = %auth.0.sub, "user updated");
     Ok(Json(serde_json::json!({ "code": 0, "data": UserInfo::from(user) })))
+}
+
+/// 删除用户（仅 admin）。物理删除，并级联清理该用户的成员关系/通知/令牌等关联数据。
+///
+/// 安全约束：
+/// - 不能删除自己
+/// - 不能删除最后一个启用的管理员
+async fn delete_user(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    auth: auth::AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "user:delete")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let ip = audit::extract_ip(&headers, Some(addr));
+
+    if id == auth.0.uid {
+        return Err(AppError::bad("不能删除当前登录的账号"));
+    }
+
+    let target = db::find_user_by_id(&state.db, &id)
+        .await?
+        .ok_or_else(|| AppError::bad("用户不存在或已被删除"))?;
+
+    // 保护最后一个启用管理员，避免出现无管理员的孤儿系统
+    if target.role == "admin" && target.enabled == 1 {
+        let admins = db::count_enabled_admins(&state.db).await.unwrap_or(1);
+        if admins <= 1 {
+            return Err(AppError::bad("至少需保留一个启用的管理员账号"));
+        }
+    }
+
+    let removed = db::delete_user(&state.db, &id).await?;
+    if !removed {
+        return Err(AppError::bad("用户不存在或已被删除"));
+    }
+
+    let _ = audit::log_async(
+        &state.db,
+        &auth,
+        "delete",
+        "user",
+        &id,
+        Some(&serde_json::json!({ "username": target.username, "displayName": target.display_name })),
+        &ip,
+        "success",
+    )
+    .await;
+
+    tracing::info!(user_id = %id, username = %target.username, by = %auth.0.sub, "user deleted");
+    Ok(Json(serde_json::json!({ "code": 0, "message": "删除成功" })))
 }
 
 /// 启用/禁用用户（仅 admin）。

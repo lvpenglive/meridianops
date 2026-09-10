@@ -294,6 +294,11 @@ pub async fn dispatch_event(
         return; // 无匹配规则，跳过
     }
 
+    // 0) 短信策略匹配（仅告警触发场景）：命中后给已选人员发站内信 + 邮件
+    if trigger_scene == "alert_firing" {
+        dispatch_sms_strategies(state, event_type, severity, title, content, link, host).await;
+    }
+
     let now_str = chrono::Utc::now().to_rfc3339();
 
     for rule in &rules {
@@ -780,4 +785,318 @@ async fn fetch_matching_rules(
     }
 
     Ok(rules)
+}
+
+// ============================================================
+// 告警短信策略（对齐老系统「短信策略」）
+// 匹配维度：事件类型（一级 + 二级子类）→ 触发级别（等于/大于等于…）→ 设备IP → 事件名称
+// 命中后给「已选人员」发站内信 + 邮件（若该用户配置了邮箱）。
+// ============================================================
+
+/// 短信策略行（匹配用）
+struct SmsStrategyRow {
+    recipient_user_ids: Vec<String>,
+    event_type: String,
+    event_sub_type: String,
+    trigger_op: String,
+    severity_filter: String,
+    host_filter: String,
+    name_keyword: String,
+}
+
+/// 事件二级子类 → 关键字列表（用于从告警标题推断子类，大小写不敏感）
+fn sub_type_keywords(sub_type: &str) -> &'static [&'static str] {
+    match sub_type.to_lowercase().as_str() {
+        "db2"        => &["db2"],
+        "oracle"     => &["oracle"],
+        "sequoiadb"  => &["sequoia", "sequoiadb", "巨杉"],
+        "informix"   => &["informix"],
+        "sybase"     => &["sybase"],
+        "sqlserver"  => &["sqlserver", "sql server", "mssql"],
+        "gbase"      => &["gbase"],
+        "was"        => &["websphere", "was"],
+        "cics"       => &["cics"],
+        "mq"         => &["mq", "ibmmq", "rabbitmq", "activemq"],
+        "tomcat"     => &["tomcat"],
+        _            => &[],
+    }
+}
+
+/// 从告警标题/事件名推断二级子类（返回字典 value，无匹配返回 None）
+fn infer_sub_type(title: &str, event_type: &str) -> Option<String> {
+    let t = title.to_lowercase();
+    // 仅对 database / middleware 大类推断子类，避免误命中
+    let candidates: &[&str] = match event_type {
+        "database" => &["db2", "oracle", "sequoiadb", "informix", "sybase", "sqlserver", "gbase"],
+        "middleware" => &["was", "cics", "mq", "tomcat"],
+        _ => return None,
+    };
+    for c in candidates {
+        for kw in sub_type_keywords(c) {
+            if t.contains(kw) {
+                return Some(c.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 短信策略级别 → 数值（老系统六级递进：信息=0 < 一级=1 < … < 五级=5）
+/// 与告警侧 severity_for_rule_match 输出的 0-5 数字尺度对齐比较。
+fn sms_severity_to_num(s: &str) -> Option<i64> {
+    match s.trim().to_lowercase().as_str() {
+        "info" => Some(0),
+        "1" => Some(1),
+        "2" => Some(2),
+        "3" => Some(3),
+        "4" => Some(4),
+        "5" => Some(5),
+        _ => None,
+    }
+}
+
+/// 按 trigger_op 比较告警级别与策略级别（复用 severity_to_num 的 0-5 数值语义）
+fn sms_severity_match(op: &str, filter: &str, severity: &str) -> bool {
+    let f = filter.trim();
+    if f.is_empty() {
+        return true; // 空 = 全部级别
+    }
+    // 告警侧级别：0-5 数字（severity_for_rule_match 输出），兼容 info 等历史值
+    let sev_n = match severity_to_num(severity) {
+        Some(n) => n,
+        None => return false,
+    };
+    let filter_n = match sms_severity_to_num(f) {
+        Some(n) => n,
+        None => return false,
+    };
+    match op {
+        "eq"  => sev_n == filter_n,
+        "gte" => sev_n >= filter_n,
+        "gt"  => sev_n > filter_n,
+        "lte" => sev_n <= filter_n,
+        "lt"  => sev_n < filter_n,
+        _     => sev_n == filter_n,
+    }
+}
+
+/// host_filter 匹配（逗号多值 + % 通配，与规则 host_filter 逻辑一致）
+fn sms_host_match(host_filter: &str, host: &str) -> bool {
+    let hf = host_filter.trim();
+    if hf.is_empty() {
+        return true;
+    }
+    let host_val = host.trim();
+    hf.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .any(|pattern| {
+            if pattern.contains('%') {
+                let body = pattern.replace('%', "");
+                if pattern.starts_with('%') && pattern.ends_with('%') {
+                    host_val.contains(&body)
+                } else if pattern.starts_with('%') {
+                    host_val.ends_with(&body)
+                } else if pattern.ends_with('%') {
+                    host_val.starts_with(&body)
+                } else {
+                    host_val == pattern
+                }
+            } else {
+                host_val == pattern
+            }
+        })
+}
+
+/// 查询并匹配启用的短信策略，命中后给已选人员发站内信 + 邮件。
+async fn dispatch_sms_strategies(
+    state: &Arc<AppState>,
+    event_type: &str,
+    severity: Option<&str>,
+    title: &str,
+    content: &str,
+    link: &str,
+    host: Option<&str>,
+) {
+    let rows = match sqlx::query(
+        "SELECT recipient_user_ids, event_type, event_sub_type, trigger_op, severity_filter, host_filter, name_keyword \
+         FROM alert_sms_strategies WHERE enabled = 1",
+    )
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(target: "notification_engine", "查询短信策略失败: {}", e);
+            return;
+        }
+    };
+
+    let host_val = host.unwrap_or("");
+    let sev_val = severity.unwrap_or("");
+    let title_lower = title.to_lowercase();
+    // 推断当前告警的二级子类（无则空串，空串 = 策略子类为空时才匹配）
+    let actual_sub_type = infer_sub_type(title, event_type).unwrap_or_default();
+
+    // 汇总所有命中策略的已选人员（去重）
+    let mut hit_user_ids: Vec<String> = Vec::new();
+
+    for row in &rows {
+        let rids: String = row.try_get("recipient_user_ids").unwrap_or_else(|_| "[]".to_string());
+        let ids: Vec<String> = serde_json::from_str(&rids).unwrap_or_default();
+        if ids.is_empty() {
+            continue;
+        }
+
+        let s_event: String = row.try_get("event_type").unwrap_or_default();
+        let s_sub: String = row.try_get("event_sub_type").unwrap_or_default();
+        let s_op: String = row.try_get("trigger_op").unwrap_or_else(|_| "eq".to_string());
+        let s_sev: String = row.try_get("severity_filter").unwrap_or_default();
+        let s_host: String = row.try_get("host_filter").unwrap_or_default();
+        let s_name: String = row.try_get("name_keyword").unwrap_or_default();
+
+        // 1) 一级事件类型匹配：策略为空=全部；否则必须相等
+        if !s_event.is_empty() && s_event != event_type {
+            continue;
+        }
+        // 2) 二级子类匹配：策略为空=全部；否则必须与告警推断子类相等
+        if !s_sub.is_empty() {
+            if actual_sub_type.is_empty() {
+                continue; // 策略要求子类，但告警无法推断出子类 → 不命中
+            }
+            if s_sub != actual_sub_type {
+                continue;
+            }
+        }
+        // 3) 事件级别匹配
+        if !sms_severity_match(&s_op, &s_sev, sev_val) {
+            continue;
+        }
+        // 4) 设备IP匹配
+        if !sms_host_match(&s_host, host_val) {
+            continue;
+        }
+        // 5) 事件名称关键字匹配
+        if !s_name.trim().is_empty() && !title_lower.contains(&s_name.trim().to_lowercase()) {
+            continue;
+        }
+
+        for uid in ids {
+            if !hit_user_ids.contains(&uid) {
+                hit_user_ids.push(uid);
+            }
+        }
+    }
+
+    if hit_user_ids.is_empty() {
+        return;
+    }
+
+    // 站内信：通知每个命中人员
+    for uid in &hit_user_ids {
+        crate::notification_routes::create_notification(
+            &state.db,
+            uid,
+            "sms_strategy",
+            title,
+            content,
+            link,
+        )
+        .await;
+    }
+
+    // 邮件：对配置了邮箱的命中人员，走第一条启用的 email 通道发送
+    let emails = match fetch_user_emails(&state.db, &hit_user_ids).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(target: "notification_engine", "查询命中人员邮箱失败: {}", e);
+            return;
+        }
+    };
+    if emails.is_empty() {
+        return;
+    }
+
+    let ch_row = match sqlx::query(
+        "SELECT id, name, config_json FROM notification_channels WHERE channel_type = 'email' AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => return, // 无启用邮件通道，仅站内信
+        Err(e) => {
+            tracing::warn!(target: "notification_engine", "查询邮件通道失败: {}", e);
+            return;
+        }
+    };
+
+    let ch_id: String = ch_row.try_get("id").unwrap_or_default();
+    let ch_name: String = ch_row.try_get("name").unwrap_or_default();
+    let config_str: String = ch_row.try_get("config_json").unwrap_or_else(|_| "{}".to_string());
+
+    let started = std::time::Instant::now();
+    let result = send_email(&config_str, &emails, title, content).await;
+    let duration_ms = started.elapsed().as_millis() as u32;
+    let sent_at = chrono::Utc::now().to_rfc3339();
+
+    // 写发送日志（触发来源 = 短信策略）
+    let (status, error_msg) = match &result {
+        Ok(()) => ("success".to_string(), None),
+        Err(e) => ("failed".to_string(), Some(e.chars().take(4000).collect())),
+    };
+    let _ = insert_notification_log(
+        &state.db,
+        NotificationLogEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            rule_id: None,
+            rule_name: Some("短信策略".to_string()),
+            channel_id: ch_id,
+            channel_name: ch_name,
+            channel_type: "email".to_string(),
+            event_type: event_type.to_string(),
+            trigger_scene: Some("alert_firing".to_string()),
+            severity: severity.map(|s| s.to_string()),
+            recipients: Some(emails.join(",")),
+            title: title.chars().take(500).collect(),
+            content: Some(content.chars().take(4000).collect()),
+            link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
+            status,
+            error_msg,
+            response_snippet: None,
+            duration_ms: Some(duration_ms),
+            triggered_by: Some("sms_strategy".to_string()),
+            sent_at,
+        },
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(target: "notification_engine", "写短信策略通知日志失败: {}", e);
+    });
+}
+
+/// 批量查询用户的 email（id → email），仅保留非空邮箱
+async fn fetch_user_emails(
+    pool: &sqlx::MySqlPool,
+    user_ids: &[String],
+) -> Result<Vec<String>, String> {
+    if user_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let placeholders = vec!["?"; user_ids.len()].join(",");
+    let sql = format!("SELECT id, email FROM users WHERE id IN ({})", placeholders);
+    let mut q = sqlx::query(&sql);
+    for uid in user_ids {
+        q = q.bind(uid);
+    }
+    let rows = q.fetch_all(pool).await.map_err(|e| e.to_string())?;
+    let mut emails: Vec<String> = Vec::new();
+    for r in &rows {
+        let email: String = r.try_get("email").unwrap_or_default();
+        let e = email.trim().to_string();
+        if !e.is_empty() && !emails.contains(&e) {
+            emails.push(e);
+        }
+    }
+    Ok(emails)
 }

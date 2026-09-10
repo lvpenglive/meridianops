@@ -99,6 +99,18 @@ const routes = [
         meta: { title: '通知规则', icon: 'Setting', permission: 'notification:read' }
       },
       {
+        path: 'notification/sms-strategies',
+        name: 'SmsStrategies',
+        component: () => import('../views/notification/SmsStrategyPage.vue'),
+        meta: { title: '告警短信策略', icon: 'BellFilled', permission: 'sms_strategy:read' }
+      },
+      {
+        path: 'notification/alert-groups',
+        name: 'AlertGroups',
+        component: () => import('../views/notification/AlertGroupsPage.vue'),
+        meta: { title: '告警组维护', icon: 'UserFilled', permission: 'alert_group:read' }
+      },
+      {
         path: 'notification/logs',
         name: 'NotificationLogs',
         component: () => import('../views/notification/LogsPage.vue'),

@@ -1,3 +1,4 @@
+mod alert_group_routes;
 mod aiops_routes;
 mod alert_routes;
 mod audit;
@@ -31,6 +32,7 @@ mod notification_routes;
 mod ticket_routes;
 mod ticket_scheduler;
 mod token_routes;
+mod sms_strategy_routes;
 mod workflow_engine;
 
 use clap::Parser;
