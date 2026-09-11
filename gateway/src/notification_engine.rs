@@ -52,6 +52,29 @@ struct WebhookConfig {
     headers: Option<Value>,
 }
 
+/// 短信平台（HTTP）配置 — 对接外部短信网关，支持 JSON/XML 报文
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmsHttpConfig {
+    /// 短信平台 URL，如 http://sms-gw/api/send
+    url: String,
+    /// HTTP 方法，默认 POST
+    method: Option<String>,
+    /// 报文格式：json | xml
+    content_type: Option<String>,
+    /// 自定义请求头
+    headers: Option<Value>,
+    /// 签名（可选，注入到 ${signName} 变量）
+    sign_name: Option<String>,
+    /// 模板 ID（可选，注入到 ${templateId} 变量）
+    template_id: Option<String>,
+    /// 报文模板，支持变量替换：${mobile} ${title} ${content} ${host}
+    /// ${severity} ${eventType} ${timestamp} ${signName} ${templateId}
+    body_template: String,
+    /// 成功响应匹配模式（可选）：若提供，则在响应文本中查找此子串表示成功
+    success_pattern: Option<String>,
+}
+
 /// 从数据库 config_json 解析通道配置
 fn parse_channel_config(channel_type: &str, config_str: &str) -> Result<(String, Vec<String>), String> {
     let cfg: Value = serde_json::from_str(config_str)
@@ -101,6 +124,21 @@ fn parse_channel_config(channel_type: &str, config_str: &str) -> Result<(String,
             let headers = cfg.get("headers").cloned();
             let wh_cfg = WebhookConfig { url, headers };
             Ok((serde_json::to_string(&wh_cfg).unwrap_or_default(), vec![]))
+        }
+        "sms_http" => {
+            let url = cfg["url"].as_str().unwrap_or("").to_string();
+            let method = cfg.get("method").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let content_type = cfg.get("contentType").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let headers = cfg.get("headers").cloned();
+            let sign_name = cfg.get("signName").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let template_id = cfg.get("templateId").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let body_template = cfg["bodyTemplate"].as_str().unwrap_or("").to_string();
+            let success_pattern = cfg.get("successPattern").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let sms_cfg = SmsHttpConfig {
+                url, method, content_type, headers, sign_name, template_id,
+                body_template, success_pattern,
+            };
+            Ok((serde_json::to_string(&sms_cfg).unwrap_or_default(), vec![]))
         }
         _ => Err(format!("不支持的通道类型: {}", channel_type)),
     }
@@ -240,6 +278,134 @@ pub async fn send_webhook(config_str: &str, title: &str, content: &str, event_ty
     Ok(())
 }
 
+/// 发送短信平台 HTTP 报文（pub 供 test_channel 调用）
+///
+/// 对每个手机号做一次独立 HTTP 调用，支持 JSON / XML 两种报文格式。
+/// 返回 (成功手机号列表, 失败手机号 + 错误信息列表)。
+pub async fn send_sms_http(
+    config_str: &str,
+    mobiles: &[String],
+    title: &str,
+    content: &str,
+    host: &str,
+    severity: &str,
+    event_type: &str,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let cfg: SmsHttpConfig = match serde_json::from_str(config_str) {
+        Ok(c) => c,
+        Err(e) => {
+            let err = format!("短信配置解析失败: {}", e);
+            return (
+                vec![],
+                mobiles.iter().map(|m| (m.clone(), err.clone())).collect(),
+            );
+        }
+    };
+
+    if cfg.url.is_empty() {
+        let err = "短信平台 URL 未配置".to_string();
+        return (
+            vec![],
+            mobiles.iter().map(|m| (m.clone(), err.clone())).collect(),
+        );
+    }
+
+    let method = cfg.method.as_deref().unwrap_or("POST").to_uppercase();
+    let content_type = cfg.content_type.as_deref().unwrap_or("json").to_lowercase();
+    let sign_name = cfg.sign_name.clone().unwrap_or_default();
+    let template_id = cfg.template_id.clone().unwrap_or_default();
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
+    let client = reqwest::Client::new();
+    let mut success_mobiles: Vec<String> = Vec::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
+
+    for mobile in mobiles {
+        // 变量替换
+        let body = cfg.body_template
+            .replace("${mobile}", mobile)
+            .replace("${title}", title)
+            .replace("${content}", content)
+            .replace("${host}", host)
+            .replace("${severity}", severity)
+            .replace("${eventType}", event_type)
+            .replace("${timestamp}", &timestamp)
+            .replace("${signName}", &sign_name)
+            .replace("${templateId}", &template_id);
+
+        let req_builder = match method.as_str() {
+            "GET" => client.get(&cfg.url),
+            _ => client.post(&cfg.url),
+        };
+
+        // 按 contentType 设置 body 和 Content-Type
+        let req_builder = if content_type == "xml" {
+            req_builder
+                .header("Content-Type", "application/xml; charset=utf-8")
+                .body(body)
+        } else {
+            // json：尝试解析为 Value 再用 .json()，失败则当文本发
+            match serde_json::from_str::<Value>(&body) {
+                Ok(v) => req_builder.json(&v),
+                Err(_) => req_builder
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .body(body),
+            }
+        };
+
+        // 注入自定义 headers
+        let req_builder = if let Some(headers) = &cfg.headers {
+            if let Some(h) = headers.as_object() {
+                let mut rb = req_builder;
+                for (k, v) in h {
+                    if let Some(s) = v.as_str() {
+                        rb = rb.header(k, s);
+                    }
+                }
+                rb
+            } else {
+                req_builder
+            }
+        } else {
+            req_builder
+        };
+
+        match req_builder
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    failures.push((
+                        mobile.clone(),
+                        format!("HTTP {} : {}", status, body_text.chars().take(500).collect::<String>()),
+                    ));
+                    continue;
+                }
+                // success_pattern 校验
+                if let Some(pat) = &cfg.success_pattern {
+                    if pat.is_empty() || !body_text.contains(pat.as_str()) {
+                        failures.push((
+                            mobile.clone(),
+                            format!("响应未匹配成功标识 [{}]: {}", pat, body_text.chars().take(500).collect::<String>()),
+                        ));
+                        continue;
+                    }
+                }
+                success_mobiles.push(mobile.clone());
+            }
+            Err(e) => {
+                failures.push((mobile.clone(), format!("请求失败: {}", e)));
+            }
+        }
+    }
+
+    (success_mobiles, failures)
+}
+
 // ============================================================
 // 核心分发函数
 // ============================================================
@@ -282,6 +448,12 @@ pub async fn dispatch_event(
     }
 
     // 2) 外部通道：查规则 + 通道
+    // 0) 短信策略匹配（仅告警触发场景）：命中后给已选人员发站内信 + 邮件/短信
+    //    独立于 notification_rules，即使无通知规则匹配也应执行
+    if trigger_scene == "alert_firing" {
+        dispatch_sms_strategies(state, event_type, severity, title, content, link, host).await;
+    }
+
     let rules = match fetch_matching_rules(&state.db, event_type, trigger_scene, severity, title, host).await {
         Ok(r) => r,
         Err(e) => {
@@ -291,12 +463,7 @@ pub async fn dispatch_event(
     };
 
     if rules.is_empty() {
-        return; // 无匹配规则，跳过
-    }
-
-    // 0) 短信策略匹配（仅告警触发场景）：命中后给已选人员发站内信 + 邮件
-    if trigger_scene == "alert_firing" {
-        dispatch_sms_strategies(state, event_type, severity, title, content, link, host).await;
+        return; // 无匹配通知规则，跳过（不影响短信策略）
     }
 
     let now_str = chrono::Utc::now().to_rfc3339();
@@ -918,6 +1085,7 @@ async fn dispatch_sms_strategies(
     link: &str,
     host: Option<&str>,
 ) {
+    tracing::info!(target: "notification_engine", "dispatch_sms_strategies called: event_type={}, severity={:?}, title={}, host={:?}", event_type, severity, title, host);
     let rows = match sqlx::query(
         "SELECT recipient_user_ids, event_type, event_sub_type, trigger_op, severity_filter, host_filter, name_keyword \
          FROM alert_sms_strategies WHERE enabled = 1",
@@ -942,8 +1110,9 @@ async fn dispatch_sms_strategies(
     let mut hit_user_ids: Vec<String> = Vec::new();
 
     for row in &rows {
-        let rids: String = row.try_get("recipient_user_ids").unwrap_or_else(|_| "[]".to_string());
-        let ids: Vec<String> = serde_json::from_str(&rids).unwrap_or_default();
+        // recipient_user_ids 是 JSON 列，需用 serde_json::Value 获取
+        let rids_val: serde_json::Value = row.try_get::<serde_json::Value, _>("recipient_user_ids").unwrap_or(serde_json::Value::Array(vec![]));
+        let ids: Vec<String> = serde_json::from_value(rids_val).unwrap_or_default();
         if ids.is_empty() {
             continue;
         }
@@ -989,8 +1158,10 @@ async fn dispatch_sms_strategies(
     }
 
     if hit_user_ids.is_empty() {
+        tracing::info!(target: "notification_engine", "dispatch_sms_strategies: no strategy matched, rows={}", rows.len());
         return;
     }
+    tracing::info!(target: "notification_engine", "dispatch_sms_strategies: matched {} users", hit_user_ids.len());
 
     // 站内信：通知每个命中人员
     for uid in &hit_user_ids {
@@ -1005,7 +1176,95 @@ async fn dispatch_sms_strategies(
         .await;
     }
 
-    // 邮件：对配置了邮箱的命中人员，走第一条启用的 email 通道发送
+    // 短信 HTTP 通道：命中后优先走短信平台 HTTP 接口发送
+    // 1) 查启用的 sms_http 通道（按创建时间 ASC，取第一条）
+    let sms_ch_row = sqlx::query(
+        "SELECT id, name, config_json FROM notification_channels \
+         WHERE channel_type = 'sms_http' AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await;
+
+    if let Ok(Some(ref ch_row)) = sms_ch_row {
+        let sms_ch_id: String = ch_row.try_get("id").unwrap_or_default();
+        let sms_ch_name: String = ch_row.try_get("name").unwrap_or_default();
+        let sms_config_str: String = ch_row.try_get("config_json").unwrap_or_else(|_| "{}".to_string());
+
+        // 2) 查命中人员的手机号（仅在职用户）
+        let mobiles = match fetch_user_mobiles(&state.db, &hit_user_ids).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(target: "notification_engine", "查询命中人员手机号失败: {}", e);
+                vec![]
+            }
+        };
+
+        if !mobiles.is_empty() {
+            let started = std::time::Instant::now();
+            let (success_mobiles, failures) = send_sms_http(
+                &sms_config_str,
+                &mobiles,
+                title,
+                content,
+                host.unwrap_or(""),
+                severity.unwrap_or(""),
+                event_type,
+            )
+            .await;
+            let duration_ms = started.elapsed().as_millis() as u32;
+            let sent_at = chrono::Utc::now().to_rfc3339();
+
+            // 汇总错误信息
+            let error_msg: Option<String> = if failures.is_empty() {
+                None
+            } else {
+                Some(failures.iter()
+                    .map(|(m, e)| format!("{}: {}", m, e))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+                    .chars().take(4000).collect())
+            };
+
+            let status = if failures.is_empty() {
+                "success".to_string()
+            } else if success_mobiles.is_empty() {
+                "failed".to_string()
+            } else {
+                "partial".to_string()  // 部分成功
+            };
+
+            let _ = insert_notification_log(
+                &state.db,
+                NotificationLogEntry {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    rule_id: None,
+                    rule_name: Some("短信策略".to_string()),
+                    channel_id: sms_ch_id,
+                    channel_name: sms_ch_name,
+                    channel_type: "sms_http".to_string(),
+                    event_type: event_type.to_string(),
+                    trigger_scene: Some("alert_firing".to_string()),
+                    severity: severity.map(|s| s.to_string()),
+                    recipients: Some(mobiles.join(",")),
+                    title: title.chars().take(500).collect(),
+                    content: Some(content.chars().take(4000).collect()),
+                    link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
+                    status,
+                    error_msg,
+                    response_snippet: Some(format!("成功 {} / 失败 {}", success_mobiles.len(), failures.len())),
+                    duration_ms: Some(duration_ms),
+                    triggered_by: Some("sms_strategy".to_string()),
+                    sent_at,
+                },
+            )
+            .await
+            .map_err(|e| {
+                tracing::warn!(target: "notification_engine", "写短信策略通知日志失败: {}", e);
+            });
+        }
+    }
+
+    // 邮件兜底：对配置了邮箱的命中人员，走第一条启用的 email 通道发送
     let emails = match fetch_user_emails(&state.db, &hit_user_ids).await {
         Ok(e) => e,
         Err(e) => {
@@ -1073,6 +1332,35 @@ async fn dispatch_sms_strategies(
     .map_err(|e| {
         tracing::warn!(target: "notification_engine", "写短信策略通知日志失败: {}", e);
     });
+}
+
+/// 批量查询用户的手机号（id → mobile），仅保留非空手机号（去重）
+async fn fetch_user_mobiles(
+    pool: &sqlx::MySqlPool,
+    user_ids: &[String],
+) -> Result<Vec<String>, String> {
+    if user_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let placeholders = vec!["?"; user_ids.len()].join(",");
+    let sql = format!(
+        "SELECT id, mobile FROM users WHERE employment_status = 'active' AND id IN ({})",
+        placeholders
+    );
+    let mut q = sqlx::query(&sql);
+    for uid in user_ids {
+        q = q.bind(uid);
+    }
+    let rows = q.fetch_all(pool).await.map_err(|e| e.to_string())?;
+    let mut mobiles: Vec<String> = Vec::new();
+    for r in &rows {
+        let mobile: String = r.try_get("mobile").unwrap_or_default();
+        let m = mobile.trim().to_string();
+        if !m.is_empty() && !mobiles.contains(&m) {
+            mobiles.push(m);
+        }
+    }
+    Ok(mobiles)
 }
 
 /// 批量查询用户的 email（id → email），仅保留非空邮箱

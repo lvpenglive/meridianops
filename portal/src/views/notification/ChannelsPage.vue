@@ -48,6 +48,7 @@
           <el-option label="邮件" value="email" />
           <el-option label="飞书" value="feishu" />
           <el-option label="Webhook" value="webhook" />
+          <el-option label="短信平台" value="sms_http" />
         </el-select>
         <el-select
           v-model="filters.enabled"
@@ -141,6 +142,7 @@
             <el-radio-button label="email">邮件</el-radio-button>
             <el-radio-button label="feishu">飞书</el-radio-button>
             <el-radio-button label="webhook">Webhook</el-radio-button>
+            <el-radio-button label="sms_http">短信平台</el-radio-button>
           </el-radio-group>
         </el-form-item>
 
@@ -194,6 +196,58 @@
           </el-form-item>
         </template>
 
+        <!-- 短信平台（HTTP）配置 -->
+        <template v-if="form.channelType === 'sms_http'">
+          <el-form-item label="平台 URL" prop="smsHttp.url">
+            <el-input v-model="form.smsHttp.url" placeholder="http://sms-gw.example.com/api/send" />
+          </el-form-item>
+          <el-form-item label="HTTP 方法">
+            <el-radio-group v-model="form.smsHttp.method">
+              <el-radio-button label="POST">POST</el-radio-button>
+              <el-radio-button label="GET">GET</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="报文格式">
+            <el-radio-group v-model="form.smsHttp.contentType">
+              <el-radio-button label="json">JSON</el-radio-button>
+              <el-radio-button label="xml">XML</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="签名">
+            <el-input v-model="form.smsHttp.signName" placeholder="可选，短信平台签名，如 MeridianOps" />
+          </el-form-item>
+          <el-form-item label="模板 ID">
+            <el-input v-model="form.smsHttp.templateId" placeholder="可选，短信平台模板编号，如 SMS_001" />
+          </el-form-item>
+          <el-form-item label="请求头">
+            <el-input
+              v-model="smsHttpHeadersText"
+              type="textarea"
+              :rows="3"
+              placeholder='JSON 格式，如 {"Authorization": "Bearer xxx"}'
+            />
+          </el-form-item>
+          <el-form-item label="报文模板" prop="smsHttp.bodyTemplate">
+            <el-input
+              v-model="form.smsHttp.bodyTemplate"
+              type="textarea"
+              :rows="6"
+              placeholder='支持变量：${mobile} ${title} ${content} ${host} ${severity} ${eventType} ${timestamp} ${signName} ${templateId}'
+            />
+            <div class="tpl-hint">
+              <span>JSON 示例：</span>
+              <code>{"mobile":"${mobile}","sign":"${signName}","tpl":"${templateId}","params":{"title":"${title}","content":"${content}"}}</code>
+            </div>
+            <div class="tpl-hint">
+              <span>XML 示例：</span>
+              <code>&lt;message&gt;&lt;mobile&gt;${mobile}&lt;/mobile&gt;&lt;content&gt;${title}: ${content}&lt;/content&gt;&lt;/message&gt;</code>
+            </div>
+          </el-form-item>
+          <el-form-item label="成功标识">
+            <el-input v-model="form.smsHttp.successPattern" placeholder="可选，响应文本包含此字符串视为成功，如 OK" />
+          </el-form-item>
+        </template>
+
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
         </el-form-item>
@@ -231,7 +285,7 @@ const testingId = ref<string | null>(null)
 // 筛选 + 分页
 const filters = reactive({
   keyword: '',
-  channelType: '' as '' | 'email' | 'feishu' | 'webhook',
+  channelType: '' as '' | 'email' | 'feishu' | 'webhook' | 'sms_http',
   enabled: null as boolean | null,
 })
 const pagination = reactive({
@@ -282,10 +336,10 @@ function onSizeChange(size: number) {
 
 // ---- 通道类型映射 ----
 function channelTypeLabel(t: string): string {
-  return { email: '邮件', feishu: '飞书', webhook: 'Webhook' }[t] || t
+  return { email: '邮件', feishu: '飞书', webhook: 'Webhook', sms_http: '短信平台' }[t] || t
 }
 function channelTypeTagType(t: string) {
-  return ({ email: 'primary', feishu: 'success', webhook: 'warning' } as Record<string, any>)[t] || 'info'
+  return ({ email: 'primary', feishu: 'success', webhook: 'warning', sms_http: 'danger' } as Record<string, any>)[t] || 'info'
 }
 function configSummary(c: NotificationChannel): string {
   if (!c.config || typeof c.config !== 'object') return '—'
@@ -296,6 +350,10 @@ function configSummary(c: NotificationChannel): string {
     return u.length > 40 ? u.slice(0, 40) + '...' : u || '—'
   }
   if (c.channelType === 'webhook') return cfg.url || '—'
+  if (c.channelType === 'sms_http') {
+    const u = cfg.url || ''
+    return `${cfg.contentType || 'json'} · ${u.length > 30 ? u.slice(0, 30) + '...' : u || '—'}`
+  }
   return '—'
 }
 
@@ -308,7 +366,7 @@ const formRef = ref<FormInstance>()
 const form = reactive({
   id: '',
   name: '',
-  channelType: 'email' as 'email' | 'feishu' | 'webhook',
+  channelType: 'email' as 'email' | 'feishu' | 'webhook' | 'sms_http',
   email: {
     smtpHost: '',
     smtpPort: 465,
@@ -326,10 +384,21 @@ const form = reactive({
     url: '',
     headers: {} as Record<string, string>,
   },
+  smsHttp: {
+    url: '',
+    method: 'POST' as 'POST' | 'GET',
+    contentType: 'json' as 'json' | 'xml',
+    headers: {} as Record<string, string>,
+    signName: '',
+    templateId: '',
+    bodyTemplate: '',
+    successPattern: '',
+  },
   enabled: true,
 })
 
 const webhookHeadersText = ref('')
+const smsHttpHeadersText = ref('')
 
 const rules: FormRules = {
   name: [{ required: true, message: '请输入通道名称', trigger: 'blur' }],
@@ -348,8 +417,10 @@ function openCreate() {
   form.email = { smtpHost: '', smtpPort: 465, username: '', password: '', fromAddr: '', fromName: '', useTls: true }
   form.feishu = { webhookUrl: '', secret: '' }
   form.webhook = { url: '', headers: {} }
+  form.smsHttp = { url: '', method: 'POST', contentType: 'json', headers: {}, signName: '', templateId: '', bodyTemplate: '', successPattern: '' }
   form.enabled = true
   webhookHeadersText.value = ''
+  smsHttpHeadersText.value = ''
   dialogVisible.value = true
 }
 
@@ -378,6 +449,20 @@ function openEdit(row: NotificationChannel) {
     webhookHeadersText.value = form.webhook.headers && Object.keys(form.webhook.headers).length
       ? JSON.stringify(form.webhook.headers, null, 2)
       : ''
+  } else if (row.channelType === 'sms_http') {
+    form.smsHttp = {
+      url: cfg.url || '',
+      method: cfg.method || 'POST',
+      contentType: cfg.contentType || 'json',
+      headers: (cfg.headers as any) || {},
+      signName: cfg.signName || '',
+      templateId: cfg.templateId || '',
+      bodyTemplate: cfg.bodyTemplate || '',
+      successPattern: cfg.successPattern || '',
+    }
+    smsHttpHeadersText.value = form.smsHttp.headers && Object.keys(form.smsHttp.headers).length
+      ? JSON.stringify(form.smsHttp.headers, null, 2)
+      : ''
   }
   dialogVisible.value = true
 }
@@ -400,6 +485,24 @@ function buildConfig(): Record<string, any> {
       throw new Error('请求头 JSON 格式错误')
     }
     return { url: form.webhook.url, headers }
+  }
+  if (form.channelType === 'sms_http') {
+    let headers = {}
+    try {
+      headers = smsHttpHeadersText.value.trim() ? JSON.parse(smsHttpHeadersText.value) : {}
+    } catch {
+      throw new Error('请求头 JSON 格式错误')
+    }
+    return {
+      url: form.smsHttp.url,
+      method: form.smsHttp.method,
+      contentType: form.smsHttp.contentType,
+      headers,
+      signName: form.smsHttp.signName,
+      templateId: form.smsHttp.templateId,
+      bodyTemplate: form.smsHttp.bodyTemplate,
+      successPattern: form.smsHttp.successPattern,
+    }
   }
   return {}
 }
@@ -513,6 +616,20 @@ onMounted(() => {
 .config-summary {
   color: #606266;
   font-size: 12px;
+}
+
+.tpl-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+}
+.tpl-hint code {
+  background: #f4f4f5;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #e6a23c;
+  word-break: break-all;
 }
 
 .empty-tip { padding: 20px 0; }

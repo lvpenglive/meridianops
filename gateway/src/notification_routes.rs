@@ -363,8 +363,10 @@ async fn update_notification_settings(
 // ============================================================
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateChannelReq {
     name: String,
+    #[serde(rename = "channelType", alias = "channel_type")]
     channel_type: String,
     config: Value,
     #[serde(default = "default_true")]
@@ -372,13 +374,15 @@ struct CreateChannelReq {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ListChannelsQuery {
     #[serde(default = "default_page")]
     page: u32,
     #[serde(default = "default_page_size")]
     page_size: u32,
     keyword: Option<String>,           // 名称模糊匹配
-    channel_type: Option<String>,      // email / feishu / webhook
+    #[serde(rename = "channelType", alias = "channel_type")]
+    channel_type: Option<String>,      // email / feishu / webhook / sms_http
     enabled: Option<bool>,             // 启用 / 禁用
 }
 
@@ -468,7 +472,7 @@ async fn create_channel(
     auth::require_permission(&auth, "notification:manage")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
-    if !["email", "feishu", "webhook"].contains(&req.channel_type.as_str()) {
+    if !["email", "feishu", "webhook", "sms_http"].contains(&req.channel_type.as_str()) {
         return Err(AppError::bad("不支持的通道类型，仅支持 email/feishu/webhook"));
     }
 
@@ -495,8 +499,10 @@ async fn create_channel(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UpdateChannelReq {
     name: Option<String>,
+    #[serde(rename = "channelType", alias = "channel_type")]
     channel_type: Option<String>,
     config: Option<Value>,
     #[serde(default = "default_true")]
@@ -513,14 +519,14 @@ async fn update_channel(
     crate::license_routes::require_active_license(&state.db).await?;
 
     let now = chrono::Utc::now().to_rfc3339();
-    let mut q = sqlx::QueryBuilder::<sqlx::MySql>::new("UPDATE notification_channels SET updated_at = ? ");
+    let mut q = sqlx::QueryBuilder::<sqlx::MySql>::new("UPDATE notification_channels SET updated_at = ");
     q.push_bind(now);
 
     if let Some(name) = &req.name {
         q.push(", name = "); q.push_bind(name);
     }
     if let Some(ct) = &req.channel_type {
-        if !["email", "feishu", "webhook"].contains(&ct.as_str()) {
+        if !["email", "feishu", "webhook", "sms_http"].contains(&ct.as_str()) {
             return Err(AppError::bad("不支持的通道类型"));
         }
         q.push(", channel_type = "); q.push_bind(ct);
@@ -594,6 +600,27 @@ async fn test_channel(
         }
         "feishu" => (crate::notification_engine::send_feishu(&config_json, title, &content).await, None),
         "webhook" => (crate::notification_engine::send_webhook(&config_json, title, &content, "test").await, None),
+        "sms_http" => {
+            // 测试用一个占位手机号 13800138000
+            let test_mobile = "13800138000".to_string();
+            let (success, failures) = crate::notification_engine::send_sms_http(
+                &config_json,
+                &[test_mobile.clone()],
+                title,
+                &content,
+                "127.0.0.1",
+                "test",
+                "test",
+            ).await;
+            if success.is_empty() {
+                let err = failures.first()
+                    .map(|(m, e)| format!("{}: {}", m, e))
+                    .unwrap_or_else(|| "未知错误".to_string());
+                (Err(err), Some(test_mobile))
+            } else {
+                (Ok(()), Some(test_mobile))
+            }
+        }
         other => (Err(format!("不支持的通道类型: {}", other)), None),
     };
     let duration_ms = started.elapsed().as_millis() as u32;
