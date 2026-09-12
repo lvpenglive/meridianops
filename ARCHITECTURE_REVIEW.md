@@ -423,4 +423,75 @@ portal/src/ 按行数排序（TS）：
 
 ---
 
+## 8. 补充发现（深度审查）
+
+### 8.1 后台调度器与引擎问题
+
+| 问题 | 位置 | 严重程度 | 说明 |
+|------|------|----------|------|
+| SSH 执行器无重试机制 | `ssh_executor.rs:206-244` | P0 | 网络瞬时故障导致任务永久失败 |
+| 通知发送失败无重试 | `notification_engine.rs:484-568` | P0 | 关键告警通知可能丢失 |
+| 日志告警静默期检查竞态 | `log_alert_scheduler.rs:79-90` | P0 | 多实例可能产生重复告警 |
+| 工单调度器无分布式锁 | `ticket_scheduler.rs:18-30` | P1 | 多实例重复处理 |
+| SSH 主机密钥验证被跳过 | `ssh_executor.rs:106-118` | P1 | 中间人攻击风险 |
+| 工单编号生成器并发冲突 | `workflow_engine.rs:16-50` | P1 | COUNT+INSERT 高并发下不可靠 |
+| ClickHouse 查询无超时 | `log_alert_scheduler.rs:57-64` | P1 | 可能阻塞调度轮次 |
+| 邮件仅发给第一个收件人 | `notification_engine.rs:163-169` | P2 | 多收件人仅首个收到 |
+
+### 8.2 前端额外安全问题
+
+| 问题 | 位置 | 严重程度 | 说明 |
+|------|------|----------|------|
+| Token 存储在 localStorage | `stores/user.ts:52-53` | P0 | XSS 可窃取 token |
+| URL 参数传递 Token | `api/ticket.ts:386-396`, `MainLayout.vue:222-227` | P0 | 泄露到浏览器历史/日志 |
+| Markdown 链接处理可绕过 | `views/aiops/AIOpsPage.vue:439-455` | P1 | `javascript:` 协议未过滤 |
+| 同步数据源 API Token 明文 | `api/types.ts:540-548` | P1 | 应脱敏返回 |
+| 路由守卫职责过重 | `router/index.ts:306-346` | P1 | 7+ 条件分支难维护 |
+| 认证常量重复定义 | `request.ts` + `stores/user.ts` | P2 | 应集中管理 |
+
+### 8.3 设计亮点 ✅
+
+- **幂等设计**：`log_alert_scheduler` 使用 `fingerprint = log_surge:{hostname}:{bucket}` 保证不重复触发
+- **分批删除**：`notification_cleaner` 使用 LIMIT 分批 + 批间 sleep 避免锁表
+- **并发限流**：`ssh_executor` 使用 Tokio Semaphore 限制最大并发 SSH 会话
+- **优雅退避**：调度器启动时延迟 30s 避免抢占数据库连接
+
+---
+
+## 9. 更新后的优先级 Backlog
+
+### P0 — 紧急（共 8 项）
+
+| # | 问题 | 位置 |
+|---|------|------|
+| 1 | MySQL URL 硬编码真实凭据 | `config.rs:144-146` |
+| 2 | Eventide token 硬编码 | `config.rs:254` |
+| 3 | CORS 允许所有来源 | `routes.rs:97` |
+| 4 | 加密密钥默认值非 panic | `crypto.rs:7-12` |
+| 5 | SSH 执行器无重试机制 | `ssh_executor.rs:206-244` |
+| 6 | 通知发送失败无重试队列 | `notification_engine.rs:484-568` |
+| 7 | Token 存储在 localStorage | `stores/user.ts:52` |
+| 8 | URL 参数传递 Token | `api/ticket.ts:386`, `MainLayout.vue:222` |
+
+### P1 — 高优先级（共 14 项）
+
+| # | 问题 | 位置 |
+|---|------|------|
+| 1 | `db.rs` 3211 行 God 文件 | `db.rs` |
+| 2 | 无 API 限流 | 全局 |
+| 3 | 无熔断/重试 | `alert_routes.rs` |
+| 4 | 健康检查无依赖探测 | `routes.rs:64-66` |
+| 5 | 测试覆盖接近零 | 全局 |
+| 6 | JWT secret 默认值仅警告 | `main.rs:70-76` |
+| 7 | 工单调度器无分布式锁 | `ticket_scheduler.rs:18-30` |
+| 8 | SSH 主机密钥验证被跳过 | `ssh_executor.rs:106-118` |
+| 9 | 工单编号生成器并发冲突 | `workflow_engine.rs:16-50` |
+| 10 | ClickHouse 查询无超时 | `log_alert_scheduler.rs:57-64` |
+| 11 | Markdown 链接处理可绕过 XSS | `views/aiops/AIOpsPage.vue` |
+| 12 | 同步数据源 Token 明文返回 | `api/types.ts:540-548` |
+| 13 | 日志告警静默期检查竞态 | `log_alert_scheduler.rs:79-90` |
+| 14 | 路由守卫职责过重 | `router/index.ts:306-346` |
+
+---
+
 *本报告由 Claude 自动生成，基于代码静态分析。建议结合实际运行时监控数据进行验证。*
