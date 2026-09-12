@@ -1,0 +1,129 @@
+﻿cargo : [1m[92m    Checking[0m meridianops-gateway v0.1.0 (D:\rustworkspace\meridianops\gateway)
+At line:15 char:3036
++ ... H = "$env:USERPROFILE\.cargo\bin;$env:PATH"; cargo check 2>&1 | Out-F ...
++                                                  ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([1m[92m    Ch...ianops\gateway):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[1m[91merror[0m[1m[97m: character literal may only contain one codepoint[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:901:54
+    [1m[96m|[0m
+[1m[96m901[0m [1m[96m|[0m     let safe_filename = filename.replace(['/', '\\', '..'], "_");
+    [1m[96m|[0m                                                      [1m[91m^^^^[0m
+    [1m[96m|[0m
+[1m[96mhelp[0m: if you meant to write a string literal, use double quotes
+    [1m[96m|[0m
+[1m[96m901[0m [91m- [0m    let safe_filename = filename.replace(['/', '\\', [91m'[0m..[91m'[0m], "_");
+[1m[96m901[0m [92m+ [0m    let safe_filename = filename.replace(['/', '\\', [92m"[0m..[92m"[0m], "_");
+    [1m[96m|[0m
+
+[1m[91merror[E0432][0m[1m[97m: unresolved import `axum::extract::Multipart`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:24:15
+   [1m[96m|[0m
+[1m[96m24[0m [1m[96m|[0m     extract::{Multipart, Path, Query, State},
+   [1m[96m|[0m               [1m[91m^^^^^^^^^[0m [1m[91mno `Multipart` in `extract`[0m
+   [1m[96m|[0m
+[1m[92mnote[0m: found an item that was configured out
+  [1m[96m--> [0mC:\Users\吕朋\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\axum-0.7.9\src\extract\mod.rs:64:26
+   [1m[96m|[0m
+[1m[96m62[0m [1m[96m|[0m #[cfg(feature = "multipart")]
+   [1m[96m|[0m       [1m[96m---------------------[0m [1m[96mthe item is gated behind the `multipart` feature[0
+m
+[1m[96m63[0m [1m[96m|[0m #[doc(inline)]
+[1m[96m64[0m [1m[96m|[0m pub use self::multipart::Multipart;
+   [1m[96m|[0m                          [1m[92m^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\credential_routes.rs:14:26
+   [1m[96m|[0m
+[1m[96m14[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\dict_routes.rs:19:26
+   [1m[96m|[0m
+[1m[96m19[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\job_routes.rs:26:21
+   [1m[96m|[0m
+[1m[96m26[0m [1m[96m|[0m use axum::routing::{delete, get, post, put};
+   [1m[96m|[0m                     [1m[93m^^^^^^[0m             [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\template_routes.rs:11:78
+   [1m[96m|[0m
+[1m[96m11[0m [1m[96m|[0m use axum::{extract::{Path, Query, State}, Json, Router, routing::{get, post, delete, put
+}};
+   [1m[96m|[0m                                                                              [1m[93m^^^^^^[0m  [1
+m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `HeaderMap` and `put`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:25:12
+   [1m[96m|[0m
+[1m[96m25[0m [1m[96m|[0m     http::{HeaderMap, HeaderValue, header},
+   [1m[96m|[0m            [1m[93m^^^^^^^^^[0m
+[1m[96m26[0m [1m[96m|[0m     response::Response,
+[1m[96m27[0m [1m[96m|[0m     Json, Router, routing::{get, post, delete, put},
+   [1m[96m|[0m                                                [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `TimeZone`[0m
+ [1m[96m--> [0msrc\workflow_engine.rs:7:39
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
+  [1m[96m|[0m                                       [1m[93m^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+    [1m[96m--> [0msrc\cmdb_routes.rs:1085:9
+     [1m[96m|[0m
+[1m[96m1085[0m [1m[96m|[0m     let mut skipped_count = 0i32;
+     [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^^^^^^^^^^[0m
+     [1m[96m|[0m         [1m[96m|[0m
+     [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+   [1m[96m--> [0msrc\license_routes.rs:182:9
+    [1m[96m|[0m
+[1m[96m182[0m [1m[96m|[0m     let mut info = build_license_info(&map);
+    [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^[0m
+    [1m[96m|[0m         [1m[96m|[0m
+    [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+
+[1m[91merror[E0282][0m[1m[97m: type annotations needed[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:888:29
+    [1m[96m|[0m
+[1m[96m888[0m [1m[96m|[0m     while let Some(field) = multipart.next_field().await.map_err(|e| AppError::bad(&for
+mat!("读取上传字段失败: {}", e)))? {
+    [1m[96m|[0m                             [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mcannot infer type[0m
+
+[1m[91merror[E0282][0m[1m[97m: type annotations needed[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:889:12
+    [1m[96m|[0m
+[1m[96m889[0m [1m[96m|[0m         if field.name() == Some("file") {
+    [1m[96m|[0m            [1m[91m^^^^^[0m [1m[91mcannot infer type[0m
+
+[1m[91merror[E0282][0m[1m[97m: type annotations needed[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:897:16
+    [1m[96m|[0m
+[1m[96m897[0m [1m[96m|[0m     let data = field.bytes().await.map_err(|e| AppError::bad(&format!("读取文件内容失败: {}", e
+)))?;
+    [1m[96m|[0m                [1m[91m^^^^^^^^^^^^^^^^^^^[0m [1m[91mcannot infer type[0m
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+   [1m[96m--> [0msrc\knowledge_routes.rs:155:17
+    [1m[96m|[0m
+[1m[96m155[0m [1m[96m|[0m             let mut rest = String::new();
+    [1m[96m|[0m                 [1m[96m----[0m[1m[93m^^^^[0m
+    [1m[96m|[0m                 [1m[96m|[0m
+    [1m[96m|[0m                 [1m[96mhelp: remove this `mut`[0m
+
+[1m[97mSome errors have detailed explanations: E0282, E0432.[0m
+[1m[97mFor more information about an error, try `rustc --explain E0282`.[0m
+[1m[93mwarning[0m: `meridianops-gateway` (bin "meridianops-gateway") generated 9 warnings
+[1m[91merror[0m: could not compile `meridianops-gateway` (bin "meridianops-gateway") due to 5 previous errors; 9 war
+nings emitted

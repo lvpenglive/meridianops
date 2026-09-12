@@ -1,0 +1,387 @@
+﻿cargo : [1m[92m   Compiling[0m meridianops-gateway v0.1.0 (D:\rustworkspace\meridianops\gateway)
+At line:15 char:1777
++ ... ows Kits\10\bin\10.0.22000.0\x64;$env:PATH"; cargo build 2>&1 | Out-F ...
++                                                  ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([1m[92m   Com...ianops\gateway):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\credential_routes.rs:14:26
+   [1m[96m|[0m
+[1m[96m14[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\dict_routes.rs:19:26
+   [1m[96m|[0m
+[1m[96m19[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\job_routes.rs:26:21
+   [1m[96m|[0m
+[1m[96m26[0m [1m[96m|[0m use axum::routing::{delete, get, post, put};
+   [1m[96m|[0m                     [1m[93m^^^^^^[0m             [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\template_routes.rs:11:78
+   [1m[96m|[0m
+[1m[96m11[0m [1m[96m|[0m use axum::{extract::{Path, Query, State}, Json, Router, routing::{get, post, delete, put
+}};
+   [1m[96m|[0m                                                                              [1m[93m^^^^^^[0m  [1
+m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:19:40
+   [1m[96m|[0m
+[1m[96m19[0m [1m[96m|[0m     Json, Router, routing::{get, post, delete, put},
+   [1m[96m|[0m                                        [1m[93m^^^^^^[0m  [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `TimeZone`[0m
+ [1m[96m--> [0msrc\workflow_engine.rs:7:39
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
+  [1m[96m|[0m                                       [1m[93m^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+    [1m[96m--> [0msrc\cmdb_routes.rs:1085:9
+     [1m[96m|[0m
+[1m[96m1085[0m [1m[96m|[0m     let mut skipped_count = 0i32;
+     [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^^^^^^^^^^[0m
+     [1m[96m|[0m         [1m[96m|[0m
+     [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+   [1m[96m--> [0msrc\license_routes.rs:182:9
+    [1m[96m|[0m
+[1m[96m182[0m [1m[96m|[0m     let mut info = build_license_info(&map);
+    [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^[0m
+    [1m[96m|[0m         [1m[96m|[0m
+    [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+   [1m[96m--> [0msrc\knowledge_routes.rs:155:17
+    [1m[96m|[0m
+[1m[96m155[0m [1m[96m|[0m             let mut rest = String::new();
+    [1m[96m|[0m                 [1m[96m----[0m[1m[93m^^^^[0m
+    [1m[96m|[0m                 [1m[96m|[0m
+    [1m[96m|[0m                 [1m[96mhelp: remove this `mut`[0m
+
+[1m[93mwarning[0m[1m[97m: field `value` is never read[0m
+    [1m[96m--> [0msrc\alert_routes.rs:1243:5
+     [1m[96m|[0m
+[1m[96m1227[0m [1m[96m|[0m struct EventideAlertPayload {
+     [1m[96m|[0m        [1m[96m--------------------[0m [1m[96mfield in this struct[0m
+[1m[96m...[0m
+[1m[96m1243[0m [1m[96m|[0m     value: Option<f64>,
+     [1m[96m|[0m     [1m[93m^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `EventideAlertPayload` has a derived impl for the trait `Debug`, but this is int
+entionally ignored during dead code analysis
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: function `normalize_severity` is never used[0m
+    [1m[96m--> [0msrc\alert_routes.rs:1550:4
+     [1m[96m|[0m
+[1m[96m1550[0m [1m[96m|[0m fn normalize_severity(s: Option<&str>) -> String {
+     [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `audit_middleware` is never used[0m
+  [1m[96m--> [0msrc\audit.rs:52:14
+   [1m[96m|[0m
+[1m[96m52[0m [1m[96m|[0m pub async fn audit_middleware(
+   [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `require_admin` is never used[0m
+   [1m[96m--> [0msrc\auth.rs:253:8
+    [1m[96m|[0m
+[1m[96m253[0m [1m[96m|[0m pub fn require_admin(user: &AuthUser) -> Result<(), AppError> {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: field `role` is never read[0m
+   [1m[96m--> [0msrc\auth_routes.rs:464:9
+    [1m[96m|[0m
+[1m[96m461[0m [1m[96m|[0m pub struct UpdateUserRequest {
+    [1m[96m|[0m            [1m[96m-----------------[0m [1m[96mfield in this struct[0m
+[1m[96m...[0m
+[1m[96m464[0m [1m[96m|[0m     pub role: Option<String>,
+    [1m[96m|[0m         [1m[93m^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `UpdateUserRequest` has a derived impl for the trait `Debug`, but this is intenti
+onally ignored during dead code analysis
+
+[1m[93mwarning[0m[1m[97m: fields `failed_login_attempts` and `locked_until` are never read[0m
+  [1m[96m--> [0msrc\db.rs:30:9
+   [1m[96m|[0m
+[1m[96m19[0m [1m[96m|[0m pub struct User {
+   [1m[96m|[0m            [1m[96m----[0m [1m[96mfields in this struct[0m
+[1m[96m...[0m
+[1m[96m30[0m [1m[96m|[0m     pub failed_login_attempts: i32,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[96m31[0m [1m[96m|[0m     pub locked_until: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `User` has derived impls for the traits `Clone` and `Debug`, but these are intenti
+onally ignored during dead code analysis
+
+[1m[93mwarning[0m[1m[97m: function `find_role_by_name` is never used[0m
+   [1m[96m--> [0msrc\db.rs:449:14
+    [1m[96m|[0m
+[1m[96m449[0m [1m[96m|[0m pub async fn find_role_by_name(pool: &DbPool, name: &str) -> anyhow::Result<Option<Role
+>> {
+    [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `list_permission_codes_by_role` is never used[0m
+   [1m[96m--> [0msrc\db.rs:566:14
+    [1m[96m|[0m
+[1m[96m566[0m [1m[96m|[0m pub async fn list_permission_codes_by_role(pool: &DbPool, role_id: &str) -> anyhow::Res
+ult<Vec<String>> {
+    [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `list_ci_model_attrs_batch` is never used[0m
+    [1m[96m--> [0msrc\db.rs:1571:14
+     [1m[96m|[0m
+[1m[96m1571[0m [1m[96m|[0m pub async fn list_ci_model_attrs_batch(
+     [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `list_enabled_ci_relation_types` is never used[0m
+    [1m[96m--> [0msrc\db.rs:1962:14
+     [1m[96m|[0m
+[1m[96m1962[0m [1m[96m|[0m pub async fn list_enabled_ci_relation_types(pool: &DbPool) -> anyhow::Result<Vec<CiRel
+ationType>> {
+     [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `find_ci_instance_by_external` is never used[0m
+    [1m[96m--> [0msrc\db.rs:2319:14
+     [1m[96m|[0m
+[1m[96m2319[0m [1m[96m|[0m pub async fn find_ci_instance_by_external(
+     [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: field `model_code` is never read[0m
+    [1m[96m--> [0msrc\db.rs:2737:9
+     [1m[96m|[0m
+[1m[96m2735[0m [1m[96m|[0m pub struct MappedInstance {
+     [1m[96m|[0m            [1m[96m--------------[0m [1m[96mfield in this struct[0m
+[1m[96m2736[0m [1m[96m|[0m     pub external_id: String,
+[1m[96m2737[0m [1m[96m|[0m     pub model_code: String,
+     [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `find_api_token` is never used[0m
+    [1m[96m--> [0msrc\db.rs:2978:14
+     [1m[96m|[0m
+[1m[96m2978[0m [1m[96m|[0m pub async fn find_api_token(pool: &DbPool, id: &str) -> anyhow::Result<Option<ApiToken
+>> {
+     [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `get_user_role_and_permissions` is never used[0m
+    [1m[96m--> [0msrc\db.rs:2991:14
+     [1m[96m|[0m
+[1m[96m2991[0m [1m[96m|[0m pub async fn get_user_role_and_permissions(
+     [1m[96m|[0m              [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: field `signature_valid` is never read[0m
+  [1m[96m--> [0msrc\license_crypto.rs:59:9
+   [1m[96m|[0m
+[1m[96m56[0m [1m[96m|[0m pub struct VerifiedLicense {
+   [1m[96m|[0m            [1m[96m---------------[0m [1m[96mfield in this struct[0m
+[1m[96m...[0m
+[1m[96m59[0m [1m[96m|[0m     pub signature_valid: bool,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `VerifiedLicense` has a derived impl for the trait `Debug`, but this is intentiona
+lly ignored during dead code analysis
+
+[1m[93mwarning[0m[1m[97m: constant `LICENSE_KEYS` is never used[0m
+  [1m[96m--> [0msrc\license_routes.rs:51:7
+   [1m[96m|[0m
+[1m[96m51[0m [1m[96m|[0m const LICENSE_KEYS: &[&str] = &[
+   [1m[96m|[0m       [1m[93m^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: fields `id` and `name` are never read[0m
+  [1m[96m--> [0msrc\ssh_executor.rs:35:9
+   [1m[96m|[0m
+[1m[96m34[0m [1m[96m|[0m pub struct SshCredential {
+   [1m[96m|[0m            [1m[96m-------------[0m [1m[96mfields in this struct[0m
+[1m[96m35[0m [1m[96m|[0m     pub id: i64,
+   [1m[96m|[0m         [1m[93m^^[0m
+[1m[96m36[0m [1m[96m|[0m     pub name: String,
+   [1m[96m|[0m         [1m[93m^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: field `asset_name` is never read[0m
+  [1m[96m--> [0msrc\ssh_executor.rs:47:9
+   [1m[96m|[0m
+[1m[96m45[0m [1m[96m|[0m pub struct SshTarget {
+   [1m[96m|[0m            [1m[96m---------[0m [1m[96mfield in this struct[0m
+[1m[96m46[0m [1m[96m|[0m     pub asset_id: String,
+[1m[96m47[0m [1m[96m|[0m     pub asset_name: String,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: field `error` is never read[0m
+  [1m[96m--> [0msrc\ssh_executor.rs:60:9
+   [1m[96m|[0m
+[1m[96m53[0m [1m[96m|[0m pub struct SshExecResult {
+   [1m[96m|[0m            [1m[96m-------------[0m [1m[96mfield in this struct[0m
+[1m[96m...[0m
+[1m[96m60[0m [1m[96m|[0m     pub error: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `ticketType` should have a snake case name[0m
+  [1m[96m--> [0msrc\template_routes.rs:32:9
+   [1m[96m|[0m
+[1m[96m32[0m [1m[96m|[0m     pub ticketType: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `ticket_type`[0
+m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: structure field `displayName` should have a snake case name[0m
+  [1m[96m--> [0msrc\template_routes.rs:41:27
+   [1m[96m|[0m
+[1m[96m41[0m [1m[96m|[0m     #[serde(default)] pub displayName: Option<String>,
+   [1m[96m|[0m                           [1m[93m^^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake cas
+e: `display_name`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `ticketType` should have a snake case name[0m
+  [1m[96m--> [0msrc\template_routes.rs:42:9
+   [1m[96m|[0m
+[1m[96m42[0m [1m[96m|[0m     pub ticketType: String,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `ticket_type`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `displayName` should have a snake case name[0m
+  [1m[96m--> [0msrc\template_routes.rs:57:9
+   [1m[96m|[0m
+[1m[96m57[0m [1m[96m|[0m     pub displayName: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `display_name`
+[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `ticketType` should have a snake case name[0m
+  [1m[96m--> [0msrc\template_routes.rs:58:9
+   [1m[96m|[0m
+[1m[96m58[0m [1m[96m|[0m     pub ticketType: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `ticket_type`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `pageSize` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:55:37
+   [1m[96m|[0m
+[1m[96m55[0m [1m[96m|[0m     #[serde(default = "psize")] pub pageSize: i64,
+   [1m[96m|[0m                                     [1m[93m^^^^^^^^[0m [1m[93mhelp: convert the identifier to sn
+ake case: `page_size`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `ticketType` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:56:9
+   [1m[96m|[0m
+[1m[96m56[0m [1m[96m|[0m     pub ticketType: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `ticket_type`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `assigneeId` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:60:9
+   [1m[96m|[0m
+[1m[96m60[0m [1m[96m|[0m     pub assigneeId: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `assignee_id`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `reporterId` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:61:9
+   [1m[96m|[0m
+[1m[96m61[0m [1m[96m|[0m     pub reporterId: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `reporter_id`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `templateId` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:62:9
+   [1m[96m|[0m
+[1m[96m62[0m [1m[96m|[0m     pub templateId: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `template_id`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `slaState` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:64:9
+   [1m[96m|[0m
+[1m[96m64[0m [1m[96m|[0m     pub slaState: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `sla_state`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `createdAtFrom` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:65:9
+   [1m[96m|[0m
+[1m[96m65[0m [1m[96m|[0m     pub createdAtFrom: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `created_at_f
+rom`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `createdAtTo` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:66:9
+   [1m[96m|[0m
+[1m[96m66[0m [1m[96m|[0m     pub createdAtTo: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `created_at_to`
+[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `ticketType` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:73:9
+   [1m[96m|[0m
+[1m[96m73[0m [1m[96m|[0m     pub ticketType: String,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `ticket_type`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `assigneeId` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:78:27
+   [1m[96m|[0m
+[1m[96m78[0m [1m[96m|[0m     #[serde(default)] pub assigneeId: Option<String>,
+   [1m[96m|[0m                           [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case
+: `assignee_id`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `templateId` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:79:27
+   [1m[96m|[0m
+[1m[96m79[0m [1m[96m|[0m     #[serde(default)] pub templateId: Option<String>,
+   [1m[96m|[0m                           [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case
+: `template_id`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `alertIds` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:80:27
+   [1m[96m|[0m
+[1m[96m80[0m [1m[96m|[0m     #[serde(default)] pub alertIds: Vec<String>,
+   [1m[96m|[0m                           [1m[93m^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: 
+`alert_ids`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `assigneeId` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:91:9
+   [1m[96m|[0m
+[1m[96m91[0m [1m[96m|[0m     pub assigneeId: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `assignee_id`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `assigneeId` should have a snake case name[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:97:9
+   [1m[96m|[0m
+[1m[96m97[0m [1m[96m|[0m     pub assigneeId: String,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `assignee_id`[0
+m
+
+[1m[93mwarning[0m[1m[97m: structure field `alertId` should have a snake case name[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:103:9
+    [1m[96m|[0m
+[1m[96m103[0m [1m[96m|[0m     pub alertId: String,
+    [1m[96m|[0m         [1m[93m^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `alert_id`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `userId` should have a snake case name[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:110:9
+    [1m[96m|[0m
+[1m[96m110[0m [1m[96m|[0m     pub userId: Option<String>,
+    [1m[96m|[0m         [1m[93m^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `user_id`[0m
+
+[1m[93mwarning[0m[1m[97m: structure field `toNodeKey` should have a snake case name[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:113:9
+    [1m[96m|[0m
+[1m[96m113[0m [1m[96m|[0m     pub toNodeKey: Option<String>,
+    [1m[96m|[0m         [1m[93m^^^^^^^^^[0m [1m[93mhelp: convert the identifier to snake case: `to_node_key`[0
+m
+
+[1m[93mwarning[0m: `meridianops-gateway` (bin "meridianops-gateway") generated 50 warnings (run `cargo fix --bin "me
+ridianops-gateway" -p meridianops-gateway` to apply 9 suggestions)
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 23.53s

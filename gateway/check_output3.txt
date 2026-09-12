@@ -1,0 +1,323 @@
+﻿cargo : [1m[92m     Locking[0m 1 package to latest compatible version
+At line:15 char:3036
++ ... H = "$env:USERPROFILE\.cargo\bin;$env:PATH"; cargo check 2>&1 | Out-F ...
++                                                  ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([1m[92m     L...patible version:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[1m[92m      Adding[0m multer v3.1.0
+[1m[92m    Checking[0m spin v0.9.9
+[1m[92m   Compiling[0m multer v3.1.0
+[1m[92m    Checking[0m lazy_static v1.5.0
+[1m[92m    Checking[0m num-bigint-dig v0.8.6
+[1m[92m    Checking[0m sharded-slab v0.1.7
+[1m[92m    Checking[0m jieba-rs v0.7.4
+[1m[92m    Checking[0m tracing-subscriber v0.3.23
+[1m[92m    Checking[0m rsa v0.9.10
+[1m[92m    Checking[0m axum v0.7.9
+[1m[92m    Checking[0m ssh-key v0.6.7
+[1m[92m    Checking[0m sqlx-mysql v0.8.6
+[1m[92m    Checking[0m russh-keys v0.46.0
+[1m[92m    Checking[0m sqlx v0.8.6
+[1m[92m    Checking[0m russh v0.46.0
+[1m[92m    Checking[0m meridianops-gateway v0.1.0 (D:\rustworkspace\meridianops\gateway)
+[1m[91merror[0m[1m[97m: character literal may only contain one codepoint[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1650:54
+     [1m[96m|[0m
+[1m[96m1650[0m [1m[96m|[0m     let safe_filename = filename.replace(['/', '\\', '..'], "_");
+     [1m[96m|[0m                                                      [1m[91m^^^^[0m
+     [1m[96m|[0m
+[1m[96mhelp[0m: if you meant to write a string literal, use double quotes
+     [1m[96m|[0m
+[1m[96m1650[0m [91m- [0m    let safe_filename = filename.replace(['/', '\\', [91m'[0m..[91m'[0m], "_");
+[1m[96m1650[0m [92m+ [0m    let safe_filename = filename.replace(['/', '\\', [92m"[0m..[92m"[0m], "_");
+     [1m[96m|[0m
+
+[1m[91merror[E0428][0m[1m[97m: the name `upload_attachment` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1622:1
+     [1m[96m|[0m
+ [1m[96m873[0m [1m[96m|[0m [1m[96m/[0m pub async fn upload_attachment(
+ [1m[96m874[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+ [1m[96m875[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+ [1m[96m876[0m [1m[96m|[0m [1m[96m|[0m     Path(ticket_id): Path<String>,
+[1m[96m...[0m    [1m[96m|[0m
+ [1m[96m930[0m [1m[96m|[0m [1m[96m|[0m     })))
+ [1m[96m931[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96mprevious definition of the value `upload_attachment` here[0m
+[1m[96m...[0m
+[1m[96m1622[0m [1m[96m|[0m [1m[91m/[0m pub async fn upload_attachment(
+[1m[96m1623[0m [1m[96m|[0m [1m[91m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1624[0m [1m[96m|[0m [1m[91m|[0m     auth: AuthUser,
+[1m[96m1625[0m [1m[96m|[0m [1m[91m|[0m     Path(ticket_id): Path<String>,
+[1m[96m...[0m    [1m[91m|[0m
+[1m[96m1679[0m [1m[96m|[0m [1m[91m|[0m     })))
+[1m[96m1680[0m [1m[96m|[0m [1m[91m|[0m }
+     [1m[96m|[0m [1m[91m|_^[0m [1m[91m`upload_attachment` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `upload_attachment` must be defined only once in the value namespace of this mod
+ule
+
+[1m[91merror[E0428][0m[1m[97m: the name `list_attachments` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1683:1
+     [1m[96m|[0m
+ [1m[96m934[0m [1m[96m|[0m [1m[96m/[0m pub async fn list_attachments(
+ [1m[96m935[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+ [1m[96m936[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+ [1m[96m937[0m [1m[96m|[0m [1m[96m|[0m     Path(ticket_id): Path<String>,
+[1m[96m...[0m    [1m[96m|[0m
+ [1m[96m958[0m [1m[96m|[0m [1m[96m|[0m     Ok(Json(json!({"code":0,"message":"ok","data":items})))
+ [1m[96m959[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96mprevious definition of the value `list_attachments` here[0m
+[1m[96m...[0m
+[1m[96m1683[0m [1m[96m|[0m [1m[91m/[0m pub async fn list_attachments(
+[1m[96m1684[0m [1m[96m|[0m [1m[91m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1685[0m [1m[96m|[0m [1m[91m|[0m     auth: AuthUser,
+[1m[96m1686[0m [1m[96m|[0m [1m[91m|[0m     Path(ticket_id): Path<String>,
+[1m[96m...[0m    [1m[91m|[0m
+[1m[96m1707[0m [1m[96m|[0m [1m[91m|[0m     Ok(Json(json!({"code":0,"message":"ok","data":items})))
+[1m[96m1708[0m [1m[96m|[0m [1m[91m|[0m }
+     [1m[96m|[0m [1m[91m|_^[0m [1m[91m`list_attachments` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `list_attachments` must be defined only once in the value namespace of this modu
+le
+
+[1m[91merror[E0428][0m[1m[97m: the name `download_attachment` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1711:1
+     [1m[96m|[0m
+ [1m[96m962[0m [1m[96m|[0m [1m[96m/[0m pub async fn download_attachment(
+ [1m[96m963[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+ [1m[96m964[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+ [1m[96m965[0m [1m[96m|[0m [1m[96m|[0m     Path(att_id): Path<String>,
+[1m[96m...[0m    [1m[96m|[0m
+ [1m[96m987[0m [1m[96m|[0m [1m[96m|[0m     Ok(response)
+ [1m[96m988[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96mprevious definition of the value `download_attachment` here[0m
+[1m[96m...[0m
+[1m[96m1711[0m [1m[96m|[0m [1m[91m/[0m pub async fn download_attachment(
+[1m[96m1712[0m [1m[96m|[0m [1m[91m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1713[0m [1m[96m|[0m [1m[91m|[0m     auth: AuthUser,
+[1m[96m1714[0m [1m[96m|[0m [1m[91m|[0m     Path(att_id): Path<String>,
+[1m[96m...[0m    [1m[91m|[0m
+[1m[96m1736[0m [1m[96m|[0m [1m[91m|[0m     Ok(response)
+[1m[96m1737[0m [1m[96m|[0m [1m[91m|[0m }
+     [1m[96m|[0m [1m[91m|_^[0m [1m[91m`download_attachment` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `download_attachment` must be defined only once in the value namespace of this m
+odule
+
+[1m[91merror[E0428][0m[1m[97m: the name `delete_attachment` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1740:1
+     [1m[96m|[0m
+ [1m[96m991[0m [1m[96m|[0m [1m[96m/[0m pub async fn delete_attachment(
+ [1m[96m992[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+ [1m[96m993[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+ [1m[96m994[0m [1m[96m|[0m [1m[96m|[0m     Path(att_id): Path<String>,
+[1m[96m...[0m    [1m[96m|[0m
+[1m[96m1013[0m [1m[96m|[0m [1m[96m|[0m     Ok(Json(json!({"code":0,"message":"ok"})))
+[1m[96m1014[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96mprevious definition of the value `delete_attachment` here[0m
+[1m[96m...[0m
+[1m[96m1740[0m [1m[96m|[0m [1m[91m/[0m pub async fn delete_attachment(
+[1m[96m1741[0m [1m[96m|[0m [1m[91m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1742[0m [1m[96m|[0m [1m[91m|[0m     auth: AuthUser,
+[1m[96m1743[0m [1m[96m|[0m [1m[91m|[0m     Path(att_id): Path<String>,
+[1m[96m...[0m    [1m[91m|[0m
+[1m[96m1762[0m [1m[96m|[0m [1m[91m|[0m     Ok(Json(json!({"code":0,"message":"ok"})))
+[1m[96m1763[0m [1m[96m|[0m [1m[91m|[0m }
+     [1m[96m|[0m [1m[91m|_^[0m [1m[91m`delete_attachment` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `delete_attachment` must be defined only once in the value namespace of this mod
+ule
+
+[1m[91merror[E0428][0m[1m[97m: the name `watch_ticket` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1768:1
+     [1m[96m|[0m
+[1m[96m1019[0m [1m[96m|[0m [1m[96m/[0m pub async fn watch_ticket(
+[1m[96m1020[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1021[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+[1m[96m1022[0m [1m[96m|[0m [1m[96m|[0m     Path(ticket_id): Path<String>,
+[1m[96m...[0m    [1m[96m|[0m
+[1m[96m1044[0m [1m[96m|[0m [1m[96m|[0m     Ok(Json(json!({"code":0,"message":"ok","watched":req.watched})))
+[1m[96m1045[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96mprevious definition of the value `watch_ticket` here[0m
+[1m[96m...[0m
+[1m[96m1768[0m [1m[96m|[0m [1m[91m/[0m pub async fn watch_ticket(
+[1m[96m1769[0m [1m[96m|[0m [1m[91m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1770[0m [1m[96m|[0m [1m[91m|[0m     auth: AuthUser,
+[1m[96m1771[0m [1m[96m|[0m [1m[91m|[0m     Path(ticket_id): Path<String>,
+[1m[96m...[0m    [1m[91m|[0m
+[1m[96m1793[0m [1m[96m|[0m [1m[91m|[0m     Ok(Json(json!({"code":0,"message":"ok","watched":req.watched})))
+[1m[96m1794[0m [1m[96m|[0m [1m[91m|[0m }
+     [1m[96m|[0m [1m[91m|_^[0m [1m[91m`watch_ticket` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `watch_ticket` must be defined only once in the value namespace of this module
+
+[1m[91merror[E0428][0m[1m[97m: the name `my_watching_tickets` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1797:1
+     [1m[96m|[0m
+[1m[96m1048[0m [1m[96m|[0m [1m[96m/[0m pub async fn my_watching_tickets(
+[1m[96m1049[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1050[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+[1m[96m1051[0m [1m[96m|[0m [1m[96m|[0m     Query(q): Query<PageQ>,
+[1m[96m...[0m    [1m[96m|[0m
+[1m[96m1137[0m [1m[96m|[0m [1m[96m|[0m     })))
+[1m[96m1138[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96mprevious definition of the value `my_watching_tickets` here[0m
+[1m[96m...[0m
+[1m[96m1797[0m [1m[96m|[0m [1m[91m/[0m pub async fn my_watching_tickets(
+[1m[96m1798[0m [1m[96m|[0m [1m[91m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1799[0m [1m[96m|[0m [1m[91m|[0m     auth: AuthUser,
+[1m[96m1800[0m [1m[96m|[0m [1m[91m|[0m     Query(q): Query<PageQ>,
+[1m[96m...[0m    [1m[91m|[0m
+[1m[96m1886[0m [1m[96m|[0m [1m[91m|[0m     })))
+[1m[96m1887[0m [1m[96m|[0m [1m[91m|[0m }
+     [1m[96m|[0m [1m[91m|_^[0m [1m[91m`my_watching_tickets` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `my_watching_tickets` must be defined only once in the value namespace of this m
+odule
+
+[1m[91merror[E0428][0m[1m[97m: the name `export_tickets_csv` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1892:1
+     [1m[96m|[0m
+[1m[96m1143[0m [1m[96m|[0m [1m[96m/[0m pub async fn export_tickets_csv(
+[1m[96m1144[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1145[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+[1m[96m1146[0m [1m[96m|[0m [1m[96m|[0m     Query(q): Query<PageQ>,
+[1m[96m...[0m    [1m[96m|[0m
+[1m[96m1235[0m [1m[96m|[0m [1m[96m|[0m     Ok(response)
+[1m[96m1236[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96mprevious definition of the value `export_tickets_csv` here[0m
+[1m[96m...[0m
+[1m[96m1892[0m [1m[96m|[0m [1m[91m/[0m pub async fn export_tickets_csv(
+[1m[96m1893[0m [1m[96m|[0m [1m[91m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1894[0m [1m[96m|[0m [1m[91m|[0m     auth: AuthUser,
+[1m[96m1895[0m [1m[96m|[0m [1m[91m|[0m     Query(q): Query<PageQ>,
+[1m[96m...[0m    [1m[91m|[0m
+[1m[96m1984[0m [1m[96m|[0m [1m[91m|[0m     Ok(response)
+[1m[96m1985[0m [1m[96m|[0m [1m[91m|[0m }
+     [1m[96m|[0m [1m[91m|_^[0m [1m[91m`export_tickets_csv` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `export_tickets_csv` must be defined only once in the value namespace of this mo
+dule
+
+[1m[91merror[E0428][0m[1m[97m: the name `WatchReq` is defined multiple times[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1617:1
+     [1m[96m|[0m
+ [1m[96m868[0m [1m[96m|[0m pub struct WatchReq {
+     [1m[96m|[0m [1m[96m-------------------[0m [1m[96mprevious definition of the type `WatchReq` here[0m
+[1m[96m...[0m
+[1m[96m1617[0m [1m[96m|[0m pub struct WatchReq {
+     [1m[96m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^[0m [1m[91m`WatchReq` redefined here[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `WatchReq` must be defined only once in the type namespace of this module
+
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\credential_routes.rs:14:26
+   [1m[96m|[0m
+[1m[96m14[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\dict_routes.rs:19:26
+   [1m[96m|[0m
+[1m[96m19[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\job_routes.rs:26:21
+   [1m[96m|[0m
+[1m[96m26[0m [1m[96m|[0m use axum::routing::{delete, get, post, put};
+   [1m[96m|[0m                     [1m[93m^^^^^^[0m             [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\template_routes.rs:11:78
+   [1m[96m|[0m
+[1m[96m11[0m [1m[96m|[0m use axum::{extract::{Path, Query, State}, Json, Router, routing::{get, post, delete, put
+}};
+   [1m[96m|[0m                                                                              [1m[93m^^^^^^[0m  [1
+m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `HeaderMap` and `put`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:25:12
+   [1m[96m|[0m
+[1m[96m25[0m [1m[96m|[0m     http::{HeaderMap, HeaderValue, header},
+   [1m[96m|[0m            [1m[93m^^^^^^^^^[0m
+[1m[96m26[0m [1m[96m|[0m     response::Response,
+[1m[96m27[0m [1m[96m|[0m     Json, Router, routing::{get, post, delete, put},
+   [1m[96m|[0m                                                [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `TimeZone`[0m
+ [1m[96m--> [0msrc\workflow_engine.rs:7:39
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
+  [1m[96m|[0m                                       [1m[93m^^^^^^^^[0m
+
+[1m[91merror[E0119][0m[1m[97m: conflicting implementations of trait `std::fmt::Debug` for type `ticket_routes::Wat
+chReq`[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1616:10
+     [1m[96m|[0m
+ [1m[96m867[0m [1m[96m|[0m #[derive(Debug, Deserialize)]
+     [1m[96m|[0m          [1m[96m-----[0m [1m[96mfirst implementation here[0m
+[1m[96m...[0m
+[1m[96m1616[0m [1m[96m|[0m #[derive(Debug, Deserialize)]
+     [1m[96m|[0m          [1m[91m^^^^^[0m [1m[91mconflicting implementation for `ticket_routes::WatchReq`[0m
+
+[1m[91merror[E0119][0m[1m[97m: conflicting implementations of trait `Deserialize<'_>` for type `ticket_routes::Wat
+chReq`[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:1616:17
+     [1m[96m|[0m
+ [1m[96m867[0m [1m[96m|[0m #[derive(Debug, Deserialize)]
+     [1m[96m|[0m                 [1m[96m-----------[0m [1m[96mfirst implementation here[0m
+[1m[96m...[0m
+[1m[96m1616[0m [1m[96m|[0m #[derive(Debug, Deserialize)]
+     [1m[96m|[0m                 [1m[91m^^^^^^^^^^^[0m [1m[91mconflicting implementation for `ticket_routes::Wa
+tchReq`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: this error originates in the derive macro `Deserialize` (in Nightly builds, run 
+with -Z macro-backtrace for more info)
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+    [1m[96m--> [0msrc\cmdb_routes.rs:1085:9
+     [1m[96m|[0m
+[1m[96m1085[0m [1m[96m|[0m     let mut skipped_count = 0i32;
+     [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^^^^^^^^^^[0m
+     [1m[96m|[0m         [1m[96m|[0m
+     [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+   [1m[96m--> [0msrc\license_routes.rs:182:9
+    [1m[96m|[0m
+[1m[96m182[0m [1m[96m|[0m     let mut info = build_license_info(&map);
+    [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^[0m
+    [1m[96m|[0m         [1m[96m|[0m
+    [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+
+[1m[91merror[E0499][0m[1m[97m: cannot borrow `multipart` as mutable more than once at a time[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:888:29
+    [1m[96m|[0m
+[1m[96m888[0m [1m[96m|[0m     while let Some(field) = multipart.next_field().await.map_err(|e| AppError::bad(&for
+mat!("读取上传字段失败: {}", e)))? {
+    [1m[96m|[0m                             [1m[91m^^^^^^^^^[0m [1m[91m`multipart` was mutably borrowed here in
+ the previous iteration of the loop[0m
+[1m[96m...[0m
+[1m[96m894[0m [1m[96m|[0m     let field = field_opt.ok_or_else(|| AppError::bad("缺少 file 字段"))?;
+    [1m[96m|[0m                 [1m[96m---------[0m [1m[96mfirst borrow used here, in later iteration of loop[
+0m
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+   [1m[96m--> [0msrc\knowledge_routes.rs:155:17
+    [1m[96m|[0m
+[1m[96m155[0m [1m[96m|[0m             let mut rest = String::new();
+    [1m[96m|[0m                 [1m[96m----[0m[1m[93m^^^^[0m
+    [1m[96m|[0m                 [1m[96m|[0m
+    [1m[96m|[0m                 [1m[96mhelp: remove this `mut`[0m
+
+[1m[97mSome errors have detailed explanations: E0119, E0428, E0499.[0m
+[1m[97mFor more information about an error, try `rustc --explain E0119`.[0m
+[1m[93mwarning[0m: `meridianops-gateway` (bin "meridianops-gateway") generated 9 warnings
+[1m[91merror[0m: could not compile `meridianops-gateway` (bin "meridianops-gateway") due to 12 previous errors; 9 wa
+rnings emitted

@@ -1,0 +1,198 @@
+﻿cargo : [1m[92m    Checking[0m meridianops-gateway v0.1.0 (D:\rustworkspace\meridianops\gateway)
+At line:15 char:3036
++ ... H = "$env:USERPROFILE\.cargo\bin;$env:PATH"; cargo check 2>&1 | Out-F ...
++                                                  ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([1m[92m    Ch...ianops\gateway):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[1m[91merror[E0432][0m[1m[97m: unresolved import `axum::extract::Multipart`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:24:15
+   [1m[96m|[0m
+[1m[96m24[0m [1m[96m|[0m     extract::{Multipart, Path, Query, State},
+   [1m[96m|[0m               [1m[91m^^^^^^^^^[0m [1m[91mno `Multipart` in `extract`[0m
+   [1m[96m|[0m
+[1m[92mnote[0m: found an item that was configured out
+  [1m[96m--> [0mC:\Users\吕朋\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\axum-0.7.9\src\extract\mod.rs:64:26
+   [1m[96m|[0m
+[1m[96m62[0m [1m[96m|[0m #[cfg(feature = "multipart")]
+   [1m[96m|[0m       [1m[96m---------------------[0m [1m[96mthe item is gated behind the `multipart` feature[0
+m
+[1m[96m63[0m [1m[96m|[0m #[doc(inline)]
+[1m[96m64[0m [1m[96m|[0m pub use self::multipart::Multipart;
+   [1m[96m|[0m                          [1m[92m^^^^^^^^^[0m
+
+[1m[91merror[E0432][0m[1m[97m: unresolved import `futures_util`[0m
+  [1m[96m--> [0msrc\notification_routes.rs:18:5
+   [1m[96m|[0m
+[1m[96m18[0m [1m[96m|[0m use futures_util::Stream;
+   [1m[96m|[0m     [1m[91m^^^^^^^^^^^^[0m [1m[91muse of unresolved module or unlinked crate `futures_util`[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mhelp[0m: if you wanted to use a crate named `futures_util`, use `cargo add futures_util` to
+ add it to your `Cargo.toml`
+
+[1m[91merror[E0433][0m[1m[97m: failed to resolve: use of unresolved module or unlinked crate `futures_util`[0m
+   [1m[96m--> [0msrc\notification_routes.rs:224:18
+    [1m[96m|[0m
+[1m[96m224[0m [1m[96m|[0m     let stream = futures_util::stream::unfold(rx, move |mut rx| {
+    [1m[96m|[0m                  [1m[91m^^^^^^^^^^^^[0m [1m[91muse of unresolved module or unlinked crate `futu
+res_util`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: if you wanted to use a crate named `futures_util`, use `cargo add futures_util` t
+o add it to your `Cargo.toml`
+
+[1m[91merror[E0425][0m[1m[97m: cannot find value `export_tickets_csv` in this scope[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:61:43
+   [1m[96m|[0m
+[1m[96m61[0m [1m[96m|[0m         .route("/api/tickets/export", get(export_tickets_csv))
+   [1m[96m|[0m                                           [1m[91m^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this 
+scope[0m
+
+[1m[91merror[E0425][0m[1m[97m: cannot find value `my_watching_tickets` in this scope[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:62:48
+   [1m[96m|[0m
+[1m[96m62[0m [1m[96m|[0m         .route("/api/tickets/my-watching", get(my_watching_tickets))
+   [1m[96m|[0m                                                [1m[91m^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in
+ this scope[0m
+
+[1m[91merror[E0425][0m[1m[97m: cannot find value `upload_attachment` in this scope[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:65:53
+   [1m[96m|[0m
+[1m[96m65[0m [1m[96m|[0m         .route("/api/tickets/:id/attachments", post(upload_attachment).get(list_attachme
+nts))
+   [1m[96m|[0m                                                     [1m[91m^^^^^^^^^^^^^^^^^[0m [1m[91mnot found
+ in this scope[0m
+
+[1m[91merror[E0425][0m[1m[97m: cannot find value `list_attachments` in this scope[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:65:76
+   [1m[96m|[0m
+[1m[96m65[0m [1m[96m|[0m         .route("/api/tickets/:id/attachments", post(upload_attachment).get(list_attachme
+nts))
+   [1m[96m|[0m                                                                            [1m[91m^^^^^^^^^^^^^^^^
+[0m [1m[91mnot found in this scope[0m
+
+[1m[91merror[E0425][0m[1m[97m: cannot find value `watch_ticket` in this scope[0m
+    [1m[96m--> [0msrc\ticket_routes.rs:66:47
+     [1m[96m|[0m
+  [1m[96m66[0m [1m[96m|[0m           .route("/api/tickets/:id/watch", post(watch_ticket))
+     [1m[96m|[0m                                                 [1m[91m^^^^^^^^^^^^[0m [1m[91mhelp: a function
+ with a similar name exists: `cancel_ticket`[0m
+[1m[96m...[0m
+[1m[96m1213[0m [1m[96m|[0m [1m[96m/[0m pub async fn cancel_ticket(
+[1m[96m1214[0m [1m[96m|[0m [1m[96m|[0m     State(state): State<Arc<AppState>>,
+[1m[96m1215[0m [1m[96m|[0m [1m[96m|[0m     auth: AuthUser,
+[1m[96m1216[0m [1m[96m|[0m [1m[96m|[0m     Path(id): Path<String>,
+[1m[96m...[0m    [1m[96m|[0m
+[1m[96m1238[0m [1m[96m|[0m [1m[96m|[0m     Ok(Json(json!({"code":0,"message":"ok"})))
+[1m[96m1239[0m [1m[96m|[0m [1m[96m|[0m }
+     [1m[96m|[0m [1m[96m|_-[0m [1m[96msimilarly named function `cancel_ticket` defined here[0m
+
+[1m[91merror[E0425][0m[1m[97m: cannot find value `download_attachment` in this scope[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:75:61
+   [1m[96m|[0m
+[1m[96m75[0m [1m[96m|[0m         .route("/api/tickets/attachments/:id/download", get(download_attachment))
+   [1m[96m|[0m                                                             [1m[91m^^^^^^^^^^^^^^^^^^^[0m [1m[91
+mnot found in this scope[0m
+
+[1m[91merror[E0425][0m[1m[97m: cannot find value `delete_attachment` in this scope[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:76:55
+   [1m[96m|[0m
+[1m[96m76[0m [1m[96m|[0m         .route("/api/tickets/attachments/:id", delete(delete_attachment))
+   [1m[96m|[0m                                                       [1m[91m^^^^^^^^^^^^^^^^^[0m [1m[91mnot fou
+nd in this scope[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\credential_routes.rs:14:26
+   [1m[96m|[0m
+[1m[96m14[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: unused import: `post`[0m
+  [1m[96m--> [0msrc\dict_routes.rs:19:26
+   [1m[96m|[0m
+[1m[96m19[0m [1m[96m|[0m use axum::routing::{get, post};
+   [1m[96m|[0m                          [1m[93m^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\job_routes.rs:26:21
+   [1m[96m|[0m
+[1m[96m26[0m [1m[96m|[0m use axum::routing::{delete, get, post, put};
+   [1m[96m|[0m                     [1m[93m^^^^^^[0m             [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `delete` and `put`[0m
+  [1m[96m--> [0msrc\template_routes.rs:11:78
+   [1m[96m|[0m
+[1m[96m11[0m [1m[96m|[0m use axum::{extract::{Path, Query, State}, Json, Router, routing::{get, post, delete, put
+}};
+   [1m[96m|[0m                                                                              [1m[93m^^^^^^[0m  [1
+m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `std::fs`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:16:5
+   [1m[96m|[0m
+[1m[96m16[0m [1m[96m|[0m use std::fs;
+   [1m[96m|[0m     [1m[93m^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `std::path::PathBuf`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:17:5
+   [1m[96m|[0m
+[1m[96m17[0m [1m[96m|[0m use std::path::PathBuf;
+   [1m[96m|[0m     [1m[93m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `HeaderMap`, `HeaderValue`, `body::Body`, `header`, `put`, and `response
+::Response`[0m
+  [1m[96m--> [0msrc\ticket_routes.rs:23:5
+   [1m[96m|[0m
+[1m[96m23[0m [1m[96m|[0m     body::Body,
+   [1m[96m|[0m     [1m[93m^^^^^^^^^^[0m
+[1m[96m24[0m [1m[96m|[0m     extract::{Multipart, Path, Query, State},
+[1m[96m25[0m [1m[96m|[0m     http::{HeaderMap, HeaderValue, header},
+   [1m[96m|[0m            [1m[93m^^^^^^^^^[0m  [1m[93m^^^^^^^^^^^[0m  [1m[93m^^^^^^[0m
+[1m[96m26[0m [1m[96m|[0m     response::Response,
+   [1m[96m|[0m     [1m[93m^^^^^^^^^^^^^^^^^^[0m
+[1m[96m27[0m [1m[96m|[0m     Json, Router, routing::{get, post, delete, put},
+   [1m[96m|[0m                                                [1m[93m^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `TimeZone`[0m
+ [1m[96m--> [0msrc\workflow_engine.rs:7:39
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
+  [1m[96m|[0m                                       [1m[93m^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+    [1m[96m--> [0msrc\cmdb_routes.rs:1085:9
+     [1m[96m|[0m
+[1m[96m1085[0m [1m[96m|[0m     let mut skipped_count = 0i32;
+     [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^^^^^^^^^^[0m
+     [1m[96m|[0m         [1m[96m|[0m
+     [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+   [1m[96m--> [0msrc\license_routes.rs:182:9
+    [1m[96m|[0m
+[1m[96m182[0m [1m[96m|[0m     let mut info = build_license_info(&map);
+    [1m[96m|[0m         [1m[96m----[0m[1m[93m^^^^[0m
+    [1m[96m|[0m         [1m[96m|[0m
+    [1m[96m|[0m         [1m[96mhelp: remove this `mut`[0m
+
+[1m[91merror[E0308][0m[1m[97m: mismatched types[0m
+   [1m[96m--> [0msrc\ticket_routes.rs:248:36
+    [1m[96m|[0m
+[1m[96m248[0m [1m[96m|[0m [1m[96m...[0m                   if let Ok(d) = crate::workflow_engine::parse_dt(&Som
+e(sla_due)) {
+    [1m[96m|[0m                              [1m[91m^^^^^[0m   [1m[96m-----------------------------------------
+-------[0m [1m[96mthis expression has type `std::option::Option<NaiveDateTime>`[0m
+    [1m[96m|[0m                              [1m[91m|[0m
+    [1m[96m|[0m                              [1m[91mexpected `Option<NaiveDateTime>`, found `Result<_, _>`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: expected enum `[1m[35mstd::option::Option<NaiveDateTime>[0m`
+               found enum `[1m[35mResult<_, _>[0m`
+
+[1m[97mSome errors have detailed explanations: E0308, E0425, E0432, E0433.[0m
+[1m[97mFor more information about an error, try `rustc --explain E0308`.[0m
+[1m[93mwarning[0m: `meridianops-gateway` (bin "meridianops-gateway") generated 10 warnings
+[1m[91merror[0m: could not compile `meridianops-gateway` (bin "meridianops-gateway") due to 11 previous errors; 10 w
+arnings emitted
