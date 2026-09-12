@@ -68,13 +68,25 @@
             <span class="title">🔑 API 令牌管理</span>
           </div>
           <div class="page-header__right">
+            <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width: 120px; margin-right: 12px">
+              <el-option label="有效" value="valid" />
+              <el-option label="已过期" value="expired" />
+              <el-option label="已吊销" value="revoked" />
+            </el-select>
+            <el-input
+              v-model="searchKeyword"
+              placeholder="搜索令牌名称"
+              clearable
+              style="width: 180px; margin-right: 12px"
+              :prefix-icon="Search"
+            />
             <el-button :icon="RefreshRight" size="default" @click="loadTokens"> 刷新</el-button>
             <el-button type="primary" :icon="Plus" @click="openCreateDialog"> 新建令牌</el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="tokens" v-loading="loading" stripe style="width: 100%">
+      <el-table :data="filteredTokens" v-loading="loading" stripe style="width: 100%">
         <el-table-column label="名称" prop="name" min-width="160">
           <template #default="{ row }">
             <div class="name-cell">
@@ -192,10 +204,17 @@
         </el-form-item>
 
         <el-form-item label="权限范围" prop="scopes">
+          <el-input
+            v-model="scopeSearchKeyword"
+            placeholder="搜索权限..."
+            clearable
+            style="margin-bottom: 8px"
+            :prefix-icon="Search"
+          />
           <div class="scope-groups">
             <el-collapse v-model="activeGroups">
               <el-collapse-item
-                v-for="g in permGroups" :key="g.group"
+                v-for="g in filteredPermGroups" :key="g.group"
                 :name="g.group" :title="`${scopeGroupLabel(g.group)} (${g.items.length})`"
               >
                 <el-checkbox-group v-model="createForm.scopes">
@@ -295,10 +314,12 @@
         <el-form-item label="续期方式">
           <el-radio-group v-model="extendForm.ttlType" style="width:100%">
             <el-radio-button value="never">永不过期</el-radio-button>
+            <el-radio-button value="hours">小时</el-radio-button>
             <el-radio-button value="days">天</el-radio-button>
             <el-radio-button value="custom">自定义时间</el-radio-button>
           </el-radio-group>
           <div style="margin-top:10px">
+            <el-input-number v-if="extendForm.ttlType === 'hours'" v-model="extendForm.ttlValue" :min="1" :max="8760" style="width:140px" />
             <el-input-number v-if="extendForm.ttlType === 'days'" v-model="extendForm.ttlValue" :min="1" :max="3650" style="width:140px" />
             <el-date-picker
               v-if="extendForm.ttlType === 'custom'"
@@ -323,7 +344,7 @@ import { useUserStore } from '../../stores/user'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   Key, Clock, Lock, CircleCheck, Plus, RefreshRight,
-  Document,
+  Document, Search,
 } from '@element-plus/icons-vue'
 import {
   createApiToken, deleteApiToken, fetchApiTokens, fetchMyPermissions,
@@ -339,6 +360,10 @@ const myRole = ref<string>('viewer')
 const userStore = useUserStore()
 const isAdmin = computed(() => userStore.role === 'admin')
 
+// 筛选与搜索
+const statusFilter = ref<string>('')
+const searchKeyword = ref('')
+
 const stats = computed(() => {
   const total = tokens.value.length
   let valid = 0, expired = 0, revoked = 0
@@ -348,6 +373,23 @@ const stats = computed(() => {
     else valid++
   }
   return { total, valid, expired, revoked }
+})
+
+const filteredTokens = computed(() => {
+  let result = tokens.value
+  if (statusFilter.value) {
+    result = result.filter((t) => {
+      if (statusFilter.value === 'revoked') return t.revoked
+      if (statusFilter.value === 'expired') return !t.revoked && isExpired(t)
+      if (statusFilter.value === 'valid') return !t.revoked && !isExpired(t)
+      return true
+    })
+  }
+  if (searchKeyword.value.trim()) {
+    const kw = searchKeyword.value.trim().toLowerCase()
+    result = result.filter((t) => t.name.toLowerCase().includes(kw))
+  }
+  return result
 })
 
 async function loadTokens() {
@@ -431,6 +473,19 @@ const createVisible = ref(false)
 const creating = ref(false)
 const createFormRef = ref<FormInstance>()
 const activeGroups = ref<string[]>([])
+const scopeSearchKeyword = ref('')
+
+const filteredPermGroups = computed(() => {
+  if (!scopeSearchKeyword.value.trim()) return permGroups.value
+  const kw = scopeSearchKeyword.value.trim().toLowerCase()
+  return permGroups.value
+    .map((g) => ({
+      group: g.group,
+      items: g.items.filter((p) => p.toLowerCase().includes(kw)),
+    }))
+    .filter((g) => g.items.length > 0)
+})
+
 const createForm = reactive<CreateApiTokenRequest>({
   name: '',
   scopes: [],
@@ -454,10 +509,9 @@ function openCreateDialog() {
     ttlType: 'days',
     ttlValue: 30,
     expiresAt: '',
-    role: isAdmin.value ? 'operator' : 'operator',
+    role: 'operator',
   })
-  // 默认展开第 1 组
-  activeGroups.value = permGroups.value.slice(0, 3).map((g) => g.group)
+  activeGroups.value = permGroups.value.map((g) => g.group)
   createVisible.value = true
 }
 function selectAllScopes() {
@@ -535,7 +589,9 @@ async function revokeToken(t: ApiToken) {
     await revokeApiToken(t.id)
     ElMessage.success('已吊销')
     await loadTokens()
-  } catch {}
+  } catch {
+    // 错误由全局拦截器处理
+  }
 }
 async function deleteToken(t: ApiToken) {
   await ElMessageBox.confirm(`确定彻底删除令牌「${t.name}」？此操作不可恢复。`, '确认删除', {
@@ -545,31 +601,38 @@ async function deleteToken(t: ApiToken) {
     await deleteApiToken(t.id)
     ElMessage.success('已删除')
     await loadTokens()
-  } catch {}
+  } catch {
+    // 错误由全局拦截器处理
+  }
 }
 
 // ============ 续期 ============
+type TtlType = 'never' | 'hours' | 'days' | 'custom'
 const extendVisible = ref(false)
 const extendingToken = ref<ApiToken | null>(null)
-const extendForm = reactive<{ ttlType: string; ttlValue: number; expiresAt: string }>({
+const extendForm = reactive<{ ttlType: TtlType; ttlValue: number; expiresAt: string }>({
   ttlType: 'days', ttlValue: 30, expiresAt: '',
 })
 function extendExpiry(t: ApiToken) {
   extendingToken.value = t
-  Object.assign(extendForm, { ttlType: 'days', ttlValue: 30, expiresAt: '' })
+  Object.assign(extendForm, { ttlType: 'days' as TtlType, ttlValue: 30, expiresAt: '' })
   extendVisible.value = true
 }
 async function submitExtend() {
   if (!extendingToken.value) return
-  const payload: any = { ttlType: extendForm.ttlType as any }
-  if (extendForm.ttlType === 'days') payload.ttlValue = extendForm.ttlValue
-  else if (extendForm.ttlType === 'custom') payload.expiresAt = extendForm.expiresAt
+  const payload = {
+    ttlType: extendForm.ttlType,
+    ttlValue: (extendForm.ttlType === 'hours' || extendForm.ttlType === 'days') ? extendForm.ttlValue : undefined,
+    expiresAt: extendForm.ttlType === 'custom' ? extendForm.expiresAt : undefined,
+  }
   try {
     await updateApiTokenExpiry(extendingToken.value.id, payload)
     ElMessage.success('续期成功')
     extendVisible.value = false
     await loadTokens()
-  } catch {}
+  } catch {
+    // 错误由全局拦截器处理
+  }
 }
 </script>
 

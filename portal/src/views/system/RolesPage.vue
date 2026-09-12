@@ -123,18 +123,34 @@
           <el-tag size="small" type="primary">{{ permRole.displayName || permRole.name }}</el-tag>
           <span class="perm-role-info__label">当前角色</span>
         </div>
+        <el-input
+          v-model="permSearchKeyword"
+          placeholder="搜索权限..."
+          clearable
+          style="margin-bottom: 12px"
+          :prefix-icon="Search"
+        />
         <div v-loading="permLoading" class="perm-groups">
-          <div v-for="g in permGroups" :key="g.module" class="perm-group">
-            <div class="perm-group__title">{{ g.module }}</div>
+          <div v-for="g in filteredPermGroups" :key="g.module" class="perm-group">
+            <div class="perm-group__header">
+              <span class="perm-group__title">{{ g.module }}</span>
+              <el-button size="small" link type="primary" @click="toggleModulePerms(g)">
+                {{ isModuleAllChecked(g) ? '取消全选' : '全选本组' }}
+              </el-button>
+            </div>
             <el-checkbox-group v-model="permChecked">
-              <el-checkbox
+              <el-tooltip
                 v-for="p in g.items"
                 :key="p.id"
-                :value="p.id"
+                :content="p.description || '暂无描述'"
+                placement="top"
+                :show-after="500"
               >
-                {{ p.name }}
-                <span class="perm-code">{{ p.code }}</span>
-              </el-checkbox>
+                <el-checkbox :label="p.id">
+                  {{ p.name }}
+                  <span class="perm-code">{{ p.code }}</span>
+                </el-checkbox>
+              </el-tooltip>
             </el-checkbox-group>
           </div>
         </div>
@@ -154,7 +170,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, EditPen, Setting } from '@element-plus/icons-vue'
+import { Plus, EditPen, Setting, Search } from '@element-plus/icons-vue'
 import * as rolesApi from '../../api/roles'
 import type { Role, Permission } from '../../api/types'
 
@@ -275,6 +291,7 @@ const permDialogVisible = ref(false)
 const permLoading = ref(false)
 const permRole = ref<Role | null>(null)
 const permChecked = ref<string[]>([])
+const permSearchKeyword = ref('')
 
 /** 权限按 module 分组 */
 const permGroups = computed(() => {
@@ -286,16 +303,49 @@ const permGroups = computed(() => {
   return Object.entries(map).map(([module, items]) => ({ module, items }))
 })
 
+/** 筛选后的权限分组 */
+const filteredPermGroups = computed(() => {
+  if (!permSearchKeyword.value.trim()) return permGroups.value
+  const kw = permSearchKeyword.value.trim().toLowerCase()
+  return permGroups.value
+    .map((g) => ({
+      module: g.module,
+      items: g.items.filter((p) =>
+        p.name.toLowerCase().includes(kw) ||
+        p.code.toLowerCase().includes(kw) ||
+        (p.description && p.description.toLowerCase().includes(kw))
+      ),
+    }))
+    .filter((g) => g.items.length > 0)
+})
+
+/** 检查模块是否全选 */
+function isModuleAllChecked(g: { module: string; items: Permission[] }) {
+  return g.items.every((p) => permChecked.value.includes(p.id))
+}
+
+/** 切换模块全选状态 */
+function toggleModulePerms(g: { module: string; items: Permission[] }) {
+  const ids = g.items.map((p) => p.id)
+  if (isModuleAllChecked(g)) {
+    permChecked.value = permChecked.value.filter((id) => !ids.includes(id))
+  } else {
+    const newIds = ids.filter((id) => !permChecked.value.includes(id))
+    permChecked.value = [...permChecked.value, ...newIds]
+  }
+}
+
 async function openPermissionDialog(row: Role) {
   permRole.value = row
   permDialogVisible.value = true
   permLoading.value = true
   permChecked.value = []
+  permSearchKeyword.value = ''
   try {
     const assigned = await rolesApi.listRolePermissions(row.id)
     permChecked.value = assigned.map((p) => p.id)
   } catch {
-    // 拦截器已提示
+    // 错误由全局拦截器处理
   } finally {
     permLoading.value = false
   }
@@ -449,9 +499,14 @@ async function handleSubmitPermissions() {
 .perm-group:last-child {
   margin-bottom: 0;
 }
+.perm-group__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
 .perm-group__title {
   font-weight: 600;
-  margin-bottom: 10px;
   color: #303133;
   font-size: 14px;
 }
