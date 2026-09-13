@@ -310,10 +310,6 @@ import * as LF from '@logicflow/core'
 const LogicFlow: any = (LF as any).LogicFlow
   ?? (typeof (LF as any).default === 'function' ? (LF as any).default : undefined)
   ?? LF
-// 节点 view/model 类直接从命名空间取(1.2.x 没有 defaultCtor API)
-// 矩形(开始/结束/审批/auto_pass)用 RectNode + RectNodeModel；
-// 菱形(条件网关/并行)用 DiamondNode + DiamondNodeModel（rx/ry 控制大小，比 PolygonNode 手动设 points 更简洁）。
-const { RectNode, RectNodeModel, DiamondNode, DiamondNodeModel } = LF as any
 import '@logicflow/core/dist/style/index.css'
 import {
   Share, Plus, Check, Download, Refresh, Search, VideoPlay, CircleClose, User, Avatar,
@@ -543,6 +539,16 @@ function emptyDefinition(): WorkflowDefinition {
   }
 }
 
+const NODE_STYLE: Record<string, any> = {
+  start:   { fill: '#e8f5e3', stroke: '#67c23a', text: '#1a5e0e', w: 120, h: 44, r: 22, bold: true  },
+  end:     { fill: '#fde2e2', stroke: '#f56c6c', text: '#7a1818', w: 120, h: 44, r: 22, bold: true  },
+  auto:    { fill: '#eef0f3', stroke: '#909399', text: '#3d4045', w: 160, h: 44, r: 22, bold: false },
+  single:  { fill: '#ecf5ff', stroke: '#409EFF', text: '#1f3d70', w: 200, h: 60, r: 12, bold: false },
+  multi:   { fill: '#e8f5e3', stroke: '#67c23a', text: '#1a5e0e', w: 200, h: 60, r: 12, bold: false },
+  cond:    { fill: '#fdf3e6', stroke: '#e6a23c', text: '#73540b', rx: 50, ry: 36, bold: false },
+  para:    { fill: '#e3f5f5', stroke: '#13c2c2', text: '#1a6f6f', rx: 44, ry: 32, bold: false },
+}
+
 function touch() { dirty.value = true }
 
 function renderFlow(def: WorkflowDefinition | undefined) {
@@ -572,16 +578,7 @@ function renderFlow(def: WorkflowDefinition | undefined) {
     nodeText: { color: '#1f2d3d', fontSize: 13, overflowMode: 'autoWrap', lineHeight: 1.4 },
   })
 
-  // ===== 样式表 =====
-  const STYLE: any = {
-    start:   { fill: '#e8f5e3', stroke: '#67c23a', text: '#1a5e0e', w: 120, h: 44, r: 22, bold: true  },
-    end:     { fill: '#fde2e2', stroke: '#f56c6c', text: '#7a1818', w: 120, h: 44, r: 22, bold: true  },
-    auto:    { fill: '#eef0f3', stroke: '#909399', text: '#3d4045', w: 160, h: 44, r: 22, bold: false },
-    single:  { fill: '#ecf5ff', stroke: '#409EFF', text: '#1f3d70', w: 200, h: 60, r: 12, bold: false },
-    multi:   { fill: '#e8f5e3', stroke: '#67c23a', text: '#1a5e0e', w: 200, h: 60, r: 12, bold: false },
-    cond:    { fill: '#fdf3e6', stroke: '#e6a23c', text: '#73540b', rx: 50, ry: 36, bold: false },
-    para:    { fill: '#e3f5f5', stroke: '#13c2c2', text: '#1a6f6f', rx: 44, ry: 32, bold: false },
-  }
+  const STYLE = NODE_STYLE
 
   // ===== 节点注册 =====
   // 为每种节点类型注册独立的 view+model，通过 getNodeStyle/getTextStyle 返回样式
@@ -722,8 +719,7 @@ function renderFlow(def: WorkflowDefinition | undefined) {
         if (id) {
           foundId = id
           isBlank = false
-          const cls = el.getAttribute('class') || ''
-          const clsStr = typeof cls === 'string' ? cls : (cls?.baseVal?.value || '')
+          const clsStr = el.getAttribute('class') || ''
           // LogicFlow 1.x 节点 group 通常有: class="lf-node" 或 data-type 属性
           // 边 group 通常有: class="lf-edge"
           if (clsStr.includes('lf-edge') || clsStr.includes('edge')) {
@@ -880,7 +876,7 @@ function applyNodeStyles() {
     const nodes: any[] = (lf as any).getNodes?.() || []
     nodes.forEach((model: any) => {
       const type = model.type
-      const cfg = (STYLE as any)[type]
+      const cfg = NODE_STYLE[type]
       if (!cfg) return
       // 存储类型信息到 properties，方便后续编辑时使用
       if (!model.properties) model.properties = {}

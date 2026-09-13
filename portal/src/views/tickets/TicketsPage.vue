@@ -357,7 +357,7 @@
                         </el-form-item>
                         <el-form-item>
                           <el-button type="primary" :loading="actionLoading" :icon="Check" @click="submitAction(n)">提交决策</el-button>
-                          <el-button @click="actionForm = defaultActionForm()">清空</el-button>
+                          <el-button @click="Object.assign(actionForm, defaultActionForm())">清空</el-button>
                         </el-form-item>
                       </el-form>
                     </div>
@@ -582,7 +582,7 @@ import {
 import {
   listTickets, getTicketKpis, getTicketDetail, createTicket, updateTicket,
   deleteTicket, assignTicket, executeNodeAction, addComment, linkAlert,
-  unlinkAlert, cancelTicket, getExportUrl, batchAction,
+  unlinkAlert, cancelTicket, exportTicketsCsv, batchAction,
   type TicketSummary, type TicketDetail, type TicketNode, type TicketListQuery,
   type TicketPriority, type TicketStatus, type CommentAction, type WorkflowActionReq,
   type BatchDecision,
@@ -698,18 +698,15 @@ function resetFilter() {
 function onDateRangeChange(v: [string, string] | null) { dateRange.value = v || null; onFilter() }
 
 /* ============= 导出 ============= */
-function exportTickets() {
+async function exportTickets() {
   const params: TicketListQuery = { ...filter }
   if (dateRange.value?.[0]) params.createdAtFrom = dateRange.value[0]
   if (dateRange.value?.[1]) params.createdAtTo = dateRange.value[1]
-  const url = getExportUrl(params)
-  // 用 a 标签方式下载
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `tickets_${new Date().toISOString().slice(0,10)}.csv`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  try {
+    await exportTicketsCsv(params)
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '导出失败')
+  }
 }
 
 /* ============= 批量选择 ============= */

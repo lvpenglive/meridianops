@@ -108,7 +108,7 @@
     </el-dialog>
 
     <!-- 分配权限对话框 -->
-    <el-dialog v-model="permDialogVisible" width="680px" class="perm-dialog" @closed="permChecked = []">
+    <el-dialog v-model="permDialogVisible" width="720px" class="perm-dialog" @closed="permChecked = []">
       <template #header>
         <div class="dialog-header">
           <div class="dialog-header__icon dialog-header__icon--perm"><Setting :size="20" /></div>
@@ -124,18 +124,21 @@
           <span class="perm-role-info__label">当前角色</span>
         </div>
         <div v-loading="permLoading" class="perm-groups">
-          <div v-for="g in permGroups" :key="g.module" class="perm-group">
-            <div class="perm-group__title">{{ g.module }}</div>
-            <el-checkbox-group v-model="permChecked">
-              <el-checkbox
-                v-for="p in g.items"
-                :key="p.id"
-                :value="p.id"
-              >
-                {{ p.name }}
-                <span class="perm-code">{{ p.code }}</span>
-              </el-checkbox>
-            </el-checkbox-group>
+          <div v-for="g in permMenuGroups" :key="g.parent" class="perm-group">
+            <div class="perm-group__title">{{ g.parent }}</div>
+            <div v-for="c in g.children" :key="c.title" class="perm-child">
+              <div class="perm-child__title">{{ c.title }}</div>
+              <el-checkbox-group v-model="permChecked">
+                <el-checkbox
+                  v-for="p in c.items"
+                  :key="p.id"
+                  :value="p.id"
+                >
+                  {{ permissionActionLabel(p.code, p.name) }}
+                  <span class="perm-code">{{ p.code }}</span>
+                </el-checkbox>
+              </el-checkbox-group>
+            </div>
           </div>
         </div>
         <div class="perm-actions">
@@ -157,6 +160,10 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Plus, EditPen, Setting } from '@element-plus/icons-vue'
 import * as rolesApi from '../../api/roles'
 import type { Role, Permission } from '../../api/types'
+import {
+  groupByMenu,
+  permissionActionLabel,
+} from '../../utils/permissionDisplay'
 
 const roles = ref<Role[]>([])
 const allPermissions = ref<Permission[]>([])
@@ -276,15 +283,10 @@ const permLoading = ref(false)
 const permRole = ref<Role | null>(null)
 const permChecked = ref<string[]>([])
 
-/** 权限按 module 分组 */
-const permGroups = computed(() => {
-  const map: Record<string, Permission[]> = {}
-  allPermissions.value.forEach((p) => {
-    if (!map[p.module]) map[p.module] = []
-    map[p.module].push(p)
-  })
-  return Object.entries(map).map(([module, items]) => ({ module, items }))
-})
+/** 权限按侧栏一级 / 二级菜单分组 */
+const permMenuGroups = computed(() =>
+  groupByMenu(allPermissions.value, (p) => p.code, (p) => p.module),
+)
 
 async function openPermissionDialog(row: Role) {
   permRole.value = row
@@ -454,6 +456,20 @@ async function handleSubmitPermissions() {
   margin-bottom: 10px;
   color: #303133;
   font-size: 14px;
+}
+.perm-child {
+  padding: 8px 0 4px 10px;
+  border-left: 2px solid #dbeafe;
+  margin-bottom: 8px;
+}
+.perm-child:last-child {
+  margin-bottom: 0;
+}
+.perm-child__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #409EFF;
+  margin-bottom: 6px;
 }
 .perm-group :deep(.el-checkbox) {
   margin-right: 18px;

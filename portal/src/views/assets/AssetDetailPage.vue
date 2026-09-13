@@ -53,6 +53,10 @@
                   <span v-if="instance.tags">{{ instance.tags }}</span>
                   <span v-else class="text-muted">—</span>
                 </el-descriptions-item>
+                <el-descriptions-item label="负责人">
+                  <span v-if="ownerText">{{ ownerText }}</span>
+                  <span v-else class="text-muted">—</span>
+                </el-descriptions-item>
                 <el-descriptions-item label="数据来源">
                   <el-tag v-if="instance.source" size="small" type="warning" effect="plain">{{ sourceLabel(instance.source) }}</el-tag>
                   <el-tag v-else size="small" type="info" effect="plain">手工录入</el-tag>
@@ -258,6 +262,25 @@
         <el-form-item label="标签">
           <el-input v-model="formData.tags" placeholder="多个标签用逗号分隔" />
         </el-form-item>
+        <el-form-item label="负责人">
+          <el-select
+            v-model="formData.ownerIds"
+            multiple
+            filterable
+            clearable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="可多选系统用户"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="u in userOptions"
+              :key="u.id"
+              :label="userOptionLabel(u)"
+              :value="u.id"
+            />
+          </el-select>
+        </el-form-item>
         <div v-if="modelAttrs.length" class="form-section">
           <div class="section-title">扩展属性</div>
           <el-form-item
@@ -344,9 +367,10 @@ import {
   listCiInstances,
   listSyncLogs,
   listCiRelationTypes,
+  listCmdbUserOptions,
 } from '../../api/cmdb'
 import { listAuditLogs } from '../../api/audit'
-import type { CiInstance, CiModelAttr, CiRelation, CiRelationType, SyncLog, AuditLog } from '../../api/types'
+import type { CiInstance, CiModelAttr, CiRelation, CiRelationType, SyncLog, AuditLog, CmdbUserOption } from '../../api/types'
 import { useUserStore } from '../../stores/user'
 import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
 
@@ -366,10 +390,7 @@ const activeTab = ref('info')
 
 // 模型图标
 const iconMap: Record<string, any> = { Monitor, Cpu, Coin, Connection, Grid }
-const iconComp = computed(() => {
-  const code = modelAttrs.value.length ? '' : ''
-  return iconMap['Monitor']
-})
+const iconComp = computed(() => iconMap['Monitor'])
 const iconStyle = computed(() => {
   // 通过模型 code 匹配颜色（instance 没有 modelCode，需从属性推断；这里用 modelAttrs 的 modelId 无法直接拿 code，简化用默认色）
   return { background: 'linear-gradient(135deg, #4facfe, #00f2fe)' }
@@ -381,6 +402,32 @@ const extraAttrs = computed(() => {
   const defined = new Set(modelAttrs.value.map(a => a.code))
   return Object.keys(instance.value.attributes).filter(k => !defined.has(k))
 })
+
+const ownerText = computed(() => {
+  const inst = instance.value
+  if (!inst) return ''
+  if (inst.ownerNames?.length) return inst.ownerNames.join('、')
+  if (inst.owners?.length) {
+    return inst.owners
+      .map((o) => (o.displayName?.trim() ? o.displayName : o.username))
+      .filter(Boolean)
+      .join('、')
+  }
+  return ''
+})
+
+const userOptions = ref<CmdbUserOption[]>([])
+function userOptionLabel(u: CmdbUserOption): string {
+  const name = u.displayName?.trim()
+  return name && name !== u.username ? `${name}（${u.username}）` : u.username
+}
+async function fetchUserOptions() {
+  try {
+    userOptions.value = await listCmdbUserOptions()
+  } catch {
+    userOptions.value = []
+  }
+}
 
 async function fetchInstance() {
   loading.value = true
@@ -517,6 +564,7 @@ const formData = reactive({
   name: '',
   status: 'running',
   tags: '',
+  ownerIds: [] as string[],
   attributes: {} as Record<string, any>,
 })
 const formRules: FormRules = {
@@ -529,6 +577,9 @@ function openEdit() {
   formData.name = instance.value.name
   formData.status = instance.value.status
   formData.tags = instance.value.tags
+  formData.ownerIds = instance.value.ownerIds?.length
+    ? [...instance.value.ownerIds]
+    : (instance.value.ownerId ? [instance.value.ownerId] : [])
   formData.attributes = { ...(instance.value.attributes || {}) }
   editDialogVisible.value = true
 }
@@ -543,6 +594,7 @@ async function onSubmitEdit() {
         name: formData.name.trim(),
         status: formData.status,
         tags: formData.tags,
+        ownerIds: formData.ownerIds,
         attributes: formData.attributes,
       })
       ElMessage.success('更新成功')
@@ -661,6 +713,7 @@ onMounted(async () => {
   fetchInstance()
   fetchRelationTypes()
   fetchRelations()
+  fetchUserOptions()
 })
 
 // 路由参数变化时（点击对端资产跳转）重新加载数据

@@ -124,6 +124,20 @@
                 </el-tag>
               </template>
             </el-table-column>
+            <el-table-column label="通知" width="110" align="center">
+              <template #default="{ row }">
+                <el-tag
+                  v-if="row.notifyStatus"
+                  :type="notifyStatusTagType(row.notifyStatus)"
+                  effect="plain"
+                  size="small"
+                >
+                  {{ notifyStatusLabel(row.notifyStatus) }}
+                  <span v-if="row.notifyCount && row.notifyCount > 1"> · {{ row.notifyCount }}</span>
+                </el-tag>
+                <span v-else class="notify-none">—</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="title" label="告警标题" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">
                 {{ orNA(row.title) }}
@@ -510,7 +524,7 @@
               </el-step>
             </el-steps>
             <el-divider content-position="left">请求示例</el-divider>
-            <pre class="code-block">curl -X POST http://&lt;服务器地址&gt;:8000/api/alerts/events \
+            <pre class="code-block">curl -X POST http://&lt;服务器地址&gt;:8800/api/alerts/events \
   -H "Authorization: Bearer mk-&lt;你的令牌明文&gt;" \
   -H "Content-Type: application/json" \
   -d '{
@@ -563,7 +577,7 @@
               </el-step>
             </el-steps>
             <el-divider content-position="left">请求示例</el-divider>
-            <pre class="code-block">curl -X POST http://&lt;服务器地址&gt;:8000/api/alerts/ingress/eventide \
+            <pre class="code-block">curl -X POST http://&lt;服务器地址&gt;:8800/api/alerts/ingress/eventide \
   -H "Authorization: Bearer &lt;你的接入密钥&gt;" \
   -H "Content-Type: application/json" \
   -d '{
@@ -625,7 +639,7 @@
     </el-tabs>
 
     <!-- 详情抽屉 -->
-    <el-drawer v-model="detailVisible" :title="`告警详情 #${detail?.id?.slice(-8) ?? ''}`" size="600px" direction="rtl">
+    <el-drawer v-model="detailVisible" :title="`告警详情 #${detail?.id?.slice(-8) ?? ''}`" size="720px" direction="rtl">
       <div v-if="detail" v-loading="detailLoading" class="detail-body">
         <el-descriptions :column="1" border>
           <el-descriptions-item label="告警级别">
@@ -678,6 +692,61 @@
             <div class="msg-block">{{ detail.resolutionNote }}</div>
           </el-descriptions-item>
         </el-descriptions>
+
+        <div class="clue-logs-block">
+          <div class="block-title">
+            <el-icon><Message /></el-icon>
+            <span>通知发送</span>
+            <span v-if="detail.notifyLogs && detail.notifyLogs.length" class="block-sub">
+              {{ detail.notifyLogs.length }} 条记录
+            </span>
+            <span v-else class="block-sub">尚无发送记录</span>
+            <el-button
+              :icon="Refresh"
+              size="small"
+              plain
+              :loading="notifyLoading"
+              @click="refreshNotifyLogs"
+            >刷新</el-button>
+          </div>
+          <el-table
+            v-if="detail.notifyLogs && detail.notifyLogs.length"
+            :data="detail.notifyLogs"
+            size="small"
+            stripe
+            max-height="260"
+            style="margin-top: 8px;"
+          >
+            <el-table-column label="时间" width="170">
+              <template #default="{ row }">{{ formatTime(row.sentAt) }}</template>
+            </el-table-column>
+            <el-table-column label="通道" width="90">
+              <template #default="{ row }">{{ notifyChannelLabel(row.channelType) }}</template>
+            </el-table-column>
+            <el-table-column label="结果" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag :type="notifyStatusTagType(row.status)" effect="plain" size="small">
+                  {{ notifyStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="接收人" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.recipients || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.errorMsg || row.responseSnippet || '—' }}</template>
+            </el-table-column>
+          </el-table>
+          <el-alert
+            v-else
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-top: 8px;"
+          >
+            暂无通知发送记录。短信策略未命中、通道未启用或尚未触发时这里为空。
+          </el-alert>
+        </div>
 
         <!-- 关联日志（Phase 3：自动从 ClickHouse 拉取同主机告警前后5分钟 ERROR+ 日志） -->
         <div class="clue-logs-block">
@@ -897,16 +966,17 @@ import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import {
   Bell, Warning, CircleClose, Plus, Search, Refresh, Check, CircleCheck,
   EditPen, Delete, Connection, Key, DataLine, Monitor, CopyDocument, RefreshRight, Lock,
-  Open, View, Link,
+  Open, View, Link, Message,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../../stores/user'
 import {
-  listAlertEvents, getAlertEvent, createAlertEvent, acknowledgeAlert, resolveAlert, suppressAlert,
+  listAlertEvents, getAlertEvent, listAlertNotifications, createAlertEvent, acknowledgeAlert, resolveAlert, suppressAlert,
   updateAlertNote, deleteAlertEvent, getAlertStats, batchAlertAction,
   listAlertSilences, createAlertSilence, updateAlertSilence, deleteAlertSilence,
   fetchIngressOverview, getAlertIngress, updateAlertIngress, pullFromEventide,
   type AlertEvent, type AlertStats, type AlertSilence, type IngressOverview,
-  type AlertIngressConfig,
+  type AlertIngressConfig, type CreateAlertEventRequest,
+  type CreateAlertSilenceRequest, type UpdateAlertSilenceRequest,
 } from '../../api/alert'
 import { levelTagType, levelLabel, getGrafanaLink } from '../../api/logs'
 import { listCiInstances } from '../../api/cmdb'
@@ -916,8 +986,6 @@ import {
   ALERT_LEVEL_FILTER_OPTIONS,
   ALERT_LEVEL_META,
   ALERT_LEVEL_ORDER,
-  alertLevelColor,
-  alertLevelName,
   alertLevelShortName,
   alertLevelTagType,
   normalizeAlertLevel,
@@ -1147,6 +1215,7 @@ async function loadStats() {
 // ============ 详情 ============
 const detailVisible = ref(false)
 const detailLoading = ref(false)
+const notifyLoading = ref(false)
 const detail = ref<AlertEvent | null>(null)
 
 async function openDetail(row: AlertEvent) {
@@ -1159,6 +1228,19 @@ async function openDetail(row: AlertEvent) {
     ElMessage.error(errMsg(e))
   } finally {
     detailLoading.value = false
+  }
+}
+
+async function refreshNotifyLogs() {
+  if (!detail.value?.id) return
+  notifyLoading.value = true
+  try {
+    const res = await listAlertNotifications(detail.value.id)
+    detail.value = { ...detail.value, notifyLogs: res.list ?? [] }
+  } catch (e: unknown) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    notifyLoading.value = false
   }
 }
 
@@ -1241,7 +1323,7 @@ async function submitCreate() {
   await createFormRef.value?.validate()
   createLoading.value = true
   try {
-    const payload: Record<string, unknown> = {
+    const payload: CreateAlertEventRequest = {
       source: createForm.source,
       severity: createForm.severity,
       title: createForm.title,
@@ -1334,7 +1416,7 @@ async function suppressEvent(row: AlertEvent | null) {
     await suppressAlert(row.id)
     ElMessage.success('已标记为静默')
     if (detail.value && detail.value.id === row.id) {
-      detail.value = { ...detail.value, status: 'suppressed', suppressedBy: userStore.user?.username ?? '', suppressedAt: new Date().toISOString() }
+      detail.value = { ...detail.value, status: 'suppressed' }
     }
     loadEvents()
     loadStats()
@@ -1510,19 +1592,19 @@ async function submitSilence() {
   }
   silenceSaveLoading.value = true
   try {
-    const payload: Record<string, unknown> = {
+    const payload: CreateAlertSilenceRequest = {
       name: silenceForm.name,
       reason: silenceForm.reason || undefined,
       match_labels: Object.keys(labels).length ? labels : undefined,
       starts_at: formatDateForApi(silenceForm.range[0]),
       ends_at: formatDateForApi(silenceForm.range[1]),
     }
-    if (silenceForm.id) payload.active = silenceForm.active
     if (silenceForm.id) {
-      await updateAlertSilence(silenceForm.id, payload as Parameters<typeof updateAlertSilence>[1])
+      const updatePayload: UpdateAlertSilenceRequest = { ...payload, active: silenceForm.active }
+      await updateAlertSilence(silenceForm.id, updatePayload)
       ElMessage.success('静默规则已更新')
     } else {
-      await createAlertSilence(payload as Parameters<typeof createAlertSilence>[0])
+      await createAlertSilence(payload)
       ElMessage.success('静默规则已创建')
     }
     silenceDialogVisible.value = false
@@ -1734,7 +1816,7 @@ function copyGeneratedToken() {
 function copyTokenPlaceholder() {
   // 提供给外部对接方的占位提示（不包含真实密钥，仅是配置说明）
   const text = `MeridianOps 告警接入 - Webhook 端点
-端点: POST http://{服务器地址}:8000/api/alerts/ingress/eventide
+端点: POST http://{服务器地址}:8800/api/alerts/ingress/eventide
 鉴权: Authorization: Bearer <你的接入密钥>
 密钥获取方式: 联系系统管理员在「告警中心 → 接入帮助 → 告警接入配置」中查看或重新生成`
   navigator.clipboard.writeText(text).then(() => {
@@ -1778,13 +1860,6 @@ function alertHostname(row: AlertEvent): string {
   return typeof raw === 'string' && raw ? raw : 'N/A'
 }
 
-/** 从 labels JSON 提取告警项名称 */
-function alertName(row: AlertEvent): string {
-  if (!row.labels) return 'N/A'
-  const lbl = row.labels as Record<string, unknown>
-  const raw = lbl.alertname || lbl.alert_name || lbl.alertName || lbl.rule || lbl.rule_name
-  return typeof raw === 'string' && raw ? raw : 'N/A'
-}
 
 /** 从 labels/annotations 提取告警摘要 */
 function alertSummary(row: AlertEvent): string {
@@ -1811,6 +1886,33 @@ function statusLabel(s: string): string {
   const map: Record<string, string> = {
     firing: '触发中', acknowledged: '已认领', resolved: '已解决',
     pending: '待评估', suppressed: '已静默',
+  }
+  return map[s] ?? s
+}
+
+function notifyStatusLabel(s: string): string {
+  const map: Record<string, string> = {
+    success: '成功',
+    failed: '失败',
+    partial: '部分成功',
+    skipped: '未发送',
+  }
+  return map[s] ?? s
+}
+
+function notifyStatusTagType(s: string): 'success' | 'danger' | 'warning' | 'info' {
+  if (s === 'success') return 'success'
+  if (s === 'failed') return 'danger'
+  if (s === 'partial' || s === 'skipped') return 'warning'
+  return 'info'
+}
+
+function notifyChannelLabel(s: string): string {
+  const map: Record<string, string> = {
+    sms_http: '短信',
+    email: '邮件',
+    feishu: '飞书',
+    webhook: 'Webhook',
   }
   return map[s] ?? s
 }
@@ -1979,6 +2081,7 @@ onUnmounted(() => {
 }
 
 .text-muted { color: #c0c4cc; }
+.notify-none { color: #c0c4cc; }
 .ingress-actor {
   margin-left: 6px;
   font-size: 12px;

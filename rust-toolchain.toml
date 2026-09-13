@@ -1,0 +1,4 @@
+# Cargo.lock 依赖需要 edition2024，低于 1.85 编不过。
+# 使用已安装的 stable，避免再拉一份与 stable 同版本的 1.93.0 工具链。
+[toolchain]
+channel = "stable"

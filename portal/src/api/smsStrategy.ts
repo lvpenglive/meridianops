@@ -2,8 +2,26 @@ import request from './request'
 import { listDictItems, type DictItem } from './dict'
 
 // ============================================================
-// 告警短信策略（对齐老系统「短信策略」）
+// 通知策略（原告警短信策略，现可多选渠道）
 // ============================================================
+
+export type NotifyChannelKind = 'inbox' | 'sms' | 'email' | 'feishu' | 'webhook'
+
+export const CHANNEL_KIND_OPTIONS: { value: NotifyChannelKind; label: string }[] = [
+  { value: 'inbox', label: '站内信' },
+  { value: 'sms', label: '短信' },
+  { value: 'email', label: '邮件' },
+  { value: 'feishu', label: '飞书' },
+  { value: 'webhook', label: 'Webhook' },
+]
+
+export const DEFAULT_CHANNEL_KINDS: NotifyChannelKind[] = ['inbox', 'sms', 'email']
+
+export interface NotifyChannelOption {
+  id: string
+  name: string
+  channelType: string
+}
 
 export interface SmsStrategy {
   id: string
@@ -16,6 +34,10 @@ export interface SmsStrategy {
   alertGroupId?: string | null
   alertGroupName?: string
   recipientUserIds: string[]
+  notifyOwner: boolean
+  channelKinds: NotifyChannelKind[]
+  extraChannelIds: string[]
+  triggerScene: string
   description: string
   enabled: boolean
   createdBy: string
@@ -49,8 +71,16 @@ export interface SmsStrategyPayload {
   nameKeyword?: string
   alertGroupId?: string
   recipientUserIds: string[]
+  notifyOwner?: boolean
+  channelKinds?: NotifyChannelKind[]
+  extraChannelIds?: string[]
+  triggerScene?: string
   description?: string
   enabled?: boolean
+}
+
+export function listNotifyChannelOptions(): Promise<{ list: NotifyChannelOption[] }> {
+  return request.get('/sms-strategies/channel-options')
 }
 
 export function createSmsStrategy(data: SmsStrategyPayload): Promise<{ id: string }> {

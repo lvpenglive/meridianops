@@ -29,7 +29,7 @@ meridianops/
 | 子系统 | 说明 | 技术栈 | 端口 |
 |--------|------|--------|------|
 | **portal** | 统一前端门户 | Vue 3 + TypeScript + Element Plus + Pinia | 5173 (dev) |
-| **gateway** | API 聚合网关 / 融合层 | Rust + Axum 0.7 + sqlx 0.8 + MySQL | 8000 |
+| **gateway** | API 聚合网关 / 融合层 | Rust + Axum 0.7 + sqlx 0.8 + MySQL | 8800 |
 
 ### 数据接入原则（基于全行真实生态）
 
@@ -346,15 +346,15 @@ cd gateway && cargo run
 
 ### 🔴 硬门槛（本轮必须，先于产品优化）
 
-- [ ] 前端正式 `npm run build` 通过（当前约 83 个 TS 错误；含 API 响应类型不一致等）— **测试** `P0`
-- [ ] 后端可复现构建：Rust 工具链与 Cargo.lock 对齐（time-core / edition2024 与 Rust 1.83 不兼容问题）— **测试/架构** `P0`
-- [ ] 补齐缺失页面：`portal` 路由引用的 `LogsPage.vue` 不存在，避免 `/logs` 404 — **测试** `P0`
+- [x] 前端正式 `npm run build` 通过（`vue-tsc` + Vite 生产打包）— **测试** `P0`
+- [x] 后端可复现构建：`rust-toolchain.toml` 使用 stable，`Cargo.toml` 声明 `rust-version = "1.85"`（edition2024 / time-core 不低于此）— **测试/架构** `P0`
+- [x] 补齐缺失页面：日志中心 `portal/src/views/logs/LogsPage.vue`（原被 gitignore 的 `logs` 规则误忽略）— **测试** `P0`
 - [ ] 未完成/空壳模块隐藏或标「规划中」：容器管理 `/containers`、数据库 `/database`、配置中心 `/config`、费用中心 `/cost`（避免误触空壳）— **产品** `P0`
-- [ ] 凭据/JWT/种子密码勿硬编码（config.rs 等）；非 loopback 环境不安全默认应阻断启动（不仅 warn）— **架构** `P0`
-- [ ] Token 禁止走 URL query（ticket.ts:386 等）— **架构** `P0`
-- [ ] CORS 收紧（勿 `*`，routes.rs:97）— **架构** `P0`
-- [ ] 日志/告警静默期竞态修复 — **架构** `P0`
-- [ ] xlsx（SheetJS）高危漏洞：替换或规避（如 exceljs）— **测试** `P0`
+- [x] 凭据/JWT/种子密码勿硬编码（config.rs 等）；非 loopback 环境不安全默认应阻断启动（不仅 warn）— **架构** `P0`
+- [x] Token 禁止走 URL query（工单导出、通知 SSE 改走 Authorization 头）— **架构** `P0`
+- [x] CORS 收紧（勿 `*`，按 `server.cors_origins` 放行）— **架构** `P0`
+- [x] 日志/告警静默期竞态修复（fingerprint 唯一约束兜底重复插入）— **架构** `P0`
+- [x] xlsx（SheetJS）高危漏洞：替换为 exceljs— **测试** `P0`
 
 ### 🟡 本轮紧跟（演示可用，标风险，不默认上生产）
 
@@ -575,7 +575,7 @@ cd gateway && cargo run
 #### 📊 剩余模块完善
 - [ ] 态势中心 OverviewPage：接真实聚合 API（替换 mock 数据）
 - [ ] AIOps 诊断 AIOpsPage：接真实相似检索（基于审计/告警历史）
-- [ ] 日志中心 LogsPage：日志查询 UI（mock 数据 → 预留 ELK 接口）
+- [x] 日志中心 LogsPage：日志查询 UI（ClickHouse L1/L2/L3 + Grafana 跳转）
 - [ ] 容器管理 ContainersPage：完善 mock 数据 + K8s 资源视图
 - [ ] DB 数据库 DatabasePage：数据库实例管理 + 连接测试
 - [ ] 费用中心 CostPage：成本统计数据模型 + 图表展示
@@ -711,7 +711,7 @@ cd gateway && cargo run
 
 ```toml
 [server]
-bind = "0.0.0.0:8000"
+bind = "0.0.0.0:8800"
 
 [database]
 # 生产环境必须通过 MERIDIANOPS_DB_URL 环境变量覆盖
@@ -741,6 +741,23 @@ base_url = "http://eventide:8080"
 auth_type = "token"
 auth_token = "${EVENTIDE_API_TOKEN}"
 ```
+
+### Eventide 外表同步（CMDB → Lookup）
+
+把本系统有管理 IP 的资产投影到 Eventide 外表，供告警 enrich。**不要**用 Eventide 管理员密码做同步。
+
+1. Eventide 控制台：建 `hosts` 外表（`key_label=ip`）→ 勾选外部同步 → 记下 `lookup_id`
+2. Eventide：系统设置生成外表同步 Token（`lks_…`）
+3. 写入 `gateway-config.toml` 的 `[eventide_lookup]`（见 `gateway-config.toml.example`），或环境变量：
+   - `MERIDIANOPS_EVENTIDE_LOOKUP_ENABLED=true`
+   - `MERIDIANOPS_EVENTIDE_LOOKUP_TOKEN`
+   - `MERIDIANOPS_EVENTIDE_LOOKUP_ID`（第一张表 UUID）
+   - 可选 `MERIDIANOPS_EVENTIDE_LOOKUP_BASE_URL`（空则用 `[[systems]]` 里 eventide 的地址）
+4. 重启网关。定时默认 5 分钟全量；资产/负责人变更后约 45 秒再推一轮。
+5. 门户「数据源同步」可手动推一次，并查看最近结果。空结果不会 PUT（防止清空 Eventide）。
+6. 轮换 token 后更新配置并重启；加新外表只需往 `targets` 追加一项，未列出的表不会碰。
+
+列名（`主机名`/`机房`/`联系人` 等）与 Eventide enrich 模板对齐后不要单边改名。
 
 > ⚠️ **安全提示**：生产部署时请务必通过环境变量注入敏感配置，示例中的占位符 `${...}` 用于示意，实际值通过 `MERIDIANOPS_DB_URL` / `MERIDIANOPS_JWT_SECRET` 等环境变量覆盖，避免写入代码仓库。
 
@@ -1016,7 +1033,7 @@ Phase 4（按需）：生产化
               ▼            ▼            ▼
          ┌─────────┐  ┌─────────┐  ┌─────────┐
          │ Gateway │  │ Gateway │  │  Portal  │
-         │ (8000)  │  │ (8001)  │  │  (5173)  │
+         │ (8800)  │  │ (8801)  │  │  (5173)  │
          └────┬────┘  └────┬────┘  └────┬────┘
               │             │            │
               └──────┬──────┘            │

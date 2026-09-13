@@ -447,11 +447,24 @@ pub async fn dispatch_event(
         .await;
     }
 
-    // 2) 外部通道：查规则 + 通道
-    // 0) 短信策略匹配（仅告警触发场景）：命中后给已选人员发站内信 + 邮件/短信
-    //    独立于 notification_rules，即使无通知规则匹配也应执行
+    // 2) 通知策略：按勾选渠道分发（站内信 / 短信 / 邮件 / 飞书 / Webhook）
+    dispatch_sms_strategies(
+        state,
+        event_type,
+        trigger_scene,
+        severity,
+        title,
+        content,
+        link,
+        host,
+        user_ids,
+    )
+    .await;
+
+    // 告警触发已由通知策略覆盖，避免与旧 notification_rules 重复发送。
+    // 认领 / 恢复 / 工单 / 作业 / 日志突增仍走规则，兼容现网已配飞书规则。
     if trigger_scene == "alert_firing" {
-        dispatch_sms_strategies(state, event_type, severity, title, content, link, host).await;
+        return;
     }
 
     let rules = match fetch_matching_rules(&state.db, event_type, trigger_scene, severity, title, host).await {
@@ -527,6 +540,7 @@ pub async fn dispatch_event(
                     title: title.chars().take(500).collect(),
                     content: Some(content_snippet),
                     link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
+                    alert_id: None,
                     status,
                     error_msg,
                     response_snippet,
@@ -587,6 +601,7 @@ pub struct NotificationLogEntry {
     pub title: String,
     pub content: Option<String>,
     pub link: Option<String>,
+    pub alert_id: Option<String>,
     pub status: String,
     pub error_msg: Option<String>,
     pub response_snippet: Option<String>,
@@ -595,15 +610,30 @@ pub struct NotificationLogEntry {
     pub sent_at: String,
 }
 
+fn extract_alert_id_from_link(link: &str) -> Option<String> {
+    let idx = link.find("id=")?;
+    let rest = &link[idx + 3..];
+    let id = rest.split('&').next()?.trim();
+    if id.len() >= 8 && id.len() <= 64 {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
 async fn insert_notification_log(
     pool: &sqlx::MySqlPool,
     entry: NotificationLogEntry,
 ) -> Result<(), String> {
+    let alert_id = entry
+        .alert_id
+        .clone()
+        .or_else(|| entry.link.as_deref().and_then(extract_alert_id_from_link));
     sqlx::query(
         "INSERT INTO notification_logs \
          (id, rule_id, rule_name, channel_id, channel_name, channel_type, event_type, trigger_scene, severity, \
-          recipients, title, content, link, status, error_msg, response_snippet, duration_ms, triggered_by, sent_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          recipients, title, content, link, alert_id, status, error_msg, response_snippet, duration_ms, triggered_by, sent_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(&entry.id)
     .bind(entry.rule_id.as_deref())
@@ -618,6 +648,7 @@ async fn insert_notification_log(
     .bind(&entry.title)
     .bind(entry.content.as_deref())
     .bind(entry.link.as_deref())
+    .bind(alert_id.as_deref())
     .bind(&entry.status)
     .bind(entry.error_msg.as_deref())
     .bind(entry.response_snippet.as_deref())
@@ -669,6 +700,7 @@ pub async fn log_manual_send(
             title: title_s,
             content: Some(content_snippet),
             link: None,
+            alert_id: None,
             status,
             error_msg,
             response_snippet: None,
@@ -1075,19 +1107,27 @@ fn sms_host_match(host_filter: &str, host: &str) -> bool {
         })
 }
 
-/// 查询并匹配启用的短信策略，命中后给已选人员发站内信 + 邮件。
+/// 查询并匹配启用的通知策略，按勾选渠道分发。
+/// `owner_user_ids` 为告警关联资产责任人；仅当命中策略打开 notify_owner 时并入收件人。
 async fn dispatch_sms_strategies(
     state: &Arc<AppState>,
     event_type: &str,
+    trigger_scene: &str,
     severity: Option<&str>,
     title: &str,
     content: &str,
     link: &str,
     host: Option<&str>,
+    owner_user_ids: &[String],
 ) {
-    tracing::info!(target: "notification_engine", "dispatch_sms_strategies called: event_type={}, severity={:?}, title={}, host={:?}", event_type, severity, title, host);
+    tracing::info!(
+        target: "notification_engine",
+        "dispatch_sms_strategies called: event_type={}, scene={}, severity={:?}, title={}, host={:?}, owners={}",
+        event_type, trigger_scene, severity, title, host, owner_user_ids.len()
+    );
     let rows = match sqlx::query(
-        "SELECT recipient_user_ids, event_type, event_sub_type, trigger_op, severity_filter, host_filter, name_keyword \
+        "SELECT recipient_user_ids, notify_owner, channel_kinds, extra_channel_ids, trigger_scene, \
+                event_type, event_sub_type, trigger_op, severity_filter, host_filter, name_keyword \
          FROM alert_sms_strategies WHERE enabled = 1",
     )
     .fetch_all(&state.db)
@@ -1095,7 +1135,7 @@ async fn dispatch_sms_strategies(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(target: "notification_engine", "查询短信策略失败: {}", e);
+            tracing::warn!(target: "notification_engine", "查询通知策略失败: {}", e);
             return;
         }
     };
@@ -1103,17 +1143,24 @@ async fn dispatch_sms_strategies(
     let host_val = host.unwrap_or("");
     let sev_val = severity.unwrap_or("");
     let title_lower = title.to_lowercase();
-    // 推断当前告警的二级子类（无则空串，空串 = 策略子类为空时才匹配）
     let actual_sub_type = infer_sub_type(title, event_type).unwrap_or_default();
 
-    // 汇总所有命中策略的已选人员（去重）
-    let mut hit_user_ids: Vec<String> = Vec::new();
+    let mut inbox_users: Vec<String> = Vec::new();
+    let mut sms_users: Vec<String> = Vec::new();
+    let mut email_users: Vec<String> = Vec::new();
+    let mut feishu_ids: Vec<String> = Vec::new();
+    let mut webhook_ids: Vec<String> = Vec::new();
+    let mut feishu_need_default = false;
+    let mut webhook_need_default = false;
+    let mut matched = 0usize;
 
     for row in &rows {
-        // recipient_user_ids 是 JSON 列，需用 serde_json::Value 获取
-        let rids_val: serde_json::Value = row.try_get::<serde_json::Value, _>("recipient_user_ids").unwrap_or(serde_json::Value::Array(vec![]));
+        let rids_val: serde_json::Value = row
+            .try_get::<serde_json::Value, _>("recipient_user_ids")
+            .unwrap_or(serde_json::Value::Array(vec![]));
         let ids: Vec<String> = serde_json::from_value(rids_val).unwrap_or_default();
-        if ids.is_empty() {
+        let notify_owner: bool = row.try_get("notify_owner").unwrap_or(false);
+        if ids.is_empty() && !notify_owner {
             continue;
         }
 
@@ -1123,48 +1170,85 @@ async fn dispatch_sms_strategies(
         let s_sev: String = row.try_get("severity_filter").unwrap_or_default();
         let s_host: String = row.try_get("host_filter").unwrap_or_default();
         let s_name: String = row.try_get("name_keyword").unwrap_or_default();
+        let s_scene: String = row
+            .try_get::<Option<String>, _>("trigger_scene")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
 
-        // 1) 一级事件类型匹配：策略为空=全部；否则必须相等
+        if !s_scene.is_empty() && s_scene != trigger_scene {
+            continue;
+        }
         if !s_event.is_empty() && s_event != event_type {
             continue;
         }
-        // 2) 二级子类匹配：策略为空=全部；否则必须与告警推断子类相等
         if !s_sub.is_empty() {
-            if actual_sub_type.is_empty() {
-                continue; // 策略要求子类，但告警无法推断出子类 → 不命中
-            }
-            if s_sub != actual_sub_type {
+            if actual_sub_type.is_empty() || s_sub != actual_sub_type {
                 continue;
             }
         }
-        // 3) 事件级别匹配
         if !sms_severity_match(&s_op, &s_sev, sev_val) {
             continue;
         }
-        // 4) 设备IP匹配
         if !sms_host_match(&s_host, host_val) {
             continue;
         }
-        // 5) 事件名称关键字匹配
         if !s_name.trim().is_empty() && !title_lower.contains(&s_name.trim().to_lowercase()) {
             continue;
         }
 
-        for uid in ids {
-            if !hit_user_ids.contains(&uid) {
-                hit_user_ids.push(uid);
+        let mut users = ids;
+        if notify_owner {
+            for uid in owner_user_ids {
+                if !uid.is_empty() && !users.contains(uid) {
+                    users.push(uid.clone());
+                }
+            }
+        }
+        if users.is_empty() {
+            continue;
+        }
+
+        let kinds = normalize_strategy_kinds(parse_json_str_list(row, "channel_kinds"));
+        let extras = parse_json_str_list(row, "extra_channel_ids");
+        matched += 1;
+
+        if kind_on(&kinds, "inbox") {
+            merge_unique(&mut inbox_users, &users);
+        }
+        if kind_on(&kinds, "sms") {
+            merge_unique(&mut sms_users, &users);
+        }
+        if kind_on(&kinds, "email") {
+            merge_unique(&mut email_users, &users);
+        }
+        if kind_on(&kinds, "feishu") {
+            if extras.is_empty() {
+                feishu_need_default = true;
+            } else {
+                merge_unique(&mut feishu_ids, &extras);
+            }
+        }
+        if kind_on(&kinds, "webhook") {
+            if extras.is_empty() {
+                webhook_need_default = true;
+            } else {
+                merge_unique(&mut webhook_ids, &extras);
             }
         }
     }
 
-    if hit_user_ids.is_empty() {
+    if matched == 0 {
         tracing::info!(target: "notification_engine", "dispatch_sms_strategies: no strategy matched, rows={}", rows.len());
         return;
     }
-    tracing::info!(target: "notification_engine", "dispatch_sms_strategies: matched {} users", hit_user_ids.len());
+    tracing::info!(
+        target: "notification_engine",
+        "dispatch_sms_strategies: matched {} strategies inbox={} sms={} email={} feishu={} webhook={}",
+        matched, inbox_users.len(), sms_users.len(), email_users.len(), feishu_ids.len() + feishu_need_default as usize, webhook_ids.len() + webhook_need_default as usize
+    );
 
-    // 站内信：通知每个命中人员
-    for uid in &hit_user_ids {
+    for uid in &inbox_users {
         crate::notification_routes::create_notification(
             &state.db,
             uid,
@@ -1176,96 +1260,255 @@ async fn dispatch_sms_strategies(
         .await;
     }
 
-    // 短信 HTTP 通道：命中后优先走短信平台 HTTP 接口发送
-    // 1) 查启用的 sms_http 通道（按创建时间 ASC，取第一条）
-    let sms_ch_row = sqlx::query(
-        "SELECT id, name, config_json FROM notification_channels \
-         WHERE channel_type = 'sms_http' AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
-    )
-    .fetch_optional(&state.db)
-    .await;
-
-    if let Ok(Some(ref ch_row)) = sms_ch_row {
-        let sms_ch_id: String = ch_row.try_get("id").unwrap_or_default();
-        let sms_ch_name: String = ch_row.try_get("name").unwrap_or_default();
-        let sms_config_str: String = ch_row.try_get("config_json").unwrap_or_else(|_| "{}".to_string());
-
-        // 2) 查命中人员的手机号（仅在职用户）
-        let mobiles = match fetch_user_mobiles(&state.db, &hit_user_ids).await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(target: "notification_engine", "查询命中人员手机号失败: {}", e);
-                vec![]
-            }
-        };
-
-        if !mobiles.is_empty() {
-            let started = std::time::Instant::now();
-            let (success_mobiles, failures) = send_sms_http(
-                &sms_config_str,
-                &mobiles,
-                title,
-                content,
-                host.unwrap_or(""),
-                severity.unwrap_or(""),
-                event_type,
-            )
-            .await;
-            let duration_ms = started.elapsed().as_millis() as u32;
-            let sent_at = chrono::Utc::now().to_rfc3339();
-
-            // 汇总错误信息
-            let error_msg: Option<String> = if failures.is_empty() {
-                None
-            } else {
-                Some(failures.iter()
-                    .map(|(m, e)| format!("{}: {}", m, e))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-                    .chars().take(4000).collect())
-            };
-
-            let status = if failures.is_empty() {
-                "success".to_string()
-            } else if success_mobiles.is_empty() {
-                "failed".to_string()
-            } else {
-                "partial".to_string()  // 部分成功
-            };
-
-            let _ = insert_notification_log(
-                &state.db,
-                NotificationLogEntry {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    rule_id: None,
-                    rule_name: Some("短信策略".to_string()),
-                    channel_id: sms_ch_id,
-                    channel_name: sms_ch_name,
-                    channel_type: "sms_http".to_string(),
-                    event_type: event_type.to_string(),
-                    trigger_scene: Some("alert_firing".to_string()),
-                    severity: severity.map(|s| s.to_string()),
-                    recipients: Some(mobiles.join(",")),
-                    title: title.chars().take(500).collect(),
-                    content: Some(content.chars().take(4000).collect()),
-                    link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
-                    status,
-                    error_msg,
-                    response_snippet: Some(format!("成功 {} / 失败 {}", success_mobiles.len(), failures.len())),
-                    duration_ms: Some(duration_ms),
-                    triggered_by: Some("sms_strategy".to_string()),
-                    sent_at,
-                },
-            )
-            .await
-            .map_err(|e| {
-                tracing::warn!(target: "notification_engine", "写短信策略通知日志失败: {}", e);
-            });
-        }
+    if !sms_users.is_empty() {
+        send_strategy_sms(state, &sms_users, event_type, trigger_scene, severity, title, content, link, host).await;
+    }
+    if !email_users.is_empty() {
+        send_strategy_email(state, &email_users, event_type, trigger_scene, severity, title, content, link).await;
     }
 
-    // 邮件兜底：对配置了邮箱的命中人员，走第一条启用的 email 通道发送
-    let emails = match fetch_user_emails(&state.db, &hit_user_ids).await {
+    let extra_channels = load_enabled_channels_by_ids(&state.db, &{
+        let mut ids = feishu_ids.clone();
+        ids.extend(webhook_ids.iter().cloned());
+        ids
+    })
+    .await;
+
+    let mut feishu_chs: Vec<ChannelSnap> = extra_channels
+        .iter()
+        .filter(|c| c.channel_type == "feishu" && feishu_ids.contains(&c.id))
+        .cloned()
+        .collect();
+    if feishu_need_default {
+        if let Some(ch) = first_enabled_channel(&state.db, "feishu").await {
+            if !feishu_chs.iter().any(|c| c.id == ch.id) {
+                feishu_chs.push(ch);
+            }
+        } else if feishu_chs.is_empty() {
+            log_strategy_skip(state, event_type, trigger_scene, severity, title, content, link, "feishu", "未配置启用的飞书通道").await;
+        }
+    }
+    for ch in &feishu_chs {
+        send_strategy_named_channel(state, ch, "feishu", event_type, trigger_scene, severity, title, content, link).await;
+    }
+
+    let mut webhook_chs: Vec<ChannelSnap> = extra_channels
+        .iter()
+        .filter(|c| c.channel_type == "webhook" && webhook_ids.contains(&c.id))
+        .cloned()
+        .collect();
+    if webhook_need_default {
+        if let Some(ch) = first_enabled_channel(&state.db, "webhook").await {
+            if !webhook_chs.iter().any(|c| c.id == ch.id) {
+                webhook_chs.push(ch);
+            }
+        } else if webhook_chs.is_empty() {
+            log_strategy_skip(state, event_type, trigger_scene, severity, title, content, link, "webhook", "未配置启用的 Webhook 通道").await;
+        }
+    }
+    for ch in &webhook_chs {
+        send_strategy_named_channel(state, ch, "webhook", event_type, trigger_scene, severity, title, content, link).await;
+    }
+}
+
+fn parse_json_str_list(row: &sqlx::mysql::MySqlRow, col: &str) -> Vec<String> {
+    row.try_get::<serde_json::Value, _>(col)
+        .ok()
+        .and_then(|v| match v {
+            serde_json::Value::Array(arr) => Some(
+                arr.into_iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect(),
+            ),
+            serde_json::Value::String(s) => serde_json::from_str(&s).ok(),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_strategy_kinds(raw: Vec<String>) -> Vec<String> {
+    let allowed = ["inbox", "sms", "email", "feishu", "webhook"];
+    let mut out = Vec::new();
+    for k in raw {
+        let k = k.trim().to_lowercase();
+        if allowed.contains(&k.as_str()) && !out.contains(&k) {
+            out.push(k);
+        }
+    }
+    if out.is_empty() {
+        vec!["inbox".into(), "sms".into(), "email".into()]
+    } else {
+        out
+    }
+}
+
+fn kind_on(kinds: &[String], k: &str) -> bool {
+    kinds.iter().any(|x| x == k)
+}
+
+fn merge_unique(dst: &mut Vec<String>, src: &[String]) {
+    for s in src {
+        if !s.is_empty() && !dst.contains(s) {
+            dst.push(s.clone());
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ChannelSnap {
+    id: String,
+    name: String,
+    channel_type: String,
+    config_str: String,
+}
+
+async fn first_enabled_channel(pool: &sqlx::MySqlPool, ty: &str) -> Option<ChannelSnap> {
+    let row = sqlx::query(
+        "SELECT id, name, channel_type, config_json FROM notification_channels \
+         WHERE channel_type = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
+    )
+    .bind(ty)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()?;
+    Some(ChannelSnap {
+        id: row.try_get("id").unwrap_or_default(),
+        name: row.try_get("name").unwrap_or_default(),
+        channel_type: row.try_get("channel_type").unwrap_or_else(|_| ty.to_string()),
+        config_str: row.try_get("config_json").unwrap_or_else(|_| "{}".to_string()),
+    })
+}
+
+async fn load_enabled_channels_by_ids(pool: &sqlx::MySqlPool, ids: &[String]) -> Vec<ChannelSnap> {
+    if ids.is_empty() {
+        return vec![];
+    }
+    let placeholders = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT id, name, channel_type, config_json FROM notification_channels \
+         WHERE enabled = 1 AND id IN ({})",
+        placeholders
+    );
+    let mut q = sqlx::query(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    let rows = match q.fetch_all(pool).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(target: "notification_engine", "按 ID 查询通知通道失败: {}", e);
+            return vec![];
+        }
+    };
+    rows.iter()
+        .map(|r| ChannelSnap {
+            id: r.try_get("id").unwrap_or_default(),
+            name: r.try_get("name").unwrap_or_default(),
+            channel_type: r.try_get("channel_type").unwrap_or_default(),
+            config_str: r.try_get("config_json").unwrap_or_else(|_| "{}".to_string()),
+        })
+        .collect()
+}
+
+async fn send_strategy_sms(
+    state: &Arc<AppState>,
+    user_ids: &[String],
+    event_type: &str,
+    trigger_scene: &str,
+    severity: Option<&str>,
+    title: &str,
+    content: &str,
+    link: &str,
+    host: Option<&str>,
+) {
+    let Some(ch) = first_enabled_channel(&state.db, "sms_http").await else {
+        log_strategy_skip(state, event_type, trigger_scene, severity, title, content, link, "sms_http", "未配置启用的短信 HTTP 通道").await;
+        return;
+    };
+    let mobiles = match fetch_user_mobiles(&state.db, user_ids).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(target: "notification_engine", "查询命中人员手机号失败: {}", e);
+            vec![]
+        }
+    };
+    if mobiles.is_empty() {
+        log_strategy_skip(state, event_type, trigger_scene, severity, title, content, link, "sms_http", "命中人员无手机号，短信未发送").await;
+        return;
+    }
+    let started = std::time::Instant::now();
+    let (success_mobiles, failures) = send_sms_http(
+        &ch.config_str,
+        &mobiles,
+        title,
+        content,
+        host.unwrap_or(""),
+        severity.unwrap_or(""),
+        event_type,
+    )
+    .await;
+    let duration_ms = started.elapsed().as_millis() as u32;
+    let error_msg: Option<String> = if failures.is_empty() {
+        None
+    } else {
+        Some(
+            failures
+                .iter()
+                .map(|(m, e)| format!("{}: {}", m, e))
+                .collect::<Vec<_>>()
+                .join("; ")
+                .chars()
+                .take(4000)
+                .collect(),
+        )
+    };
+    let status = if failures.is_empty() {
+        "success"
+    } else if success_mobiles.is_empty() {
+        "failed"
+    } else {
+        "partial"
+    };
+    let _ = insert_notification_log(
+        &state.db,
+        NotificationLogEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            rule_id: None,
+            rule_name: Some("通知策略".to_string()),
+            channel_id: ch.id,
+            channel_name: ch.name,
+            channel_type: "sms_http".to_string(),
+            event_type: event_type.to_string(),
+            trigger_scene: Some(trigger_scene.to_string()),
+            severity: severity.map(|s| s.to_string()),
+            recipients: Some(mobiles.join(",")),
+            title: title.chars().take(500).collect(),
+            content: Some(content.chars().take(4000).collect()),
+            link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
+            alert_id: None,
+            status: status.to_string(),
+            error_msg,
+            response_snippet: Some(format!("成功 {} / 失败 {}", success_mobiles.len(), failures.len())),
+            duration_ms: Some(duration_ms),
+            triggered_by: Some("sms_strategy".to_string()),
+            sent_at: chrono::Utc::now().to_rfc3339(),
+        },
+    )
+    .await;
+}
+
+async fn send_strategy_email(
+    state: &Arc<AppState>,
+    user_ids: &[String],
+    event_type: &str,
+    trigger_scene: &str,
+    severity: Option<&str>,
+    title: &str,
+    content: &str,
+    link: &str,
+) {
+    let emails = match fetch_user_emails(&state.db, user_ids).await {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!(target: "notification_engine", "查询命中人员邮箱失败: {}", e);
@@ -1275,31 +1518,12 @@ async fn dispatch_sms_strategies(
     if emails.is_empty() {
         return;
     }
-
-    let ch_row = match sqlx::query(
-        "SELECT id, name, config_json FROM notification_channels WHERE channel_type = 'email' AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
-    )
-    .fetch_optional(&state.db)
-    .await
-    {
-        Ok(Some(r)) => r,
-        Ok(None) => return, // 无启用邮件通道，仅站内信
-        Err(e) => {
-            tracing::warn!(target: "notification_engine", "查询邮件通道失败: {}", e);
-            return;
-        }
+    let Some(ch) = first_enabled_channel(&state.db, "email").await else {
+        return;
     };
-
-    let ch_id: String = ch_row.try_get("id").unwrap_or_default();
-    let ch_name: String = ch_row.try_get("name").unwrap_or_default();
-    let config_str: String = ch_row.try_get("config_json").unwrap_or_else(|_| "{}".to_string());
-
     let started = std::time::Instant::now();
-    let result = send_email(&config_str, &emails, title, content).await;
+    let result = send_email(&ch.config_str, &emails, title, content).await;
     let duration_ms = started.elapsed().as_millis() as u32;
-    let sent_at = chrono::Utc::now().to_rfc3339();
-
-    // 写发送日志（触发来源 = 短信策略）
     let (status, error_msg) = match &result {
         Ok(()) => ("success".to_string(), None),
         Err(e) => ("failed".to_string(), Some(e.chars().take(4000).collect())),
@@ -1309,29 +1533,119 @@ async fn dispatch_sms_strategies(
         NotificationLogEntry {
             id: uuid::Uuid::new_v4().to_string(),
             rule_id: None,
-            rule_name: Some("短信策略".to_string()),
-            channel_id: ch_id,
-            channel_name: ch_name,
+            rule_name: Some("通知策略".to_string()),
+            channel_id: ch.id,
+            channel_name: ch.name,
             channel_type: "email".to_string(),
             event_type: event_type.to_string(),
-            trigger_scene: Some("alert_firing".to_string()),
+            trigger_scene: Some(trigger_scene.to_string()),
             severity: severity.map(|s| s.to_string()),
             recipients: Some(emails.join(",")),
             title: title.chars().take(500).collect(),
             content: Some(content.chars().take(4000).collect()),
             link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
+            alert_id: None,
             status,
             error_msg,
             response_snippet: None,
             duration_ms: Some(duration_ms),
             triggered_by: Some("sms_strategy".to_string()),
-            sent_at,
+            sent_at: chrono::Utc::now().to_rfc3339(),
         },
     )
-    .await
-    .map_err(|e| {
-        tracing::warn!(target: "notification_engine", "写短信策略通知日志失败: {}", e);
-    });
+    .await;
+}
+
+async fn send_strategy_named_channel(
+    state: &Arc<AppState>,
+    ch: &ChannelSnap,
+    expected_type: &str,
+    event_type: &str,
+    trigger_scene: &str,
+    severity: Option<&str>,
+    title: &str,
+    content: &str,
+    link: &str,
+) {
+    if ch.channel_type != expected_type {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let result = match ch.channel_type.as_str() {
+        "feishu" => send_feishu(&ch.config_str, title, content).await,
+        "webhook" => send_webhook(&ch.config_str, title, content, event_type).await,
+        _ => return,
+    };
+    let duration_ms = started.elapsed().as_millis() as u32;
+    let (status, error_msg) = match &result {
+        Ok(()) => ("success".to_string(), None),
+        Err(e) => ("failed".to_string(), Some(e.chars().take(4000).collect())),
+    };
+    let _ = insert_notification_log(
+        &state.db,
+        NotificationLogEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            rule_id: None,
+            rule_name: Some("通知策略".to_string()),
+            channel_id: ch.id.clone(),
+            channel_name: ch.name.clone(),
+            channel_type: ch.channel_type.clone(),
+            event_type: event_type.to_string(),
+            trigger_scene: Some(trigger_scene.to_string()),
+            severity: severity.map(|s| s.to_string()),
+            recipients: None,
+            title: title.chars().take(500).collect(),
+            content: Some(content.chars().take(4000).collect()),
+            link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
+            alert_id: None,
+            status,
+            error_msg,
+            response_snippet: None,
+            duration_ms: Some(duration_ms),
+            triggered_by: Some("sms_strategy".to_string()),
+            sent_at: chrono::Utc::now().to_rfc3339(),
+        },
+    )
+    .await;
+}
+
+async fn log_strategy_skip(
+    state: &Arc<AppState>,
+    event_type: &str,
+    trigger_scene: &str,
+    severity: Option<&str>,
+    title: &str,
+    content: &str,
+    link: &str,
+    channel_type: &str,
+    reason: &str,
+) {
+    let _ = insert_notification_log(
+        &state.db,
+        NotificationLogEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            rule_id: None,
+            rule_name: Some("通知策略".to_string()),
+            channel_id: "".to_string(),
+            channel_name: "通知策略".to_string(),
+            channel_type: channel_type.to_string(),
+            event_type: event_type.to_string(),
+            trigger_scene: Some(trigger_scene.to_string()),
+            severity: severity.map(|s| s.to_string()),
+            recipients: None,
+            title: title.chars().take(500).collect(),
+            content: Some(content.chars().take(4000).collect()),
+            link: if link.is_empty() { None } else { Some(link.chars().take(500).collect()) },
+            alert_id: None,
+            status: "skipped".to_string(),
+            error_msg: Some(reason.to_string()),
+            response_snippet: None,
+            duration_ms: None,
+            triggered_by: Some("sms_strategy".to_string()),
+            sent_at: chrono::Utc::now().to_rfc3339(),
+        },
+    )
+    .await;
 }
 
 /// 批量查询用户的手机号（id → mobile），仅保留非空手机号（去重）

@@ -410,6 +410,13 @@ export interface CiModelDetail {
   attributes: CiModelAttr[]
 }
 
+/** 资产负责人 */
+export interface CiOwner {
+  userId: string
+  username: string
+  displayName: string
+}
+
 /** CI 实例（资产记录） */
 export interface CiInstance {
   id: string
@@ -418,6 +425,9 @@ export interface CiInstance {
   status: string
   departmentId?: string | null
   ownerId?: string | null
+  ownerIds?: string[]
+  ownerNames?: string[]
+  owners?: CiOwner[]
   attributes: Record<string, unknown>
   tags: string
   source?: string | null
@@ -425,6 +435,13 @@ export interface CiInstance {
   lastSyncedAt?: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** 资产页选人（不要求 user:read） */
+export interface CmdbUserOption {
+  id: string
+  username: string
+  displayName: string
 }
 
 /** CI 关系 */
@@ -466,6 +483,7 @@ export interface CreateCiInstanceRequest {
   status?: string
   departmentId?: string
   ownerId?: string
+  ownerIds?: string[]
   attributes?: Record<string, unknown>
   tags?: string
 }
@@ -476,6 +494,7 @@ export interface UpdateCiInstanceRequest {
   status?: string
   departmentId?: string
   ownerId?: string
+  ownerIds?: string[]
   attributes?: Record<string, unknown>
   tags?: string
 }
@@ -564,7 +583,7 @@ export interface SyncLog {
   instanceName: string
   status: string
   message: string
-  payload?: string | null
+  payload?: unknown
   createdAt: string
 }
 
@@ -602,6 +621,68 @@ export interface UpdateSyncSourceRequest {
   pullConfig: string
   pullCron: string
   pullEnabled: boolean
+  enabled?: boolean
+}
+
+/** HTTP 出站通道里的一张外表 */
+export interface HttpPushTarget {
+  name: string
+  path: string
+  method: string
+  bodyMode: string
+  contentSource?: 'hosts' | 'sql'
+  sql?: string
+  keyColumn?: string
+  rejectEmpty?: boolean
+}
+
+/** 单张出站外表推送结果 */
+export interface HttpPushTargetReport {
+  name: string
+  url: string
+  method: string
+  ok: boolean
+  skipped: boolean
+  httpStatus?: number | null
+  rowCount: number
+  latencyMs: number
+  message: string
+}
+
+/** HTTP 出站推送结果 */
+export interface HttpPushReport {
+  ok: boolean
+  skipped: boolean
+  source: string
+  rowCount: number
+  message: string
+  targets?: HttpPushTargetReport[]
+}
+
+/** 单张出站外表预览 */
+export interface HttpPushPreviewTarget {
+  name: string
+  method: string
+  url: string
+  bodyMode: string
+  contentSource?: 'hosts' | 'sql'
+  rowCount: number
+  rows: Array<Record<string, string>>
+  error?: string | null
+}
+
+/** HTTP 出站推送预览 */
+export interface HttpPushPreview {
+  source: string
+  name: string
+  rowCount: number
+  targets?: HttpPushPreviewTarget[]
+  /** 兼容旧版单外表字段 */
+  method?: string
+  url?: string
+  bodyMode?: string
+  contentSource?: 'hosts' | 'sql'
+  rows?: Array<Record<string, string>>
 }
 
 /** 新增同步数据源请求 */

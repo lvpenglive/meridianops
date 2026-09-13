@@ -10,7 +10,7 @@ portal/*.local
 
 # ===== 通用 =====
 *.log
-logs/
+/logs/
 node_modules/
 dist/
 .DS_Store

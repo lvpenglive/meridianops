@@ -16,7 +16,7 @@
 
     <div v-for="group in reportGroups" :key="group.name" class="report-group">
       <div class="group-header">
-        <el-icon class="group-icon"><component :is="group.icon" /></el-icon>
+        <el-icon class="group-icon"><component :is="reportIcons[group.icon]" /></el-icon>
         <h3>{{ group.name }}</h3>
         <el-tag size="small" :type="group.reports.every(r => r.available) ? 'success' : 'warning'">
           {{ group.reports.filter(r => r.available).length }} / {{ group.reports.length }} 可用
@@ -31,7 +31,7 @@
           @click="r.available && router.push(r.path)"
         >
           <div class="card-icon-wrap">
-            <el-icon class="card-icon"><component :is="r.icon" /></el-icon>
+            <el-icon class="card-icon"><component :is="reportIcons[r.icon]" /></el-icon>
           </div>
           <div class="card-body">
             <div class="card-title">
@@ -61,6 +61,14 @@ import {
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
+
+const reportIcons: Record<string, object> = {
+  Lock, WarningFilled, Checked,
+  Bell, DataAnalysis, Histogram, Timer,
+  Tickets, List, DocumentChecked,
+  Monitor, RefreshRight, Connection,
+  Box, Coin, Calendar,
+}
 
 interface ReportItem {
   title: string

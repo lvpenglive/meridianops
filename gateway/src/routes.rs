@@ -1,25 +1,29 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 
-use crate::config::{AlertsConfig, GatewayConfig};
+use crate::config::{AlertsConfig, EventideLookupConfig, GatewayConfig};
 
 pub struct AppState {
     pub config: Arc<GatewayConfig>,
     /// 运行时可更新的告警接入配置（覆盖 toml [alerts] 节）。
     /// 启动时优先从 system_settings 表加载；前端 PUT /api/system/alert-ingress 时同步更新。
     pub alerts_runtime: Arc<RwLock<AlertsConfig>>,
+    /// 运行时可更新的 Eventide 外表同步配置（覆盖 toml [eventide_lookup]）。
+    pub lookup_runtime: Arc<RwLock<EventideLookupConfig>>,
     pub client: Client,
     pub db: sqlx::MySqlPool,
     pub jwt_secret: String,
     pub jwt_ttl_hours: u64,
+    pub lookup_sync: Arc<crate::eventide_lookup_sync::LookupSyncRuntime>,
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
@@ -30,6 +34,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(crate::role_routes::routes())
         .merge(crate::dept_routes::routes())
         .merge(crate::system_routes::routes())
+        .merge(crate::component_routes::routes())
         .merge(crate::dashboard_routes::routes())
         .merge(crate::report_routes::routes())
         .merge(crate::cmdb_routes::routes())
@@ -52,9 +57,34 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/proxy/*rest", proxy_any_method())
         .route("/api/aggregate/overview", get(aggregate_overview))
         .route("/api/aggregate/alerts", get(aggregate_alerts))
-        .layer(tower_http::cors::CorsLayer::permissive())
+        .layer(build_cors_layer(&state.config.server.cors_origins))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)
+}
+
+fn build_cors_layer(origins: &[String]) -> CorsLayer {
+    if origins.iter().any(|o| o.trim() == "*") {
+        return CorsLayer::new()
+            .allow_origin(AllowOrigin::any())
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any);
+    }
+    let parsed: Vec<HeaderValue> = origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o.trim()).ok())
+        .collect();
+    CorsLayer::new()
+        .allow_origin(parsed)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
+        .allow_credentials(true)
 }
 
 fn json_response(data: serde_json::Value) -> Response {

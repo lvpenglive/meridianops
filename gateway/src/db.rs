@@ -1,8 +1,11 @@
 //! 数据库访问层：MySQL 连接池、users 表数据访问、首次启动种子 admin。
 
+use std::collections::HashMap;
+use std::time::Duration;
+
 use serde::Serialize;
 use sqlx::mysql::MySqlPoolOptions;
-use sqlx::{Connection, MySqlPool};
+use sqlx::{Connection, MySqlPool, Row};
 
 use crate::auth::hash_password;
 use crate::config::{AuthConfig, DatabaseConfig};
@@ -66,9 +69,15 @@ impl User {
 pub async fn connect(cfg: &DatabaseConfig) -> anyhow::Result<DbPool> {
     ensure_database_exists(&cfg.url).await?;
 
+    let acquire = Duration::from_secs(cfg.acquire_timeout_secs.max(1));
+    let idle = Duration::from_secs(cfg.idle_timeout_secs.max(5));
+    let lifetime = Duration::from_secs(cfg.max_lifetime_secs.max(30));
     let pool = MySqlPoolOptions::new()
-        .max_connections(cfg.max_connections)
-        .min_connections(cfg.min_connections)
+        .max_connections(cfg.max_connections.max(1))
+        .min_connections(cfg.min_connections.min(cfg.max_connections).max(0))
+        .acquire_timeout(acquire)
+        .idle_timeout(idle)
+        .max_lifetime(lifetime)
         .after_connect(|conn, _meta| {
             Box::pin(async move {
                 // 移除 ONLY_FULL_GROUP_BY，避免 GROUP BY 表达式与 SELECT 不一致时报错
@@ -81,8 +90,25 @@ pub async fn connect(cfg: &DatabaseConfig) -> anyhow::Result<DbPool> {
         })
         .connect(&cfg.url)
         .await?;
-    tracing::info!(url = %cfg.url, "mysql connected");
+    tracing::info!(
+        max = cfg.max_connections,
+        acquire_secs = acquire.as_secs(),
+        idle_secs = idle.as_secs(),
+        "mysql connected"
+    );
     Ok(pool)
+}
+
+/// MySQL 唯一键冲突（1062），用于并发入库当合并而不是 500。
+pub fn is_duplicate_key(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db) => {
+            db.code().as_deref() == Some("1062")
+                || db.message().contains("Duplicate")
+                || db.message().contains("uk_alert_fp")
+        }
+        _ => false,
+    }
 }
 
 /// 从完整 url 中切出 server-only url 和 db 名。
@@ -376,12 +402,23 @@ pub async fn find_user_by_employee_no(
 /// - `notifications` / `user_notification_settings`：个人消息与通知偏好
 /// - `api_tokens`：该用户名下的 API 令牌
 /// - `ticket_watchers`：工单关注关系
+/// - `ci_instance_owners` / `ci_instances.owner_id`：资产负责人
 /// - `users.manager_id`：把他人的"直属上级"置空
 ///
 /// 注意：`ticket_comments`、`audit_logs` 等历史流水保留，不随用户删除。
 ///
 /// 返回是否真的删除了一行（false = 用户不存在）。
 pub async fn delete_user(pool: &DbPool, id: &str) -> anyhow::Result<bool> {
+    // 0) 资产负责人
+    sqlx::query("DELETE FROM ci_instance_owners WHERE user_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE ci_instances SET owner_id = NULL WHERE owner_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
     // 1) 告警组成员关系
     sqlx::query("DELETE FROM alert_group_members WHERE user_id = ?")
         .bind(id)
@@ -1941,6 +1978,86 @@ pub struct CiInstance {
     pub updated_at: String,
 }
 
+/// Eventide Lookup 同步用：全量实例（id / name / attributes）。
+pub async fn list_all_ci_instances_lite(
+    pool: &DbPool,
+) -> anyhow::Result<Vec<(String, String, Option<String>)>> {
+    let rows = sqlx::query("SELECT id, name, CAST(attributes AS CHAR) AS attributes FROM ci_instances")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            (
+                r.try_get::<String, _>("id").unwrap_or_default(),
+                r.try_get::<String, _>("name").unwrap_or_default(),
+                r.try_get::<Option<String>, _>("attributes").unwrap_or(None),
+            )
+        })
+        .collect())
+}
+
+/// 资产负责人联系方式（同步外表用）。
+#[derive(Debug, Clone)]
+pub struct CiOwnerContact {
+    pub display_name: String,
+    pub username: String,
+    pub mobile: Option<String>,
+    pub email: Option<String>,
+}
+
+pub async fn list_ci_owner_contacts_map(
+    pool: &DbPool,
+    instance_ids: &[String],
+) -> anyhow::Result<HashMap<String, Vec<CiOwnerContact>>> {
+    let mut map: HashMap<String, Vec<CiOwnerContact>> = HashMap::new();
+    if instance_ids.is_empty() {
+        return Ok(map);
+    }
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT o.instance_id, u.username, u.display_name, u.mobile, u.email \
+         FROM ci_instance_owners o \
+         INNER JOIN users u ON u.id = o.user_id \
+         WHERE o.instance_id IN (",
+    );
+    {
+        let mut sep = qb.separated(", ");
+        for id in instance_ids {
+            sep.push_bind(id);
+        }
+    }
+    qb.push(") ORDER BY o.instance_id, o.sort_order ASC, o.user_id ASC");
+    let rows = qb.build().fetch_all(pool).await?;
+    for r in &rows {
+        let iid: String = r.try_get("instance_id").unwrap_or_default();
+        if iid.is_empty() {
+            continue;
+        }
+        let mobile: Option<String> = r
+            .try_get::<Option<String>, _>("mobile")
+            .ok()
+            .flatten()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let email_raw: String = r.try_get("email").unwrap_or_default();
+        let email = {
+            let t = email_raw.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        };
+        map.entry(iid).or_default().push(CiOwnerContact {
+            username: r.try_get("username").unwrap_or_default(),
+            display_name: r.try_get("display_name").unwrap_or_default(),
+            mobile,
+            email,
+        });
+    }
+    Ok(map)
+}
+
 /// 分页查询 CI 实例。支持按 model_id / status / keyword（name 模糊）筛选。
 /// 返回 (总数, 当前页数据)。
 pub async fn query_ci_instances(
@@ -2085,6 +2202,10 @@ pub async fn update_ci_instance(
 /// 删除 CI 实例。同时清理关联的关系（调用方事务保证）。
 pub async fn delete_ci_instance(pool: &DbPool, id: &str) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM ci_instance_owners WHERE instance_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     // 先删关系
     sqlx::query("DELETE FROM ci_relations WHERE source_id = ? OR target_id = ?")
         .bind(id)
@@ -2102,6 +2223,322 @@ pub async fn delete_ci_instance(pool: &DbPool, id: &str) -> anyhow::Result<()> {
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// 资产负责人（多人）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CiOwner {
+    pub user_id: String,
+    pub username: String,
+    pub display_name: String,
+}
+
+/// 同步侧用户描述（对上已有用户或创建只读账号）。
+#[derive(Debug, Clone, Default)]
+pub struct SyncedUserRef {
+    pub username: String,
+    pub display_name: Option<String>,
+    pub mobile: Option<String>,
+    pub employee_no: Option<String>,
+    pub email: Option<String>,
+    pub external_id: Option<String>,
+}
+
+pub async fn list_ci_owners(pool: &DbPool, instance_id: &str) -> anyhow::Result<Vec<CiOwner>> {
+    let rows = sqlx::query(
+        "SELECT o.user_id, u.username, u.display_name \
+         FROM ci_instance_owners o \
+         INNER JOIN users u ON u.id = o.user_id \
+         WHERE o.instance_id = ? \
+         ORDER BY o.sort_order ASC, o.user_id ASC",
+    )
+    .bind(instance_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| CiOwner {
+            user_id: r.try_get::<String, _>("user_id").unwrap_or_default(),
+            username: r.try_get::<String, _>("username").unwrap_or_default(),
+            display_name: r.try_get::<String, _>("display_name").unwrap_or_default(),
+        })
+        .filter(|o| !o.user_id.is_empty())
+        .collect())
+}
+
+pub async fn list_ci_owners_map(
+    pool: &DbPool,
+    instance_ids: &[String],
+) -> anyhow::Result<HashMap<String, Vec<CiOwner>>> {
+    let mut map: HashMap<String, Vec<CiOwner>> = HashMap::new();
+    if instance_ids.is_empty() {
+        return Ok(map);
+    }
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT o.instance_id, o.user_id, u.username, u.display_name \
+         FROM ci_instance_owners o \
+         INNER JOIN users u ON u.id = o.user_id \
+         WHERE o.instance_id IN (",
+    );
+    {
+        let mut sep = qb.separated(", ");
+        for id in instance_ids {
+            sep.push_bind(id);
+        }
+    }
+    qb.push(") ORDER BY o.instance_id, o.sort_order ASC, o.user_id ASC");
+    let rows = qb.build().fetch_all(pool).await?;
+    for r in &rows {
+        let iid: String = r.try_get("instance_id").unwrap_or_default();
+        let owner = CiOwner {
+            user_id: r.try_get("user_id").unwrap_or_default(),
+            username: r.try_get("username").unwrap_or_default(),
+            display_name: r.try_get("display_name").unwrap_or_default(),
+        };
+        if iid.is_empty() || owner.user_id.is_empty() {
+            continue;
+        }
+        map.entry(iid).or_default().push(owner);
+    }
+    Ok(map)
+}
+
+/// 全量替换资产负责人，并回写 `owner_id` 为第一人（兼容旧查询）。
+pub async fn replace_ci_owners(pool: &DbPool, instance_id: &str, user_ids: &[String]) -> anyhow::Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    let mut ids: Vec<String> = Vec::new();
+    for raw in user_ids {
+        let id = raw.trim();
+        if id.is_empty() || !seen.insert(id.to_string()) {
+            continue;
+        }
+        ids.push(id.to_string());
+    }
+
+    sqlx::query("DELETE FROM ci_instance_owners WHERE instance_id = ?")
+        .bind(instance_id)
+        .execute(pool)
+        .await?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    for (i, uid) in ids.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO ci_instance_owners (instance_id, user_id, sort_order, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(instance_id)
+        .bind(uid)
+        .bind(i as i32)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+    }
+
+    let primary = ids.first().map(String::as_str);
+    sqlx::query("UPDATE ci_instances SET owner_id = ? WHERE id = ?")
+        .bind(primary)
+        .bind(instance_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub fn ci_instance_json(inst: &CiInstance, owners: &[CiOwner]) -> serde_json::Value {
+    let mut v = serde_json::to_value(inst).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = v.as_object_mut() {
+        let ids: Vec<&str> = owners.iter().map(|o| o.user_id.as_str()).collect();
+        let names: Vec<String> = owners
+            .iter()
+            .map(|o| {
+                if o.display_name.trim().is_empty() {
+                    o.username.clone()
+                } else {
+                    o.display_name.clone()
+                }
+            })
+            .collect();
+        obj.insert("ownerIds".into(), serde_json::json!(ids));
+        obj.insert("ownerNames".into(), serde_json::json!(names));
+        obj.insert("owners".into(), serde_json::to_value(owners).unwrap_or(serde_json::json!([])));
+    }
+    v
+}
+
+pub async fn ci_instance_json_one(pool: &DbPool, inst: &CiInstance) -> anyhow::Result<serde_json::Value> {
+    let owners = list_ci_owners(pool, &inst.id).await?;
+    Ok(ci_instance_json(inst, &owners))
+}
+
+const SYNCED_VIEWER_ROLE_ID: &str = "00000000-0000-0000-0000-000000000003";
+
+fn opt_nonempty(s: &Option<String>) -> Option<&str> {
+    s.as_deref().map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// 同步用户：按 external_id / username / 工号 / 手机号对上已有账号；否则创建只读用户（随机密码，不可登录直到管理员重置）。
+pub async fn upsert_synced_user(pool: &DbPool, source: &str, spec: &SyncedUserRef) -> anyhow::Result<String> {
+    let username = spec.username.trim();
+    if username.is_empty() {
+        anyhow::bail!("同步用户缺少 username");
+    }
+    let display = opt_nonempty(&spec.display_name).unwrap_or(username);
+    let mobile = opt_nonempty(&spec.mobile);
+    let employee_no = opt_nonempty(&spec.employee_no);
+    let email = opt_nonempty(&spec.email).unwrap_or("");
+    let external_id = opt_nonempty(&spec.external_id);
+
+    let mut found: Option<String> = None;
+    if let Some(ext) = external_id {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM users WHERE source = ? AND external_id = ? LIMIT 1",
+        )
+        .bind(source)
+        .bind(ext)
+        .fetch_optional(pool)
+        .await?;
+        found = row.map(|r| r.0);
+    }
+    if found.is_none() {
+        if let Some(u) = find_user_by_username(pool, username).await? {
+            found = Some(u.id);
+        }
+    }
+    if found.is_none() {
+        if let Some(eno) = employee_no {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT id FROM users WHERE employee_no = ? LIMIT 1")
+                    .bind(eno)
+                    .fetch_optional(pool)
+                    .await?;
+            found = row.map(|r| r.0);
+        }
+    }
+    if found.is_none() {
+        if let Some(m) = mobile {
+            let row: Option<(String,)> = sqlx::query_as("SELECT id FROM users WHERE mobile = ? LIMIT 1")
+                .bind(m)
+                .fetch_optional(pool)
+                .await?;
+            found = row.map(|r| r.0);
+        }
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(id) = found {
+        sqlx::query(
+            "UPDATE users SET \
+                display_name = CASE WHEN ? <> '' THEN ? ELSE display_name END, \
+                email = CASE WHEN ? <> '' THEN ? ELSE email END, \
+                mobile = CASE WHEN ? IS NOT NULL AND (mobile IS NULL OR mobile = '') THEN ? ELSE mobile END, \
+                employee_no = CASE WHEN ? IS NOT NULL AND (employee_no IS NULL OR employee_no = '') THEN ? ELSE employee_no END, \
+                source = COALESCE(NULLIF(source, ''), ?), \
+                external_id = COALESCE(NULLIF(external_id, ''), ?), \
+                updated_at = ? \
+             WHERE id = ?",
+        )
+        .bind(display)
+        .bind(display)
+        .bind(email)
+        .bind(email)
+        .bind(mobile)
+        .bind(mobile)
+        .bind(employee_no)
+        .bind(employee_no)
+        .bind(source)
+        .bind(external_id)
+        .bind(&now)
+        .bind(&id)
+        .execute(pool)
+        .await?;
+        return Ok(id);
+    }
+
+    let pwd = hash_password(&uuid::Uuid::new_v4().to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let remark = format!("CMDB 同步创建（{}），登录前请管理员重置密码", source);
+    let insert = sqlx::query(
+        "INSERT INTO users (id, username, display_name, email, password_hash, password_changed_at, role, role_id, department_id, \
+                            mobile, employee_no, position, manager_id, im_account, employment_status, leave_date, remark, \
+                            source, external_id, enabled, last_login_at, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, 'viewer', ?, NULL, ?, ?, NULL, NULL, NULL, 'active', NULL, ?, ?, ?, 1, NULL, ?, ?)",
+    )
+    .bind(&id)
+    .bind(username)
+    .bind(display)
+    .bind(email)
+    .bind(&pwd)
+    .bind(&now)
+    .bind(SYNCED_VIEWER_ROLE_ID)
+    .bind(mobile)
+    .bind(employee_no)
+    .bind(&remark)
+    .bind(source)
+    .bind(external_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await;
+
+    match insert {
+        Ok(_) => Ok(id),
+        Err(e) => {
+            // 用户名/手机/工号撞唯一约束：再对一次已有用户
+            if let Some(u) = find_user_by_username(pool, username).await? {
+                return Ok(u.id);
+            }
+            anyhow::bail!("同步创建用户 {} 失败: {}", username, e);
+        }
+    }
+}
+
+/// 同步到资产上的负责人：payload 里有人则全量覆盖；无人则保留本地。
+pub async fn apply_sync_owners(
+    pool: &DbPool,
+    source: &str,
+    instance_id: &str,
+    owners: &[SyncedUserRef],
+) -> anyhow::Result<usize> {
+    if owners.is_empty() {
+        return Ok(0);
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for spec in owners {
+        match upsert_synced_user(pool, source, spec).await {
+            Ok(uid) => {
+                if !ids.contains(&uid) {
+                    ids.push(uid);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(target: "cmdb_sync", "同步用户失败 username={}: {}", spec.username, e);
+            }
+        }
+    }
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    replace_ci_owners(pool, instance_id, &ids).await?;
+    Ok(ids.len())
+}
+
+pub async fn list_user_options(pool: &DbPool) -> anyhow::Result<Vec<serde_json::Value>> {
+    let rows = sqlx::query(
+        "SELECT id, username, display_name FROM users \
+         WHERE enabled = 1 AND (employment_status IS NULL OR employment_status = '' OR employment_status = 'active') \
+         ORDER BY display_name, username",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.try_get::<String, _>("id").unwrap_or_default(),
+                "username": r.try_get::<String, _>("username").unwrap_or_default(),
+                "displayName": r.try_get::<String, _>("display_name").unwrap_or_default(),
+            })
+        })
+        .collect())
 }
 
 /// 模型统计行（含实例数），用于 dashboard 一次性获取全部模型 + 计数，避免 N+1 查询。
@@ -2672,13 +3109,16 @@ pub async fn update_sync_source_pull_config(
     pull_config: &str,
     pull_cron: &str,
     pull_enabled: bool,
+    enabled: bool,
 ) -> anyhow::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    // source_type：启用定时拉取→pull，否则保持原值（webhook 推送仍可用）
+    // source_type：启用定时拉取→pull，否则保持原值（webhook / http_push 仍可用）
     if pull_enabled {
         sqlx::query(
             "UPDATE sync_sources SET api_url = ?, api_token = ?, pull_config = ?, \
-                    pull_cron = ?, pull_enabled = ?, source_type = 'pull', updated_at = ? \
+                    pull_cron = ?, pull_enabled = ?, enabled = ?, \
+                    source_type = IF(source_type = 'http_push', source_type, 'pull'), \
+                    updated_at = ? \
              WHERE code = ?",
         )
         .bind(api_url)
@@ -2686,6 +3126,7 @@ pub async fn update_sync_source_pull_config(
         .bind(pull_config)
         .bind(pull_cron)
         .bind(1i8)
+        .bind(if enabled { 1i8 } else { 0i8 })
         .bind(&now)
         .bind(code)
         .execute(pool)
@@ -2693,7 +3134,7 @@ pub async fn update_sync_source_pull_config(
     } else {
         sqlx::query(
             "UPDATE sync_sources SET api_url = ?, api_token = ?, pull_config = ?, \
-                    pull_cron = ?, pull_enabled = ?, updated_at = ? \
+                    pull_cron = ?, pull_enabled = ?, enabled = ?, updated_at = ? \
              WHERE code = ?",
         )
         .bind(api_url)
@@ -2701,6 +3142,7 @@ pub async fn update_sync_source_pull_config(
         .bind(pull_config)
         .bind(pull_cron)
         .bind(0i8)
+        .bind(if enabled { 1i8 } else { 0i8 })
         .bind(&now)
         .bind(code)
         .execute(pool)
@@ -2716,7 +3158,8 @@ pub async fn list_pull_enabled_sources(pool: &DbPool) -> anyhow::Result<Vec<Sync
                 enabled, last_sync_at, last_sync_count, last_sync_status, \
                 CAST(pull_config AS CHAR) AS pull_config, pull_cron, pull_enabled, \
                 created_at, updated_at \
-         FROM sync_sources WHERE pull_enabled = 1 AND pull_cron != '' AND enabled = 1",
+         FROM sync_sources WHERE pull_enabled = 1 AND enabled = 1 \
+           AND source_type <> 'http_push'",
     )
     .fetch_all(pool)
     .await?;
@@ -2899,12 +3342,96 @@ pub fn map_blueking_host(payload: &serde_json::Value) -> Option<MappedInstance> 
         "disk": bk_disk
     });
 
+    let mut owners = parse_operator_names(payload.get("operator").and_then(|v| v.as_str()));
+    owners.extend(parse_operator_names(
+        payload.get("bk_bak_operator").and_then(|v| v.as_str()),
+    ));
+
     Some(MappedInstance {
         external_id: bk_host_id,
         model_code: "host".to_string(),
         name: display_name,
         status,
         attributes,
+        owners,
+    })
+}
+
+/// 蓝鲸 operator / bk_bak_operator：逗号或分号分隔的登录名。
+pub fn parse_operator_names(raw: Option<&str>) -> Vec<SyncedUserRef> {
+    let Some(s) = raw else {
+        return Vec::new();
+    };
+    s.split(|c| c == ',' || c == ';' || c == '，' || c == '；')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| SyncedUserRef {
+            username: n.to_string(),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// 通用同步 payload 里的负责人列表。
+pub fn parse_generic_owners(item: &serde_json::Value) -> Vec<SyncedUserRef> {
+    if let Some(arr) = item.get("owners").and_then(|v| v.as_array()) {
+        return arr.iter().filter_map(parse_owner_value).collect();
+    }
+    if let Some(arr) = item
+        .get("ownerUsers")
+        .or_else(|| item.get("owner_users"))
+        .and_then(|v| v.as_array())
+    {
+        return arr.iter().filter_map(parse_owner_value).collect();
+    }
+    if let Some(s) = item.get("owners").and_then(|v| v.as_str()) {
+        return parse_operator_names(Some(s));
+    }
+    let mut owners = parse_operator_names(item.get("operator").and_then(|v| v.as_str()));
+    owners.extend(parse_operator_names(
+        item.get("bk_bak_operator").and_then(|v| v.as_str()),
+    ));
+    owners
+}
+
+fn parse_owner_value(v: &serde_json::Value) -> Option<SyncedUserRef> {
+    if let Some(s) = v.as_str() {
+        let username = s.trim();
+        if username.is_empty() {
+            return None;
+        }
+        return Some(SyncedUserRef {
+            username: username.to_string(),
+            ..Default::default()
+        });
+    }
+    let username = v
+        .get("username")
+        .or_else(|| v.get("userName"))
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    Some(SyncedUserRef {
+        username,
+        display_name: v
+            .get("displayName")
+            .or_else(|| v.get("display_name"))
+            .or_else(|| v.get("name"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()),
+        mobile: v.get("mobile").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        employee_no: v
+            .get("employeeNo")
+            .or_else(|| v.get("employee_no"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()),
+        email: v.get("email").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        external_id: v
+            .get("externalId")
+            .or_else(|| v.get("external_id"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()),
     })
 }
 
@@ -2941,6 +3468,7 @@ pub struct MappedInstance {
     pub name: String,
     pub status: String,
     pub attributes: serde_json::Value,
+    pub owners: Vec<SyncedUserRef>,
 }
 
 // ============ API 令牌管理（外部系统对接） ============

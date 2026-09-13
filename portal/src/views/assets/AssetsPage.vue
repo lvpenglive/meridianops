@@ -105,6 +105,12 @@
             <el-tag :type="statusTagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="负责人" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="ownerText(row)">{{ ownerText(row) }}</span>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="关键属性" min-width="280">
           <template #default="{ row }">
             <span v-for="(val, key) in keyAttrs(row)" :key="key" class="attr-chip">
@@ -188,6 +194,25 @@
           <el-form-item label="标签">
             <el-input v-model="formData.tags" placeholder="多个标签用逗号分隔" clearable />
           </el-form-item>
+          <el-form-item label="负责人">
+            <el-select
+              v-model="formData.ownerIds"
+              multiple
+              filterable
+              clearable
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="可多选系统用户"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="u in userOptions"
+                :key="u.id"
+                :label="userOptionLabel(u)"
+                :value="u.id"
+              />
+            </el-select>
+          </el-form-item>
         </div>
 
         <div v-if="currentAttrs.length" class="form-section">
@@ -253,7 +278,7 @@
         <div class="upload-hint">
           <el-alert type="info" :closable="false" show-icon>
             <template #title>
-              支持上传 .xlsx / .xls / .csv 文件，单次最多导入 1000 条。
+              支持上传 .xlsx / .csv 文件，单次最多导入 1000 条。
               请先点击「下载导入模板」获取标准格式，按列填写后上传。
             </template>
           </el-alert>
@@ -262,7 +287,7 @@
         <el-upload
           ref="uploadRef"
           drag
-          accept=".xlsx,.xls,.csv"
+          accept=".xlsx,.csv"
           :auto-upload="false"
           :limit="1"
           :on-exceed="onUploadExceed"
@@ -371,7 +396,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadFile, type UploadFiles, type UploadInstance } from 'element-plus'
 import { Plus, Search, Refresh, Grid, Monitor, Cpu, Coin, Connection, Upload, UploadFilled, View, Download } from '@element-plus/icons-vue'
-import * as XLSX from 'xlsx'
+import { exportSheetsToExcel, exportToCsv, parseSpreadsheet } from '../../utils/export'
 import {
   listCiModels,
   getCiModel,
@@ -381,8 +406,9 @@ import {
   deleteCiInstance,
   batchCreateInstances,
   getCmdbStats,
+  listCmdbUserOptions,
 } from '../../api/cmdb'
-import type { CiModel, CiModelAttr, CiInstance, CmdbStats, BatchInstanceItem, BatchImportResult } from '../../api/types'
+import type { CiModel, CiModelAttr, CiInstance, CmdbStats, BatchInstanceItem, BatchImportResult, CmdbUserOption } from '../../api/types'
 import { useUserStore } from '../../stores/user'
 
 const userStore = useUserStore()
@@ -423,7 +449,7 @@ function modelTagType(id: string): string {
   const code = models.value.find(m => m.id === id)?.code ?? ''
   const map: Record<string, string> = {
     business_system: 'warning',
-    host: '',
+    host: 'info',
     middleware: 'success',
     database: 'danger',
     network_device: 'info',
@@ -516,6 +542,30 @@ function formatTime(t: string): string {
   }
 }
 
+function ownerText(row: CiInstance): string {
+  if (row.ownerNames?.length) return row.ownerNames.join('、')
+  if (row.owners?.length) {
+    return row.owners
+      .map((o) => (o.displayName?.trim() ? o.displayName : o.username))
+      .filter(Boolean)
+      .join('、')
+  }
+  return ''
+}
+
+function userOptionLabel(u: CmdbUserOption): string {
+  const name = u.displayName?.trim()
+  return name && name !== u.username ? `${name}（${u.username}）` : u.username
+}
+
+async function fetchUserOptions() {
+  try {
+    userOptions.value = await listCmdbUserOptions()
+  } catch {
+    userOptions.value = []
+  }
+}
+
 // ---- 图标 ----
 const iconMap: Record<string, any> = {
   Grid, Monitor, Cpu, Coin, Connection,
@@ -541,12 +591,15 @@ const saving = ref(false)
 const formRef = ref<FormInstance>()
 const currentAttrs = ref<CiModelAttr[]>([])
 
+const userOptions = ref<CmdbUserOption[]>([])
+
 const formData = reactive({
   id: '',
   modelId: '',
   name: '',
   status: 'running',
   tags: '',
+  ownerIds: [] as string[],
   attributes: {} as Record<string, any>,
 })
 
@@ -574,6 +627,7 @@ async function openEdit(row: CiInstance) {
   formData.name = row.name
   formData.status = row.status
   formData.tags = row.tags
+  formData.ownerIds = row.ownerIds?.length ? [...row.ownerIds] : (row.ownerId ? [row.ownerId] : [])
   formData.attributes = { ...(row.attributes || {}) }
   await onModelChange(row.modelId)
   dialogVisible.value = true
@@ -585,6 +639,7 @@ function resetForm() {
   formData.name = ''
   formData.status = 'running'
   formData.tags = ''
+  formData.ownerIds = []
   formData.attributes = {}
   currentAttrs.value = []
 }
@@ -622,6 +677,7 @@ async function onSubmit() {
         name: formData.name.trim(),
         status: formData.status,
         tags: formData.tags,
+        ownerIds: formData.ownerIds,
         attributes: formData.attributes,
       }
       if (isEdit.value) {
@@ -725,15 +781,7 @@ async function onUploadChange(file: UploadFile) {
     return
   }
   try {
-    const buf = await file.raw.arrayBuffer()
-    const wb = XLSX.read(buf, { type: 'array' })
-    const sheet = wb.Sheets[wb.SheetNames[0]]
-    if (!sheet) {
-      ElMessage.error('文件没有有效的工作表')
-      fileList.value = []
-      return
-    }
-    const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet, { defval: '' })
+    const rows = await parseSpreadsheet(file.raw)
     if (!rows.length) {
       ElMessage.error('文件没有数据行')
       fileList.value = []
@@ -849,11 +897,6 @@ async function downloadTemplate() {
     else if (a.valueType === 'enum' && a.options?.length) sample[a.code] = a.options[0]
     else sample[a.code] = ''
   }
-  const dataSheet = XLSX.utils.json_to_sheet([sample], { header })
-  // 列宽
-  dataSheet['!cols'] = header.map((h) => ({ wch: Math.max(12, h.length + 4) }))
-
-  // 说明 sheet
   const notes: Array<{ 字段: string; 说明: string }> = [
     { 字段: 'name', 说明: '资产名称（必填）' },
     { 字段: 'status', 说明: '状态：running/stopped/maintenance/unknown，留空默认 running' },
@@ -861,7 +904,7 @@ async function downloadTemplate() {
   ]
   for (const a of attrs) {
     const req = a.isRequired ? '必填' : '可选'
-    let typeDesc = a.valueType
+    let typeDesc: string = a.valueType
     if (a.valueType === 'enum' && a.options?.length) {
       typeDesc = `枚举(${a.options.join('/')})`
     } else if (a.valueType === 'boolean') {
@@ -871,15 +914,14 @@ async function downloadTemplate() {
     }
     notes.push({ 字段: a.code, 说明: `${a.name}（${req}，${typeDesc}）` })
   }
-  const notesSheet = XLSX.utils.json_to_sheet(notes, { header: ['字段', '说明'] })
-  notesSheet['!cols'] = [{ wch: 20 }, { wch: 50 }]
-
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, dataSheet, '导入数据')
-  XLSX.utils.book_append_sheet(wb, notesSheet, '填写说明')
-
   const fileName = `${modelName}导入模板.xlsx`
-  XLSX.writeFile(wb, fileName)
+  await exportSheetsToExcel(
+    [
+      { name: '导入数据', rows: [sample], headers: header },
+      { name: '填写说明', rows: notes, headers: ['字段', '说明'] },
+    ],
+    fileName,
+  )
 }
 
 // ---- 导出 ----
@@ -947,15 +989,13 @@ async function exportData(format: 'xlsx' | 'csv') {
       return row
     })
 
-    const ws = XLSX.utils.json_to_sheet(rows, { header: headers })
-    ws['!cols'] = headers.map(h => ({ wch: Math.max(12, h.length + 4) }))
-
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, '资产数据')
-
     const dateStr = new Date().toISOString().slice(0, 10)
     const fileName = `资产导出_${dateStr}.${format}`
-    XLSX.writeFile(wb, fileName, { bookType: format })
+    if (format === 'csv') {
+      exportToCsv(rows, headers, fileName)
+    } else {
+      await exportSheetsToExcel([{ name: '资产数据', rows, headers }], fileName)
+    }
     ElMessage.success(`已导出 ${items.length} 条数据`)
   } catch (e: any) {
     ElMessage.error(e?.message || '导出失败')
@@ -967,7 +1007,7 @@ async function exportData(format: 'xlsx' | 'csv') {
 // ---- 初始化 ----
 onMounted(async () => {
   // 三个请求无依赖关系，并行加载减少等待时间
-  await Promise.all([fetchModels(), fetchList(), fetchStats()])
+  await Promise.all([fetchModels(), fetchList(), fetchStats(), fetchUserOptions()])
 })
 </script>
 

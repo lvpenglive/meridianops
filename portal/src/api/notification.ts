@@ -154,6 +154,7 @@ export const TRIGGER_SCENES: { value: string; label: string }[] = [
   { value: 'ticket_assigned',    label: '工单分派' },
   { value: 'ticket_closed',      label: '工单关闭' },
   { value: 'job_failed',         label: '作业失败' },
+  { value: 'log_surge',          label: '日志突增' },
 ]
 
 /// 事件类型从字典 event_type 读取

@@ -94,15 +94,13 @@ const routes = [
       },
       {
         path: 'notification/rules',
-        name: 'NotificationRules',
-        component: () => import('../views/notification/RulesPage.vue'),
-        meta: { title: '通知规则', icon: 'Setting', permission: 'notification:read' }
+        redirect: '/notification/sms-strategies',
       },
       {
         path: 'notification/sms-strategies',
         name: 'SmsStrategies',
         component: () => import('../views/notification/SmsStrategyPage.vue'),
-        meta: { title: '告警短信策略', icon: 'BellFilled', permission: 'sms_strategy:read' }
+        meta: { title: '通知策略', icon: 'BellFilled', permission: 'sms_strategy:read' }
       },
       {
         path: 'notification/alert-groups',
@@ -265,6 +263,12 @@ const routes = [
         name: 'System',
         component: () => import('../views/system/SystemPage.vue'),
         meta: { title: '系统设置', icon: 'Tools', permission: 'system:read' }
+      },
+      {
+        path: 'system/components',
+        name: 'SystemComponents',
+        component: () => import('../views/system/ComponentsPage.vue'),
+        meta: { title: '组件状态', icon: 'Monitor', permission: 'system:read' }
       },
       {
         path: 'system/settings',

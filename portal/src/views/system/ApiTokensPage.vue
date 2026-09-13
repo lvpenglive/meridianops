@@ -103,7 +103,7 @@
               <el-tag
                 v-for="s in displayScopes(row.scopes)" :key="s"
                 size="small" effect="plain" style="margin: 2px 4px 2px 0"
-              >{{ s }}</el-tag>
+              >{{ permissionLabel(s) }}</el-tag>
               <el-tag size="small" effect="plain" type="info" v-if="row.scopes.length > 4">
                 +{{ row.scopes.length - 4 }}
               </el-tag>
@@ -195,17 +195,21 @@
           <div class="scope-groups">
             <el-collapse v-model="activeGroups">
               <el-collapse-item
-                v-for="g in permGroups" :key="g.group"
-                :name="g.group" :title="`${scopeGroupLabel(g.group)} (${g.items.length})`"
+                v-for="g in menuPermGroups" :key="g.parent"
+                :name="g.parent" :title="`${g.parent} (${g.children.reduce((n, c) => n + c.items.length, 0)})`"
               >
-                <el-checkbox-group v-model="createForm.scopes">
-                  <el-checkbox
-                    v-for="p in g.items" :key="p" :label="p" :border="true"
-                    style="margin: 4px 8px 4px 0"
-                  >
-                    <span style="font-family: monospace">{{ p }}</span>
-                  </el-checkbox>
-                </el-checkbox-group>
+                <div v-for="c in g.children" :key="c.title" class="scope-child">
+                  <div class="scope-child__title">{{ c.title }}</div>
+                  <el-checkbox-group v-model="createForm.scopes">
+                    <el-checkbox
+                      v-for="p in c.items" :key="p" :label="p" :border="true"
+                      style="margin: 4px 8px 4px 0"
+                    >
+                      <span>{{ permissionActionLabel(p) }}</span>
+                      <span class="scope-code">{{ p }}</span>
+                    </el-checkbox>
+                  </el-checkbox-group>
+                </div>
               </el-collapse-item>
             </el-collapse>
           </div>
@@ -330,11 +334,19 @@ import {
   revokeApiToken, updateApiTokenExpiry,
 } from '../../api/token'
 import type { ApiToken, CreateApiTokenRequest, PermissionGroup } from '../../api/types'
+import {
+  groupByMenu,
+  permissionActionLabel,
+  permissionLabel,
+} from '../../utils/permissionDisplay'
 
 // ============ 基础 ============
 const loading = ref(false)
 const tokens = ref<ApiToken[]>([])
 const permGroups = ref<PermissionGroup[]>([])
+const menuPermGroups = computed(() =>
+  groupByMenu(permGroups.value.flatMap((g) => g.items), (code) => code),
+)
 const myRole = ref<string>('viewer')
 const userStore = useUserStore()
 const isAdmin = computed(() => userStore.role === 'admin')
@@ -416,15 +428,6 @@ function roleLabel(r: string) {
 function roleTagType(r: string) {
   return r === 'admin' ? 'danger' : r === 'operator' ? 'primary' : 'info'
 }
-function scopeGroupLabel(g: string) {
-  const map: Record<string, string> = {
-    user: '用户管理', role: '角色权限', dept: '部门管理',
-    audit: '审计中心', system: '系统设置', asset: '资产管理',
-    ticket: '工单管理', job: '作业平台', report: '报表中心',
-    alert: '告警中心', dashboard: '运营态势',
-  }
-  return map[g] ?? g
-}
 
 // ============ 新建对话框 ============
 const createVisible = ref(false)
@@ -456,8 +459,7 @@ function openCreateDialog() {
     expiresAt: '',
     role: isAdmin.value ? 'operator' : 'operator',
   })
-  // 默认展开第 1 组
-  activeGroups.value = permGroups.value.slice(0, 3).map((g) => g.group)
+  activeGroups.value = menuPermGroups.value.slice(0, 2).map((g) => g.parent)
   createVisible.value = true
 }
 function selectAllScopes() {
@@ -467,7 +469,7 @@ function clearScopes() { createForm.scopes = [] }
 function presetCmdbScopes() {
   createForm.scopes = ['asset:create', 'asset:read']
   // 展开 asset 组
-  if (!activeGroups.value.includes('asset')) activeGroups.value.push('asset')
+  if (!activeGroups.value.includes('资产管理')) activeGroups.value.push('资产管理')
 }
 
 async function submitCreate() {
@@ -645,4 +647,22 @@ async function submitExtend() {
   border: 1px solid #ebeef5; border-radius: 6px;
 }
 .scope-groups :deep(.el-collapse-item__wrap) { border-bottom: none; }
+.scope-child {
+  padding: 4px 0 10px;
+}
+.scope-child:last-child {
+  padding-bottom: 0;
+}
+.scope-child__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #409EFF;
+  margin: 4px 0 8px;
+}
+.scope-code {
+  color: #909399;
+  font-size: 12px;
+  margin-left: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 </style>

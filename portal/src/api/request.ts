@@ -1,6 +1,17 @@
-import axios from 'axios'
+import axios, { type AxiosRequestConfig } from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../stores/user'
+
+/** 拦截器已解包 `{ code, data }`，调用方拿到的是 `data`，不是 AxiosResponse。 */
+export interface ApiClient {
+  get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
+  delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
+  head<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
+  options<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
+  post<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  put<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  patch<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+}
 
 const TOKEN_KEY = 'meridianops_token'
 const USER_KEY = 'meridianops_user'
@@ -50,12 +61,12 @@ async function handleLicenseExpired(message: string) {
   }
 }
 
-const request = axios.create({
+const instance = axios.create({
   baseURL: '/api',
   timeout: 15000,
 })
 
-request.interceptors.request.use((config) => {
+instance.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY)
   if (token) {
     config.headers['Authorization'] = `Bearer ${token}`
@@ -63,7 +74,7 @@ request.interceptors.request.use((config) => {
   return config
 })
 
-request.interceptors.response.use(
+instance.interceptors.response.use(
   (response) => {
     // 任何成功响应都刷新 lastActivity（用于 idle 计时）
     localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()))
@@ -117,4 +128,5 @@ request.interceptors.response.use(
   },
 )
 
+const request = instance as ApiClient
 export default request

@@ -5,6 +5,7 @@ mod audit;
 mod audit_routes;
 mod auth;
 mod auth_routes;
+mod component_routes;
 mod cmdb_routes;
 mod config;
 mod credential_routes;
@@ -33,6 +34,8 @@ mod ticket_routes;
 mod ticket_scheduler;
 mod token_routes;
 mod sms_strategy_routes;
+mod eventide_lookup_sync;
+mod http_outbound;
 mod workflow_engine;
 
 use clap::Parser;
@@ -66,14 +69,7 @@ async fn main() -> anyhow::Result<()> {
         c
     };
 
-    // JWT 默认密钥检测：非 loopback 部署仍用默认密钥时告警
-    if config.auth.jwt_secret == "meridianops-dev-secret-change-me"
-        && !config.server.bind.starts_with("127.0.0.1")
-    {
-        tracing::warn!(
-            "JWT secret 仍是默认值且 bind 非 loopback，生产环境必须通过 MERIDIANOPS_JWT_SECRET 覆盖"
-        );
-    }
+    config.assert_secure_defaults()?;
 
     // 1. 数据库连接 + 迁移 + 种子
     let db_pool = db::connect(&config.database).await?;
@@ -102,22 +98,39 @@ async fn main() -> anyhow::Result<()> {
         alerts_runtime.ingress_token.len()
     );
 
+    let lookup_runtime =
+        eventide_lookup_sync::load_runtime(&db_pool, &config.eventide_lookup).await;
+    tracing::info!(
+        "eventide lookup loaded: enabled={}, token_set={}, targets={}",
+        lookup_runtime.enabled,
+        !lookup_runtime.lookup_sync_token.trim().is_empty(),
+        lookup_runtime
+            .targets
+            .iter()
+            .filter(|t| !t.lookup_id.trim().is_empty())
+            .count()
+    );
+
     // 2. AppState
     let state = Arc::new(AppState {
         config: Arc::new(config.clone()),
         alerts_runtime: Arc::new(std::sync::RwLock::new(alerts_runtime)),
+        lookup_runtime: Arc::new(std::sync::RwLock::new(lookup_runtime)),
         client: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?,
         db: db_pool,
         jwt_secret: config.auth.jwt_secret.clone(),
         jwt_ttl_hours: config.auth.token_ttl_hours,
+        lookup_sync: Arc::new(eventide_lookup_sync::LookupSyncRuntime::new()),
     });
 
     let app = create_router(state.clone());
 
     // 3. 启动定时拉取后台任务
-    tokio::spawn(cmdb_routes::pull_scheduler_loop(state.db.clone()));
+    tokio::spawn(cmdb_routes::pull_scheduler_loop(state.clone()));
+    tokio::spawn(eventide_lookup_sync::start_scheduler(state.clone()));
+    tokio::spawn(http_outbound::start_scheduler(state.clone()));
 
     // 3.1 一次性任务：用 jieba 重新分词知识库 content_text（幂等，已执行则跳过）
     tokio::spawn(knowledge_routes::resegment_knowledge_content(state.db.clone()));

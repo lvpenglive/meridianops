@@ -185,7 +185,7 @@ const notifList = ref<NotificationItem[]>([])
 const notifLoading = ref(false)
 const notifVisible = ref(false)
 let notifTimer: ReturnType<typeof setInterval> | null = null
-let notifEventSource: EventSource | null = null
+let sseAbort: AbortController | null = null
 let sseConnected = ref(false)
 
 async function loadUnreadCount() {
@@ -209,76 +209,85 @@ async function loadNotifList() {
   }
 }
 
-/** 立即刷新未读数和通知列表（面板打开时） */
-async function refreshNotifications() {
-  await loadUnreadCount()
-  if (notifVisible.value) {
-    await loadNotifList()
+function handleSseNotification(raw: string) {
+  try {
+    const data = JSON.parse(raw) as NotificationItem
+    if (!data.isRead) {
+      unreadCount.value++
+    }
+    if (notifVisible.value) {
+      notifList.value = [data, ...notifList.value].slice(0, 50)
+    }
+    ElMessage({
+      message: data.title,
+      type: 'info',
+      duration: 3000,
+      offset: 60,
+    })
+  } catch {
+    void loadUnreadCount()
   }
 }
 
-/** 建立 SSE 实时通知连接，失败则回退到轮询 */
-function connectSse() {
+function startNotifPolling() {
+  if (!notifTimer) {
+    notifTimer = setInterval(loadUnreadCount, 30000)
+  }
+}
+
+/** 建立 SSE 实时通知连接（Authorization 头，不把 token 放进 URL），失败则回退到轮询 */
+async function connectSse() {
   const token = localStorage.getItem('meridianops_token')
   if (!token) return
 
+  disconnectSse()
+  sseAbort = new AbortController()
   try {
-    const url = `/api/notifications/stream?token=${encodeURIComponent(token)}`
-    notifEventSource = new EventSource(url)
-
-    notifEventSource.onopen = () => {
-      sseConnected.value = true
-    }
-
-    notifEventSource.addEventListener('notification', (event: any) => {
-      try {
-        const data = JSON.parse(event.data) as NotificationItem
-        // 更新未读数
-        if (!data.isRead) {
-          unreadCount.value++
-        }
-        // 如果通知面板打开着，插入列表顶部
-        if (notifVisible.value) {
-          notifList.value = [data, ...notifList.value].slice(0, 50)
-        }
-        // 弹提示
-        ElMessage({
-          message: data.title,
-          type: 'info',
-          duration: 3000,
-          offset: 60,
-        })
-      } catch {
-        // 解析失败，刷新一下未读数
-        void loadUnreadCount()
-      }
+    const res = await fetch('/api/notifications/stream', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'text/event-stream',
+      },
+      signal: sseAbort.signal,
     })
-
-    notifEventSource.onerror = () => {
-      // SSE 连接失败或断开，关闭并回退到轮询
-      if (notifEventSource) {
-        notifEventSource.close()
-        notifEventSource = null
-      }
-      sseConnected.value = false
-      // 如果轮询还没启动，启动它
-      if (!notifTimer) {
-        notifTimer = setInterval(loadUnreadCount, 30000)
+    if (!res.ok || !res.body) {
+      throw new Error(`sse ${res.status}`)
+    }
+    sseConnected.value = true
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const parts = buf.split('\n\n')
+      buf = parts.pop() ?? ''
+      for (const part of parts) {
+        let event = 'message'
+        let data = ''
+        for (const line of part.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim()
+          else if (line.startsWith('data:')) data += line.slice(5).trimStart()
+        }
+        if (event === 'notification' && data) {
+          handleSseNotification(data)
+        }
       }
     }
-  } catch {
-    // EventSource 不支持或创建失败，回退到轮询
     sseConnected.value = false
-    if (!notifTimer) {
-      notifTimer = setInterval(loadUnreadCount, 30000)
-    }
+    startNotifPolling()
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'AbortError') return
+    sseConnected.value = false
+    startNotifPolling()
   }
 }
 
 function disconnectSse() {
-  if (notifEventSource) {
-    notifEventSource.close()
-    notifEventSource = null
+  if (sseAbort) {
+    sseAbort.abort()
+    sseAbort = null
   }
   sseConnected.value = false
 }
@@ -364,8 +373,7 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/alerts', title: '告警中心', icon: 'BellFilled' },
       { path: '/alerts/screen', title: '告警大屏', icon: 'Monitor' },
       { path: '/notification/channels', title: '通知通道', icon: 'Message', permission: 'notification:read' },
-      { path: '/notification/rules', title: '通知规则', icon: 'Setting', permission: 'notification:read' },
-      { path: '/notification/sms-strategies', title: '告警短信策略', icon: 'BellFilled', permission: 'sms_strategy:read' },
+      { path: '/notification/sms-strategies', title: '通知策略', icon: 'BellFilled', permission: 'sms_strategy:read' },
       { path: '/notification/alert-groups', title: '告警组维护', icon: 'UserFilled', permission: 'alert_group:read' },
       { path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
       { path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
@@ -388,6 +396,7 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/system/roles', title: '角色管理', icon: 'UserFilled', permission: 'role:read' },
       { path: '/system/departments', title: '部门管理', icon: 'OfficeBuilding', permission: 'dept:read' },
       { path: '/system', title: '系统设置', icon: 'Tools', permission: 'system:read' },
+      { path: '/system/components', title: '组件状态', icon: 'Monitor', permission: 'system:read' },
       { path: '/system/api-tokens', title: 'API 令牌', icon: 'Key', permission: 'system:read' },
       { path: '/system/dict', title: '字典管理', icon: 'Collection', permission: 'dict:read' },
       { path: '/system/license', title: '授权管理', icon: 'Key', permission: 'system:read' },
@@ -490,11 +499,7 @@ onMounted(async () => {
     // 拉取未读通知数
     await loadUnreadCount()
     // 尝试建立 SSE 实时连接，失败则回退到 30 秒轮询
-    connectSse()
-    // 兜底：如果 SSE 未连接，启动轮询
-    if (!sseConnected.value && !notifTimer) {
-      notifTimer = setInterval(loadUnreadCount, 30000)
-    }
+    void connectSse()
   }
   // 密码过期强制跳改密页
   if (userStore.passwordExpired && route.path !== '/profile') {

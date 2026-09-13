@@ -16,9 +16,12 @@
 //!   POST   /api/cmdb/sync/sources                  新增同步数据源              (system:update)
 //!   POST   /api/cmdb/sync                          批量同步（蓝鲸 webhook 推送）(asset:create)
 //!   POST   /api/cmdb/sync/pull                     手动拉取（从外部 API 拉取）  (asset:create)
+//!   POST   /api/cmdb/sync/push-out                 HTTP 出站手推（优云/AxleOps 等）(asset:create)
+//!   GET    /api/cmdb/sync/push-out/preview         出站推送内容预览             (asset:read)
 //!   PUT    /api/cmdb/sync/sources/:code            更新数据源拉取配置           (system:update)
 //!   DELETE /api/cmdb/sync/sources/:code            删除数据源                  (system:update)
 //!   GET    /api/cmdb/sync/logs                     查询同步日志                (asset:read)
+//!   PUT    /api/cmdb/sync/eventide-lookups/config  更新 Eventide 外表同步配置   (system:update)
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -56,13 +59,32 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/cmdb/relation-types", get(list_relation_types).post(create_relation_type))
         .route("/api/cmdb/relation-types/:id", put(update_relation_type).delete(delete_relation_type))
         .route("/api/cmdb/stats", get(cmdb_stats))
+        .route("/api/cmdb/user-options", get(list_user_options))
         .route("/api/cmdb/topology", get(topology))
         // 同步相关
         .route("/api/cmdb/sync/sources", get(list_sync_sources).post(create_sync_source))
         .route("/api/cmdb/sync", axum::routing::post(sync_instances))
         .route("/api/cmdb/sync/pull", axum::routing::post(pull_instances))
+        .route("/api/cmdb/sync/push-out", axum::routing::post(push_out_instances))
+        .route("/api/cmdb/sync/push-out/preview", get(push_out_preview))
         .route("/api/cmdb/sync/sources/:code", axum::routing::put(update_sync_source).delete(delete_sync_source))
         .route("/api/cmdb/sync/logs", get(list_sync_logs))
+        .route(
+            "/api/cmdb/sync/eventide-lookups",
+            get(eventide_lookup_status).post(eventide_lookup_run),
+        )
+        .route(
+            "/api/cmdb/sync/eventide-lookups/preview",
+            get(eventide_lookup_preview),
+        )
+        .route(
+            "/api/cmdb/sync/eventide-lookups/config",
+            put(eventide_lookup_update),
+        )
+        .route(
+            "/api/cmdb/sync/eventide-lookups/preview-sql",
+            axum::routing::post(eventide_lookup_preview_sql),
+        )
 }
 
 // ---- CI 模型 ----
@@ -477,6 +499,8 @@ struct CreateInstanceRequest {
     status: Option<String>,
     department_id: Option<String>,
     owner_id: Option<String>,
+    #[serde(default)]
+    owner_ids: Option<Vec<String>>,
     attributes: Option<serde_json::Value>,
     tags: Option<String>,
 }
@@ -488,6 +512,8 @@ struct UpdateInstanceRequest {
     status: Option<String>,
     department_id: Option<String>,
     owner_id: Option<String>,
+    #[serde(default)]
+    owner_ids: Option<Vec<String>>,
     attributes: Option<serde_json::Value>,
     tags: Option<String>,
 }
@@ -511,6 +537,15 @@ async fn list_instances(
         &state.db, model_id, status, keyword, department_id, page, page_size,
     )
     .await?;
+    let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    let owners = db::list_ci_owners_map(&state.db, &ids).await?;
+    let data: Vec<serde_json::Value> = items
+        .iter()
+        .map(|i| {
+            let empty = Vec::new();
+            db::ci_instance_json(i, owners.get(&i.id).unwrap_or(&empty))
+        })
+        .collect();
 
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -518,9 +553,19 @@ async fn list_instances(
             "total": total,
             "page": page,
             "pageSize": page_size,
-            "items": items,
+            "items": data,
         }
     })))
+}
+
+async fn list_user_options(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let list = db::list_user_options(&state.db).await?;
+    Ok(Json(serde_json::json!({ "code": 0, "data": list })))
 }
 
 async fn get_instance(
@@ -533,7 +578,8 @@ async fn get_instance(
     let inst = db::find_ci_instance_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::not_found("资产不存在"))?;
-    Ok(Json(serde_json::json!({ "code": 0, "data": inst })))
+    let data = db::ci_instance_json_one(&state.db, &inst).await?;
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
 }
 
 async fn create_instance(
@@ -558,7 +604,8 @@ async fn create_instance(
 
     let status = req.status.unwrap_or_else(|| "running".to_string());
     let dept = req.department_id.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
-    let owner = req.owner_id.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
+    let owner_ids = resolve_owner_ids(req.owner_ids.as_ref(), req.owner_id.as_deref());
+    let owner = owner_ids.first().map(String::as_str);
     let attrs_json = req
         .attributes
         .as_ref()
@@ -570,6 +617,7 @@ async fn create_instance(
         &state.db, &req.model_id, &name, &status, dept, owner, &attrs_json, &tags,
     )
     .await?;
+    db::replace_ci_owners(&state.db, &id, &owner_ids).await?;
 
     let detail = serde_json::json!({
         "modelId": req.model_id,
@@ -584,10 +632,12 @@ async fn create_instance(
     let inst = db::find_ci_instance_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::internal("创建后回查失败"))?;
+    let data = db::ci_instance_json_one(&state.db, &inst).await?;
+    crate::eventide_lookup_sync::bump(&state);
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({ "code": 0, "data": inst })),
+        Json(serde_json::json!({ "code": 0, "data": data })),
     ))
 }
 
@@ -613,7 +663,13 @@ async fn update_instance(
     }
     let status = req.status.unwrap_or(existing.status);
     let dept = req.department_id.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
-    let owner = req.owner_id.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
+    let owners_in_req = req.owner_ids.is_some() || req.owner_id.is_some();
+    let owner_ids = resolve_owner_ids(req.owner_ids.as_ref(), req.owner_id.as_deref());
+    let owner = if owners_in_req {
+        owner_ids.first().map(String::as_str)
+    } else {
+        existing.owner_id.as_deref()
+    };
     let attrs_json = req
         .attributes
         .as_ref()
@@ -625,6 +681,9 @@ async fn update_instance(
         &state.db, &id, &name, &status, dept, owner, &attrs_json, &tags,
     )
     .await?;
+    if owners_in_req {
+        db::replace_ci_owners(&state.db, &id, &owner_ids).await?;
+    }
 
     let detail = serde_json::json!({ "name": name, "status": status });
     let _ = audit::log_async(
@@ -635,7 +694,27 @@ async fn update_instance(
     let inst = db::find_ci_instance_by_id(&state.db, &id)
         .await?
         .ok_or_else(|| AppError::internal("更新后回查失败"))?;
-    Ok(Json(serde_json::json!({ "code": 0, "data": inst })))
+    let data = db::ci_instance_json_one(&state.db, &inst).await?;
+    crate::eventide_lookup_sync::bump(&state);
+    Ok(Json(serde_json::json!({ "code": 0, "data": data })))
+}
+
+fn resolve_owner_ids(owner_ids: Option<&Vec<String>>, owner_id: Option<&str>) -> Vec<String> {
+    if let Some(ids) = owner_ids {
+        let mut out = Vec::new();
+        for id in ids {
+            let t = id.trim();
+            if !t.is_empty() && !out.iter().any(|x: &String| x == t) {
+                out.push(t.to_string());
+            }
+        }
+        return out;
+    }
+    owner_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| vec![s.to_string()])
+        .unwrap_or_default()
 }
 
 async fn delete_instance(
@@ -661,6 +740,7 @@ async fn delete_instance(
     )
     .await;
 
+    crate::eventide_lookup_sync::bump(&state);
     Ok(Json(serde_json::json!({ "code": 0, "message": "ok" })))
 }
 
@@ -1007,6 +1087,275 @@ async fn list_sync_logs(
     })))
 }
 
+async fn eventide_lookup_status(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    Ok(Json(serde_json::json!({
+        "code": 0,
+        "data": crate::eventide_lookup_sync::status_json(&state),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateLookupTargetInput {
+    lookup_id: String,
+    name: Option<String>,
+    source: Option<String>,
+    sql: Option<String>,
+    key_column: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateLookupConfigRequest {
+    enabled: Option<bool>,
+    base_url: Option<String>,
+    lookup_sync_token: Option<String>,
+    interval_secs: Option<u64>,
+    debounce_secs: Option<u64>,
+    lookup_id: Option<String>,
+    name: Option<String>,
+    targets: Option<Vec<UpdateLookupTargetInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewSqlRequest {
+    sql: String,
+    key_column: Option<String>,
+}
+
+async fn eventide_lookup_update(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Json(req): Json<UpdateLookupConfigRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let mut cfg = crate::eventide_lookup_sync::runtime_config(&state);
+    if let Some(v) = req.enabled {
+        cfg.enabled = v;
+    }
+    if let Some(v) = req.base_url {
+        cfg.base_url = v.trim().trim_end_matches('/').to_string();
+    }
+    if let Some(v) = req.lookup_sync_token {
+        let t = v.trim();
+        if !t.is_empty() {
+            cfg.lookup_sync_token = t.to_string();
+        }
+    }
+    if let Some(v) = req.interval_secs {
+        cfg.interval_secs = v.max(30);
+    }
+    if let Some(v) = req.debounce_secs {
+        cfg.debounce_secs = v.clamp(5, 300);
+    }
+    if cfg.targets.is_empty() {
+        cfg.targets
+            .push(crate::config::EventideLookupTarget::default());
+    }
+    if let Some(v) = req.lookup_id {
+        cfg.targets[0].lookup_id = v.trim().to_string();
+    }
+    if let Some(v) = req.name {
+        let n = v.trim();
+        if !n.is_empty() {
+            cfg.targets[0].name = n.to_string();
+        }
+    }
+    if let Some(items) = req.targets {
+        let mut next = Vec::new();
+        for item in items {
+            let lookup_id = item.lookup_id.trim().to_string();
+            if lookup_id.is_empty() {
+                continue;
+            }
+            let source = item
+                .source
+                .as_deref()
+                .unwrap_or("hosts")
+                .trim()
+                .to_ascii_lowercase();
+            let source = if source == "sql" { "sql" } else { "hosts" };
+            let sql = item.sql.unwrap_or_default();
+            if source == "sql" {
+                crate::eventide_lookup_sync::validate_lookup_sql(&sql)
+                    .map_err(|e| AppError::bad(&e))?;
+            }
+            let existing = cfg
+                .targets
+                .iter()
+                .find(|t| t.lookup_id == lookup_id)
+                .cloned();
+            let mut t = existing.unwrap_or_default();
+            t.lookup_id = lookup_id;
+            if let Some(n) = item.name {
+                let n = n.trim();
+                if !n.is_empty() {
+                    t.name = n.to_string();
+                }
+            }
+            t.source = source.to_string();
+            t.sql = sql;
+            t.key_column = item.key_column.unwrap_or_default().trim().to_string();
+            next.push(t);
+        }
+        if next.is_empty() {
+            return Err(AppError::bad("至少保留一张外表（填写 lookup_id）"));
+        }
+        cfg.targets = next;
+    }
+    crate::eventide_lookup_sync::persist_runtime(&state.db, &cfg, &auth.0.sub)
+        .await
+        .map_err(|e| AppError::internal(&format!("保存外表同步配置失败: {e}")))?;
+    crate::eventide_lookup_sync::apply_runtime(&state, cfg)
+        .map_err(|e| AppError::internal(&e))?;
+    Ok(Json(serde_json::json!({
+        "code": 0,
+        "data": crate::eventide_lookup_sync::status_json(&state),
+    })))
+}
+
+async fn eventide_lookup_preview_sql(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Json(req): Json<PreviewSqlRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "system:update")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    match crate::eventide_lookup_sync::preview_sql_json(
+        &state.db,
+        &req.sql,
+        req.key_column.as_deref().unwrap_or(""),
+    )
+    .await
+    {
+        Ok(data) => Ok(Json(serde_json::json!({ "code": 0, "data": data }))),
+        Err(e) => Err(AppError::bad(&e)),
+    }
+}
+
+async fn eventide_lookup_preview(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    match crate::eventide_lookup_sync::preview_json(&state).await {
+        Ok(data) => Ok(Json(serde_json::json!({ "code": 0, "data": data }))),
+        Err(e) => Err(AppError::bad(&e)),
+    }
+}
+
+async fn eventide_lookup_run(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "asset:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    if !crate::eventide_lookup_sync::runtime_config(&state).enabled {
+        return Err(AppError::bad("Eventide 外表同步未启用（eventide_lookup.enabled）"));
+    }
+    let report = crate::eventide_lookup_sync::run_locked(&state, "manual").await;
+    Ok(Json(serde_json::json!({ "code": 0, "data": report })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PushOutRequest {
+    source: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PushOutPreviewQuery {
+    source: String,
+}
+
+/// 出站 HTTP 推送内容预览（不发请求）。
+async fn push_out_preview(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Query(q): Query<PushOutPreviewQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "asset:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let src = db::find_sync_source_by_code(&state.db, &q.source)
+        .await?
+        .ok_or_else(|| AppError::not_found("数据源不存在"))?;
+    if !crate::http_outbound::is_http_push(&src.source_type) {
+        return Err(AppError::bad("该数据源不是 HTTP 出站通道"));
+    }
+    match crate::http_outbound::preview(&state.db, &src).await {
+        Ok(data) => Ok(Json(serde_json::json!({ "code": 0, "data": data }))),
+        Err(e) => Err(AppError::bad(&e)),
+    }
+}
+
+/// 手动把主机投影 HTTP 推到对端（优云 / AxleOps / 理想自动化等）。
+async fn push_out_instances(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    auth: auth::AuthUser,
+    Json(req): Json<PushOutRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "asset:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let ip = audit::extract_ip(&headers, Some(addr));
+
+    let src = db::find_sync_source_by_code(&state.db, &req.source)
+        .await?
+        .ok_or_else(|| AppError::bad(&format!("数据源 {} 未注册", req.source)))?;
+    if !crate::http_outbound::is_http_push(&src.source_type) {
+        return Err(AppError::bad("该数据源不是 HTTP 出站通道"));
+    }
+    if !src.is_enabled() {
+        return Err(AppError::bad(&format!("数据源 {} 已禁用", req.source)));
+    }
+    if src.api_url.trim().is_empty() {
+        return Err(AppError::bad("数据源未配置 API 地址，无法推送"));
+    }
+
+    let report = crate::http_outbound::push(&state, &src).await;
+    let detail = serde_json::json!({
+        "source": req.source,
+        "ok": report.ok,
+        "rowCount": report.row_count,
+        "targets": report.targets.iter().map(|t| serde_json::json!({
+            "name": t.name,
+            "url": t.url,
+            "ok": t.ok,
+            "skipped": t.skipped,
+            "httpStatus": t.http_status,
+            "rowCount": t.row_count,
+        })).collect::<Vec<_>>(),
+    });
+    let _ = audit::log_async(
+        &state.db,
+        &auth,
+        "push_out",
+        "sync_sources",
+        &req.source,
+        Some(&detail),
+        &ip,
+        if report.ok { "success" } else { "failed" },
+    )
+    .await;
+    Ok(Json(serde_json::json!({ "code": 0, "data": report })))
+}
+
+fn validate_http_push_sql(pull_config: &str) -> Result<(), AppError> {
+    let cfg = crate::http_outbound::parse_config(Some(pull_config));
+    crate::http_outbound::validate_targets_sql(&cfg).map_err(|e| AppError::bad(&e))?;
+    Ok(())
+}
+
 /// 同步请求体。
 ///
 /// 蓝鲸 webhook 推送格式（示例）：
@@ -1115,6 +1464,9 @@ async fn sync_instances(
             &attrs_json, &req.source, &mapped.external_id,
         ).await {
             Ok((instance_id, is_new)) => {
+                if let Err(e) = db::apply_sync_owners(&state.db, &req.source, &instance_id, &mapped.owners).await {
+                    tracing::warn!(target: "cmdb_sync", "写入负责人失败 {}: {}", mapped.name, e);
+                }
                 success_count += 1;
                 let _ = db::insert_sync_log(
                     &state.db, &req.source, &batch_id, action, &req.model_code,
@@ -1153,6 +1505,9 @@ async fn sync_instances(
     let _ = audit::log_async(
         &state.db, &auth, "sync_ci", "ci_instance", &batch_id, Some(&detail), &ip, sync_status,
     ).await;
+    if success_count > 0 {
+        crate::eventide_lookup_sync::bump(&state);
+    }
 
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -1184,6 +1539,7 @@ fn map_generic_instance(item: &serde_json::Value, model_code: &str) -> Option<db
         name,
         status,
         attributes,
+        owners: db::parse_generic_owners(item),
     })
 }
 
@@ -1254,15 +1610,22 @@ async fn update_sync_source(
     };
     let pull_cron = req.get("pullCron").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let pull_enabled = req.get("pullEnabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let enabled = req.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
 
     // 校验 pull_config 是合法 JSON 对象
     if serde_json::from_str::<serde_json::Value>(&pull_config).is_err() {
         return Err(AppError::bad("pullConfig 不是合法 JSON"));
     }
+    let existing = db::find_sync_source_by_code(&state.db, &code)
+        .await?
+        .ok_or_else(|| AppError::not_found("数据源不存在"))?;
+    if crate::http_outbound::is_http_push(&existing.source_type) {
+        validate_http_push_sql(&pull_config)?;
+    }
 
     db::update_sync_source_pull_config(
         &state.db, &code, &api_url, &api_token,
-        &pull_config, &pull_cron, pull_enabled,
+        &pull_config, &pull_cron, pull_enabled, enabled,
     ).await?;
 
     let detail = serde_json::json!({
@@ -1311,6 +1674,9 @@ async fn create_sync_source(
     let api_token = req.get("apiToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let webhook_secret = req.get("webhookSecret").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let source_type = req.get("sourceType").and_then(|v| v.as_str()).unwrap_or("webhook").to_string();
+    if !matches!(source_type.as_str(), "webhook" | "pull" | "http_push") {
+        return Err(AppError::bad("sourceType 只允许 webhook / pull / http_push"));
+    }
     // 拉取配置归一化
     let pull_config = match req.get("pullConfig") {
         Some(serde_json::Value::String(s)) => serde_json::from_str::<serde_json::Value>(s)
@@ -1321,6 +1687,9 @@ async fn create_sync_source(
     };
     if serde_json::from_str::<serde_json::Value>(&pull_config).is_err() {
         return Err(AppError::bad("pullConfig 不是合法 JSON"));
+    }
+    if source_type == "http_push" {
+        validate_http_push_sql(&pull_config)?;
     }
     let pull_cron = req.get("pullCron").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let pull_enabled = req.get("pullEnabled").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1524,6 +1893,9 @@ async fn pull_instances(
             &attrs_json, &req.source, &mapped.external_id,
         ).await {
             Ok((instance_id, is_new)) => {
+                if let Err(e) = db::apply_sync_owners(&state.db, &req.source, &instance_id, &mapped.owners).await {
+                    tracing::warn!(target: "cmdb_sync", "写入负责人失败 {}: {}", mapped.name, e);
+                }
                 success_count += 1;
                 let _ = db::insert_sync_log(
                     &state.db, &req.source, &batch_id, "pull", &model_code,
@@ -1561,6 +1933,9 @@ async fn pull_instances(
     let _ = audit::log_async(
         &state.db, &auth, "pull_ci", "ci_instance", &batch_id, Some(&detail), &ip, sync_status,
     ).await;
+    if success_count > 0 {
+        crate::eventide_lookup_sync::bump(&state);
+    }
 
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -1698,6 +2073,9 @@ pub async fn do_pull(pool: &crate::db::DbPool, source_code: &str, model_code: &s
             &attrs_json, source_code, &mapped.external_id,
         ).await {
             Ok((instance_id, is_new)) => {
+                if let Err(e) = db::apply_sync_owners(pool, source_code, &instance_id, &mapped.owners).await {
+                    tracing::warn!(target: "cmdb_sync", "写入负责人失败 {}: {}", mapped.name, e);
+                }
                 success_count += 1;
                 let _ = db::insert_sync_log(
                     pool, source_code, &batch_id, "pull", &mc,
@@ -1728,13 +2106,28 @@ pub async fn do_pull(pool: &crate::db::DbPool, source_code: &str, model_code: &s
     Ok((total, success_count, failed_count))
 }
 
-/// 定时拉取调度循环：每 60 秒检查一次，匹配 cron 表达式则执行拉取。
-pub async fn pull_scheduler_loop(pool: crate::db::DbPool) {
-    tracing::info!("定时拉取调度器已启动");
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+fn pull_interval_secs(src: &db::SyncSource) -> Option<u64> {
+    let cfg = src
+        .pull_config
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+    if let Some(n) = cfg.as_ref().and_then(|v| v.get("intervalSecs")).and_then(|v| v.as_u64()) {
+        if n > 0 {
+            return Some(n.max(30));
+        }
+    }
+    None
+}
 
-        let sources = match db::list_pull_enabled_sources(&pool).await {
+/// 定时拉取：优先用 pull_config.intervalSecs（秒），旧数据仍按 cron。
+pub async fn pull_scheduler_loop(state: Arc<AppState>) {
+    tracing::info!("定时拉取调度器已启动");
+    let mut last: std::collections::HashMap<String, std::time::Instant> =
+        std::collections::HashMap::new();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        let sources = match db::list_pull_enabled_sources(&state.db).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("查询定时拉取数据源失败: {}", e);
@@ -1742,21 +2135,56 @@ pub async fn pull_scheduler_loop(pool: crate::db::DbPool) {
             }
         };
 
-        let now = chrono::Utc::now();
+        let now = chrono::Local::now();
         for src in &sources {
-            if !cron_matches(&src.pull_cron, &now) {
+            if crate::http_outbound::is_http_push(&src.source_type) {
+                last.remove(&src.code);
                 continue;
             }
-            // 解析 model_code
+            let due = if let Some(secs) = pull_interval_secs(src) {
+                let interval = std::time::Duration::from_secs(secs);
+                match last.get(&src.code) {
+                    None => {
+                        last.insert(src.code.clone(), std::time::Instant::now());
+                        false
+                    }
+                    Some(t) if t.elapsed() >= interval => {
+                        last.insert(src.code.clone(), std::time::Instant::now());
+                        true
+                    }
+                    Some(_) => false,
+                }
+            } else if !src.pull_cron.trim().is_empty() && cron_matches(&src.pull_cron, &now) {
+                match last.get(&src.code) {
+                    Some(t) if t.elapsed() < std::time::Duration::from_secs(50) => false,
+                    _ => {
+                        last.insert(src.code.clone(), std::time::Instant::now());
+                        true
+                    }
+                }
+            } else {
+                false
+            };
+            if !due {
+                continue;
+            }
             let config_str = src.pull_config.as_deref().unwrap_or("{}");
             let model_code = serde_json::from_str::<serde_json::Value>(config_str)
                 .ok()
                 .and_then(|v| v.get("modelCode")?.as_str().map(|s| s.to_string()))
                 .unwrap_or_default();
 
-            tracing::info!("定时拉取触发 source={} cron={}", src.code, src.pull_cron);
-            if let Err(e) = do_pull(&pool, &src.code, &model_code).await {
-                tracing::warn!("定时拉取失败 source={}: {}", src.code, e);
+            tracing::info!(
+                "定时拉取触发 source={} interval_secs={:?}",
+                src.code,
+                pull_interval_secs(src)
+            );
+            match do_pull(&state.db, &src.code, &model_code).await {
+                Ok((_, success, _)) if success > 0 => {
+                    crate::eventide_lookup_sync::bump(&state);
+                }
+                Err(e) => tracing::warn!("定时拉取失败 source={}: {}", src.code, e),
+                _ => {}
             }
         }
     }
@@ -1764,7 +2192,7 @@ pub async fn pull_scheduler_loop(pool: crate::db::DbPool) {
 
 /// 简单 5 字段 cron 匹配（minute hour day-of-month month day-of-week）。
 /// 支持 * / 数字 / 逗号分隔 / 步进（*/N）。
-fn cron_matches(expr: &str, now: &chrono::DateTime<chrono::Utc>) -> bool {
+fn cron_matches(expr: &str, now: &chrono::DateTime<chrono::Local>) -> bool {
     let fields: Vec<&str> = expr.trim().split_whitespace().collect();
     if fields.len() != 5 {
         return false;
@@ -1950,6 +2378,10 @@ async fn batch_create_instances(
         status_str,
     )
     .await;
+
+    if success_count > 0 {
+        crate::eventide_lookup_sync::bump(&state);
+    }
 
     Ok(Json(serde_json::json!({
         "code": 0,

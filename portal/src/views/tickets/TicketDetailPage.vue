@@ -382,7 +382,7 @@ import {
 } from '@element-plus/icons-vue'
 import {
   getTicketDetail, executeNodeAction, addComment,
-  uploadAttachment, deleteAttachment, getAttachmentDownloadUrl,
+  deleteAttachment, getAttachmentDownloadUrl,
   watchTicket, getKnowledgeSuggestions, updateCustomFields,
   type TicketDetail, type TicketNode, type WorkflowActionReq, type CommentAction,
   type TicketAttachment, type KnowledgeSuggestion,

@@ -484,14 +484,6 @@ function severityLabel(s: string): string {
   const o = severityOptions.find((o) => o.value === s)
   return o ? o.label : `${s}级`
 }
-function severityTagType(s: string) {
-  const n = Number(s)
-  if (s === 'disaster' || n === 5) return 'danger'
-  if (s === 'critical' || n === 4) return 'warning'
-  if (s === 'warning' || n === 2 || n === 3) return 'primary'
-  return 'info'
-}
-
 function channelTypeLabel(t: string): string {
   return { email: '邮件', feishu: '飞书', webhook: 'Webhook' }[t] || t
 }

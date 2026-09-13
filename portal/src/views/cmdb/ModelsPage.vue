@@ -217,7 +217,7 @@
         </el-form-item>
         <el-form-item v-if="attrForm.valueType === 'enum'" label="枚举选项">
           <div class="options-editor">
-            <div v-for="(opt, idx) in attrForm.optionsArr" :key="idx" class="option-row">
+            <div v-for="(_, idx) in attrForm.optionsArr" :key="idx" class="option-row">
               <el-input v-model="attrForm.optionsArr[idx]" placeholder="选项值" />
               <el-button :icon="Delete" circle size="small" @click="attrForm.optionsArr.splice(idx, 1)" />
             </div>
@@ -257,7 +257,7 @@ import {
   updateCiModelAttr,
   deleteCiModelAttr,
 } from '../../api/cmdb'
-import type { CiModel, CiModelAttr, CreateCiModelAttrRequest } from '../../api/types'
+import type { CiModel, CiModelAttr } from '../../api/types'
 import { useUserStore } from '../../stores/user'
 import { useSystemDicts } from '../../composables/useSystemDicts'
 
@@ -507,7 +507,7 @@ async function onSubmitAttr() {
       const options = attrForm.valueType === 'enum'
         ? attrForm.optionsArr.filter(o => o.trim() !== '')
         : undefined
-      const payload: CreateCiModelAttrRequest = {
+      const payload = {
         name: attrForm.name.trim(),
         valueType: attrForm.valueType,
         defaultValue: attrForm.defaultValue,

@@ -152,6 +152,11 @@
             <el-descriptions-item label="前端框架">Vue 3 + Vite</el-descriptions-item>
             <el-descriptions-item label="网关框架">Rust + Axum</el-descriptions-item>
             <el-descriptions-item label="数据库">MySQL</el-descriptions-item>
+            <el-descriptions-item label="组件状态">
+              <el-button size="small" link type="primary" @click="router.push('/system/components')">
+                查看连通探测
+              </el-button>
+            </el-descriptions-item>
             <el-descriptions-item label="鉴权">JWT + Argon2</el-descriptions-item>
             <el-descriptions-item label="权限模型">RBAC</el-descriptions-item>
           </el-descriptions>
@@ -178,11 +183,13 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '../../stores/user'
 import { listSettings, updateSettings } from '../../api/system'
 import type { SystemSetting } from '../../api/types'
 
+const router = useRouter()
 const userStore = useUserStore()
 const canUpdate = computed(() => userStore.hasPermission('system:update'))
 

@@ -62,6 +62,21 @@ export interface GrafanaLinkResponse {
 
 // ===== L1 基础检索 =====
 
+function toLogQuery(params?: Record<string, unknown>) {
+  if (!params) return params
+  const map: Record<string, string> = {
+    startTime: 'start_time',
+    endTime: 'end_time',
+    groupBy: 'group_by',
+  }
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue
+    out[map[k] ?? k] = v
+  }
+  return out
+}
+
 export function listLogs(params?: {
   hostname?: string
   service?: string
@@ -72,7 +87,7 @@ export function listLogs(params?: {
   limit?: number
   offset?: number
 }): Promise<LogListResponse> {
-  return request.get('/logs', { params })
+  return request.get('/logs', { params: toLogQuery(params) })
 }
 
 // ===== L2 聚合统计 =====
@@ -86,7 +101,7 @@ export function getLogStats(params?: {
   groupBy?: 'service' | 'level' | 'hostname'
   top?: number
 }): Promise<StatsResponse> {
-  return request.get('/logs/stats', { params })
+  return request.get('/logs/stats', { params: toLogQuery(params) })
 }
 
 // ===== L3 模式挖掘 =====
@@ -99,7 +114,7 @@ export function getLogPatterns(params?: {
   endTime?: string
   top?: number
 }): Promise<PatternsResponse> {
-  return request.get('/logs/patterns', { params })
+  return request.get('/logs/patterns', { params: toLogQuery(params) })
 }
 
 // ===== 生成 Grafana Explore 跳转 URL =====
@@ -111,7 +126,7 @@ export function getGrafanaLink(params?: {
   startTime?: string
   endTime?: string
 }): Promise<GrafanaLinkResponse> {
-  return request.get('/logs/grafana-link', { params })
+  return request.get('/logs/grafana-link', { params: toLogQuery(params) })
 }
 
 // ===== 常量选项 =====

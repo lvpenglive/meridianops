@@ -47,6 +47,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/alerts/events/:id/resolve", axum::routing::put(resolve_event))
         .route("/api/alerts/events/:id/suppress", axum::routing::put(suppress_event))
         .route("/api/alerts/events/:id/note", axum::routing::put(add_note))
+        .route("/api/alerts/events/:id/notifications", axum::routing::get(list_event_notifications))
         // 批量操作
         .route("/api/alerts/events/batch-action", axum::routing::post(batch_action))
         // 统计
@@ -162,6 +163,57 @@ fn calc_fingerprint(prefix: &str, source: &str, ci_id: &Option<String>, title: &
     format!("{}{}", prefix, hex::encode(&digest[..8])) // 前缀 + 16 hex 字符
 }
 
+async fn lookup_alert_id_by_fingerprint(db: &db::DbPool, fingerprint: &str) -> Result<String, AppError> {
+    sqlx::query_scalar::<_, String>("SELECT id FROM alert_events WHERE fingerprint = ?")
+        .bind(fingerprint)
+        .fetch_one(db)
+        .await
+        .map_err(AppError::from)
+}
+
+async fn merge_eventide_firing(
+    db: &db::DbPool,
+    id: &str,
+    increment: i64,
+    starts_at: &str,
+    new_status: &str,
+    severity: &str,
+    external_id: Option<&str>,
+    message: Option<&str>,
+    ci_id: Option<&str>,
+    ci_name_snapshot: Option<&str>,
+    labels_str: &str,
+    ends_at: Option<&str>,
+    now: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE alert_events \
+         SET fire_count = fire_count + ?, fired_at = ?, status = ?, severity = ?, \
+             external_id = COALESCE(?, external_id), \
+             acknowledged_by = NULL, acknowledged_at = NULL, \
+             resolved_by = NULL, resolved_at = NULL, resolution_note = NULL, \
+             message = COALESCE(?, message), ci_id = COALESCE(?, ci_id), \
+             ci_name_snapshot = COALESCE(?, ci_name_snapshot), labels = ?, \
+             ends_at = ?, updated_at = ? \
+         WHERE id = ?",
+    )
+    .bind(increment)
+    .bind(starts_at)
+    .bind(new_status)
+    .bind(severity)
+    .bind(external_id)
+    .bind(message)
+    .bind(ci_id)
+    .bind(ci_name_snapshot)
+    .bind(labels_str)
+    .bind(ends_at)
+    .bind(now)
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 /// 把 serde_json::Value 统一规整为可入库的 JSON 字符串
 fn json_to_str(v: &Option<serde_json::Value>) -> String {
     match v {
@@ -261,15 +313,15 @@ async fn list_events(
         .try_get::<i64, _>("cnt")
         .unwrap_or(0);
 
-    // 列表查询：LEFT JOIN ci_instances 获取资产责任人(owner_id → users.username)
+    // 列表查询：资产多人负责人（ci_instance_owners），展示名用顿号拼接
     let list_sql = format!(
         "SELECT e.id, e.fingerprint, e.external_id, e.source, e.ingress_channel, e.ingress_actor, e.severity, e.status, e.title, e.message, e.labels, e.clue_logs, e.ci_id, e.ci_name_snapshot, \
          e.fire_count, e.first_fired_at, e.fired_at, e.ends_at, e.acknowledged_by, e.acknowledged_at, e.resolved_by, e.resolved_at, \
          e.resolution_note, e.created_at, e.updated_at, \
-         u.username AS contact_name \
-         FROM alert_events e \
-         LEFT JOIN ci_instances ci ON e.ci_id = ci.id \
-         LEFT JOIN users u ON ci.owner_id = u.id{} \
+         (SELECT GROUP_CONCAT(COALESCE(NULLIF(u.display_name, ''), u.username) ORDER BY o.sort_order SEPARATOR '、') \
+            FROM ci_instance_owners o INNER JOIN users u ON u.id = o.user_id \
+            WHERE o.instance_id = e.ci_id) AS contact_name \
+         FROM alert_events e{} \
          ORDER BY CASE LOWER(e.severity) \
              WHEN '5' THEN 5 WHEN 'p5' THEN 5 WHEN 'disaster' THEN 5 WHEN 'dis' THEN 5 \
              WHEN '4' THEN 4 WHEN 'p4' THEN 4 WHEN 'high' THEN 4 WHEN 'major' THEN 4 WHEN 'critical' THEN 4 WHEN 'crit' THEN 4 \
@@ -289,7 +341,7 @@ async fn list_events(
     list_q = list_q.bind(page_size as i64).bind(offset as i64);
     let rows = list_q.fetch_all(&state.db).await?;
 
-    let items: Vec<serde_json::Value> = rows
+    let mut items: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
             let labels_val: serde_json::Value = r
@@ -330,6 +382,23 @@ async fn list_events(
             })
         })
         .collect();
+
+    let ids: Vec<String> = items
+        .iter()
+        .filter_map(|v| v.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
+        .collect();
+    let summaries = load_notify_summaries(&state.db, &ids).await;
+    for item in &mut items {
+        if let Some(id) = item.get("id").and_then(|x| x.as_str()) {
+            if let Some((status, count)) = summaries.get(id) {
+                item["notifyStatus"] = serde_json::Value::String(status.clone());
+                item["notifyCount"] = serde_json::Value::from(*count);
+            } else {
+                item["notifyStatus"] = serde_json::Value::Null;
+                item["notifyCount"] = serde_json::Value::from(0);
+            }
+        }
+    }
 
     Ok(Json(serde_json::json!({
         "code": 0,
@@ -399,11 +468,104 @@ async fn get_event(
                     "resolutionNote": r.try_get::<Option<String>, _>("resolution_note").unwrap_or(None),
                     "createdAt": r.try_get::<String, _>("created_at").unwrap_or_default(),
                     "updatedAt": r.try_get::<String, _>("updated_at").unwrap_or_default(),
+                    "notifyLogs": query_alert_notification_logs(&state.db, &id).await,
                 }
             })))
         }
         None => Err(AppError::not_found("告警事件不存在")),
     }
+}
+
+async fn list_event_notifications(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "alert:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+    let exists: Option<String> = sqlx::query_scalar("SELECT id FROM alert_events WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::not_found("告警事件不存在"));
+    }
+    Ok(Json(serde_json::json!({
+        "code": 0,
+        "data": { "list": query_alert_notification_logs(&state.db, &id).await }
+    })))
+}
+
+fn notification_log_json(r: &sqlx::mysql::MySqlRow) -> serde_json::Value {
+    serde_json::json!({
+        "id": r.try_get::<String, _>("id").unwrap_or_default(),
+        "ruleName": r.try_get::<Option<String>, _>("rule_name").ok().flatten(),
+        "channelName": r.try_get::<String, _>("channel_name").unwrap_or_default(),
+        "channelType": r.try_get::<String, _>("channel_type").unwrap_or_default(),
+        "recipients": r.try_get::<Option<String>, _>("recipients").ok().flatten(),
+        "title": r.try_get::<String, _>("title").unwrap_or_default(),
+        "status": r.try_get::<String, _>("status").unwrap_or_default(),
+        "errorMsg": r.try_get::<Option<String>, _>("error_msg").ok().flatten(),
+        "responseSnippet": r.try_get::<Option<String>, _>("response_snippet").ok().flatten(),
+        "durationMs": r.try_get::<Option<u32>, _>("duration_ms").ok().flatten(),
+        "triggeredBy": r.try_get::<Option<String>, _>("triggered_by").ok().flatten(),
+        "sentAt": r.try_get::<String, _>("sent_at").unwrap_or_default(),
+    })
+}
+
+async fn query_alert_notification_logs(db: &sqlx::MySqlPool, alert_id: &str) -> Vec<serde_json::Value> {
+    let like = format!("%/alerts?id={}%", alert_id);
+    let rows = sqlx::query(
+        "SELECT id, rule_name, channel_name, channel_type, recipients, title, status, error_msg, \
+                response_snippet, duration_ms, triggered_by, sent_at \
+         FROM notification_logs \
+         WHERE alert_id = ? OR link LIKE ? \
+         ORDER BY sent_at DESC, id DESC LIMIT 50",
+    )
+    .bind(alert_id)
+    .bind(&like)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+    rows.iter().map(notification_log_json).collect()
+}
+
+async fn load_notify_summaries(
+    db: &sqlx::MySqlPool,
+    ids: &[String],
+) -> std::collections::HashMap<String, (String, i64)> {
+    let mut out = std::collections::HashMap::new();
+    if ids.is_empty() {
+        return out;
+    }
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT alert_id, status, sent_at FROM notification_logs WHERE alert_id IN (",
+    );
+    let mut sep = qb.separated(", ");
+    for id in ids {
+        sep.push_bind(id);
+    }
+    qb.push(") ORDER BY sent_at DESC, id DESC");
+    let rows = match qb.build().fetch_all(db).await {
+        Ok(r) => r,
+        Err(_) => return out,
+    };
+    for r in rows {
+        let aid: String = r.try_get("alert_id").unwrap_or_default();
+        if aid.is_empty() {
+            continue;
+        }
+        let status: String = r.try_get("status").unwrap_or_default();
+        match out.get_mut(&aid) {
+            Some((_, count)) => {
+                *count += 1;
+            }
+            None => {
+                out.insert(aid, (status, 1));
+            }
+        }
+    }
+    out
 }
 
 /// POST /api/alerts/events — 新建告警；若 fingerprint 已存在则合并（fire_count+1，fired_at 更新，状态重置为 firing）
@@ -1705,7 +1867,7 @@ async fn ingress_eventide(
         .fetch_optional(&state.db)
         .await?;
     let existing_id: Option<String> = existing_row.as_ref().map(|r| r.try_get::<String, _>("id").unwrap_or_default());
-    let was_merged = existing_id.is_some();
+    let mut was_merged = existing_id.is_some();
 
     if is_resolve {
         // became_resolved：把已有告警标记为 resolved
@@ -1825,39 +1987,30 @@ async fn ingress_eventide(
     let ing_channel = "webhook".to_string();
     let ing_actor = Some(format!("Eventide/{}", raw_source_actor));
 
+    let increment = payload.tally.unwrap_or(1).max(1);
     let id = if let Some(eid) = existing_id.clone() {
-        // 合并：fire_count + tally（Eventide 累计）+ 1，fired_at 更新为 startsAt
+        // 合并：fire_count + tally，fired_at 更新为 startsAt
         // 注意：合并不修改 ingress_channel / ingress_actor，保留首次接入的溯源信息
-        let increment = payload.tally.unwrap_or(1).max(1);
-        sqlx::query(
-            "UPDATE alert_events \
-             SET fire_count = fire_count + ?, fired_at = ?, status = ?, severity = ?, \
-                 external_id = COALESCE(?, external_id), \
-                 acknowledged_by = NULL, acknowledged_at = NULL, \
-                 resolved_by = NULL, resolved_at = NULL, resolution_note = NULL, \
-                 message = COALESCE(?, message), ci_id = COALESCE(?, ci_id), \
-                 ci_name_snapshot = COALESCE(?, ci_name_snapshot), labels = ?, \
-                 ends_at = ?, updated_at = ? \
-             WHERE id = ?",
+        merge_eventide_firing(
+            &state.db,
+            &eid,
+            increment,
+            &starts_at,
+            new_status,
+            &severity_canonical,
+            payload.alert_id.as_deref(),
+            message.as_deref(),
+            ci_id.as_deref(),
+            ci_name_snapshot.as_deref(),
+            &labels_str,
+            ends_at.as_deref(),
+            &now,
         )
-        .bind(increment)
-        .bind(&starts_at)
-        .bind(new_status)
-        .bind(&severity_canonical)
-        .bind(payload.alert_id.as_deref())  // external_id COALESCE
-        .bind(message.as_deref())
-        .bind(ci_id.as_deref())
-        .bind(ci_name_snapshot.as_deref())
-        .bind(&labels_str)
-        .bind(ends_at.as_deref())
-        .bind(&now)
-        .bind(&eid)
-        .execute(&state.db)
         .await?;
         eid
     } else {
-        // 新建：写入接入渠道 webhook 和接入者
-        sqlx::query(
+        // 新建：写入接入渠道 webhook 和接入者。并发同指纹撞唯一键时按合并处理。
+        match sqlx::query(
             "INSERT INTO alert_events \
              (id, fingerprint, external_id, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
               fire_count, first_fired_at, fired_at, ends_at, acknowledged_by, acknowledged_at, resolved_by, resolved_at, \
@@ -1884,8 +2037,32 @@ async fn ingress_eventide(
         .bind(&now)
         .bind(&now)
         .execute(&state.db)
-        .await?;
-        new_id
+        .await
+        {
+            Ok(_) => new_id,
+            Err(e) if db::is_duplicate_key(&e) => {
+                was_merged = true;
+                let eid = lookup_alert_id_by_fingerprint(&state.db, &fingerprint).await?;
+                merge_eventide_firing(
+                    &state.db,
+                    &eid,
+                    increment,
+                    &starts_at,
+                    new_status,
+                    &severity_canonical,
+                    payload.alert_id.as_deref(),
+                    message.as_deref(),
+                    ci_id.as_deref(),
+                    ci_name_snapshot.as_deref(),
+                    &labels_str,
+                    ends_at.as_deref(),
+                    &now,
+                )
+                .await?;
+                eid
+            }
+            Err(e) => return Err(e.into()),
+        }
     };
 
     // 6) 审计：用 system 标记，actor=ingress:eventide
@@ -2104,6 +2281,20 @@ fn severity_for_rule_match(canonical: &str) -> String {
 
 /// 查告警对应的资产 owner_id（用于站内信推送给责任人），若无法关联则返回空 Vec。
 async fn get_alert_owner(pool: &sqlx::MySqlPool, alert_id: &str) -> Vec<String> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT o.user_id \
+         FROM alert_events e \
+         INNER JOIN ci_instance_owners o ON o.instance_id = e.ci_id \
+         WHERE e.id = ? \
+         ORDER BY o.sort_order ASC, o.user_id ASC",
+    )
+    .bind(alert_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    if !rows.is_empty() {
+        return rows;
+    }
     let owner = sqlx::query_scalar::<_, Option<String>>(
         "SELECT ci.owner_id \
          FROM alert_events e \
@@ -2122,18 +2313,18 @@ async fn get_alert_owner(pool: &sqlx::MySqlPool, alert_id: &str) -> Vec<String> 
     }
 }
 
-/// 用 IP 在 ci_instances 表反查资产（按动态属性 attrs 里的 ip 字段匹配）。
+/// 用 IP 在 ci_instances 表反查资产（按动态属性 attributes 里的 ip 字段匹配）。
 /// 返回 (Option<ci_id>, Option<name>)
 async fn lookup_ci_by_ip(pool: &sqlx::MySqlPool, ip: &str) -> anyhow::Result<(Option<String>, Option<String>)> {
-    // ci_instances.attrs 是 JSON，包含各种动态属性，其中常见键为 ip / manageIp / host_ip
-    // 用 JSON_EXTRACT 简单匹配（注意 attrs 是 JSON 字符串）
     let row = sqlx::query(
         "SELECT id, name FROM ci_instances \
-         WHERE JSON_EXTRACT(attrs, '$.ip') = ? \
-            OR JSON_EXTRACT(attrs, '$.manageIp') = ? \
-            OR JSON_EXTRACT(attrs, '$.host_ip') = ? \
+         WHERE JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.ip')) = ? \
+            OR JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.manageIp')) = ? \
+            OR JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.host_ip')) = ? \
+            OR JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.mgmt_ip')) = ? \
          LIMIT 1",
     )
+    .bind(ip)
     .bind(ip)
     .bind(ip)
     .bind(ip)
@@ -2351,36 +2542,29 @@ async fn pull_from_eventide(
         if let Some(r) = existing {
             // 合并
             let existing_id: String = r.try_get::<String, _>("id").unwrap_or_default();
-            sqlx::query(
-                "UPDATE alert_events \
-                 SET fire_count = fire_count + ?, fired_at = ?, status = ?, severity = ?, \
-                     external_id = COALESCE(?, external_id), \
-                     message = COALESCE(?, message), ci_id = COALESCE(?, ci_id), \
-                     ci_name_snapshot = COALESCE(?, ci_name_snapshot), labels = ?, \
-                     ends_at = ?, updated_at = ? \
-                 WHERE id = ?",
+            merge_eventide_firing(
+                &state.db,
+                &existing_id,
+                tally.unwrap_or(1).max(1),
+                starts_at.as_deref().unwrap_or(&now),
+                status.as_deref().unwrap_or("firing"),
+                &severity_canonical,
+                alert_id.as_deref(),
+                message.as_deref(),
+                ci_id.as_deref(),
+                ci_name_snapshot.as_deref(),
+                &labels_str,
+                ends_at.as_deref(),
+                &now,
             )
-            .bind(tally.unwrap_or(1).max(1))
-            .bind(starts_at.as_deref().unwrap_or(&now))
-            .bind(status.as_deref().unwrap_or("firing"))
-            .bind(&severity_canonical)
-            .bind(alert_id.as_deref())
-            .bind(message.as_deref())
-            .bind(ci_id.as_deref())
-            .bind(ci_name_snapshot.as_deref())
-            .bind(&labels_str)
-            .bind(ends_at.as_deref())
-            .bind(&now)
-            .bind(&existing_id)
-            .execute(&state.db)
             .await
             .map_err(|e| AppError::internal(&format!("更新告警失败: {}", e)))?;
             merged += 1;
         } else {
-            // 新建
+            // 新建；并发同指纹撞唯一键时按合并处理
             let new_id = alert_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
             let ing_actor = Some(format!("Eventide/{}", src));
-            sqlx::query(
+            match sqlx::query(
                 "INSERT INTO alert_events \
                  (id, fingerprint, external_id, source, ingress_channel, ingress_actor, severity, status, title, message, labels, ci_id, ci_name_snapshot, \
                   fire_count, first_fired_at, fired_at, ends_at, acknowledged_by, acknowledged_at, resolved_by, resolved_at, \
@@ -2408,8 +2592,33 @@ async fn pull_from_eventide(
             .bind(&now)
             .execute(&state.db)
             .await
-            .map_err(|e| AppError::internal(&format!("新建告警失败: {}", e)))?;
-            created += 1;
+            {
+                Ok(_) => created += 1,
+                Err(e) if db::is_duplicate_key(&e) => {
+                    let existing_id = lookup_alert_id_by_fingerprint(&state.db, &fp).await?;
+                    merge_eventide_firing(
+                        &state.db,
+                        &existing_id,
+                        tally.unwrap_or(1).max(1),
+                        starts_at.as_deref().unwrap_or(&now),
+                        status.as_deref().unwrap_or("firing"),
+                        &severity_canonical,
+                        alert_id.as_deref(),
+                        message.as_deref(),
+                        ci_id.as_deref(),
+                        ci_name_snapshot.as_deref(),
+                        &labels_str,
+                        ends_at.as_deref(),
+                        &now,
+                    )
+                    .await
+                    .map_err(|e| AppError::internal(&format!("更新告警失败: {}", e)))?;
+                    merged += 1;
+                }
+                Err(e) => {
+                    return Err(AppError::internal(&format!("新建告警失败: {}", e)));
+                }
+            }
         }
     }
 

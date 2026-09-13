@@ -13,7 +13,81 @@ pub struct GatewayConfig {
     pub notification_cleaner: NotificationCleanerConfig,
     #[serde(default)]
     pub logs: LogsConfig,
+    /// CMDB → Eventide 外表（Lookup）同步。与告警 ingress 方向相反。
+    #[serde(default)]
+    pub eventide_lookup: EventideLookupConfig,
     pub systems: Vec<SystemConfig>,
+}
+
+/// Eventide Lookup 同步：把本系统主机投影推到 Eventide 外表。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EventideLookupConfig {
+    /// 总开关。未配 token / lookup_id 时即使为 true 也不会发请求。
+    pub enabled: bool,
+    /// Eventide 根地址。空则复用 [[systems]] id=eventide 的 base_url。
+    pub base_url: String,
+    /// 外表同步 Token（lks_…），不要用管理员 JWT。
+    pub lookup_sync_token: String,
+    /// 定时全量间隔（秒），默认 300。
+    pub interval_secs: u64,
+    /// 资产/负责人变更后的 debounce（秒），默认 45。
+    pub debounce_secs: u64,
+    pub targets: Vec<EventideLookupTarget>,
+}
+
+impl Default for EventideLookupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: String::new(),
+            lookup_sync_token: String::new(),
+            interval_secs: 300,
+            debounce_secs: 45,
+            targets: Vec::new(),
+        }
+    }
+}
+
+/// 一张 Eventide 外表的同步目标。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EventideLookupTarget {
+    pub lookup_id: String,
+    pub name: String,
+    /// `hosts`：内置主机投影；`sql`：自定义 SELECT。
+    pub source: String,
+    /// Eventide 列名 → 本系统字段（仅 hosts）
+    #[serde(default)]
+    pub columns: std::collections::BTreeMap<String, String>,
+    /// 自定义 SELECT / WITH ... SELECT。列别名即 Eventide 属性名；key 列见 key_column。
+    pub sql: String,
+    /// SQL 结果里作为外表 key 的列名，空则用第一列。
+    pub key_column: String,
+}
+
+impl Default for EventideLookupTarget {
+    fn default() -> Self {
+        Self {
+            lookup_id: String::new(),
+            name: "hosts".to_string(),
+            source: "hosts".to_string(),
+            columns: default_lookup_columns(),
+            sql: String::new(),
+            key_column: String::new(),
+        }
+    }
+}
+
+pub fn default_lookup_columns() -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    m.insert("主机名".into(), "name".into());
+    m.insert("机房".into(), "datacenter".into());
+    m.insert("联系人".into(), "owner_name".into());
+    m.insert("电话".into(), "owner_phone".into());
+    m.insert("邮箱".into(), "owner_email".into());
+    m.insert("业务线".into(), "biz_line".into());
+    m
 }
 
 /// 日志平台对接配置（ClickHouse + Loki 组合方案，详见 README 日志平台集成方案）
@@ -130,7 +204,7 @@ pub struct ServerConfig {
     pub cors_origins: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     #[serde(default = "default_mysql_url")]
     pub url: String,
@@ -138,17 +212,46 @@ pub struct DatabaseConfig {
     pub max_connections: u32,
     #[serde(default = "default_min_conn")]
     pub min_connections: u32,
+    /// 从池里拿连接的上限（含坏连接 ping）。超过则请求失败，避免 Eventide webhook 空等 20s。
+    #[serde(default = "default_acquire_timeout")]
+    pub acquire_timeout_secs: u64,
+    /// 空闲连接回收，避免被对端/防火墙掐死后还要等 TCP 超时。
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_secs: u64,
+    #[serde(default = "default_max_lifetime")]
+    pub max_lifetime_secs: u64,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: default_mysql_url(),
+            max_connections: default_max_conn(),
+            min_connections: default_min_conn(),
+            acquire_timeout_secs: default_acquire_timeout(),
+            idle_timeout_secs: default_idle_timeout(),
+            max_lifetime_secs: default_max_lifetime(),
+        }
+    }
 }
 
 fn default_mysql_url() -> String {
-    // 与 Eventide 共用同一 MySQL 实例，独立库名 meridianops
-    "mysql://root:886363@120.26.67.180:3306/meridianops".to_string()
+    "mysql://root:change-me@127.0.0.1:3306/meridianops".to_string()
 }
 fn default_max_conn() -> u32 {
-    10
+    24
 }
 fn default_min_conn() -> u32 {
-    1
+    2
+}
+fn default_acquire_timeout() -> u64 {
+    5
+}
+fn default_idle_timeout() -> u64 {
+    30
+}
+fn default_max_lifetime() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +271,9 @@ pub struct AuthConfig {
     /// 是否启用 JWT 鉴权（开发期可关，默认 true）。
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// 仅演示：允许非 loopback 仍使用默认 JWT/种子密码/CORS *。生产必须为 false。
+    #[serde(default)]
+    pub allow_insecure_defaults: bool,
 }
 
 impl Default for AuthConfig {
@@ -178,6 +284,7 @@ impl Default for AuthConfig {
             seed_username: default_seed_username(),
             seed_password: default_seed_password(),
             enabled: default_true(),
+            allow_insecure_defaults: false,
         }
     }
 }
@@ -223,14 +330,18 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             server: ServerConfig {
-                bind: "0.0.0.0:8000".to_string(),
-                cors_origins: vec!["*".to_string()],
+                bind: "0.0.0.0:8800".to_string(),
+                cors_origins: vec![
+                    "http://localhost:5173".to_string(),
+                    "http://127.0.0.1:5173".to_string(),
+                ],
             },
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
             alerts: AlertsConfig::default(),
             notification_cleaner: NotificationCleanerConfig::default(),
             logs: LogsConfig::default(),
+            eventide_lookup: EventideLookupConfig::default(),
             systems: vec![
                 SystemConfig {
                     id: "axleops".to_string(),
@@ -318,6 +429,16 @@ impl GatewayConfig {
     pub fn apply_env_overrides(&mut self) {
         if let Ok(v) = std::env::var("MERIDIANOPS_SERVER_BIND") {
             self.server.bind = v;
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_CORS_ORIGINS") {
+            self.server.cors_origins = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_ALLOW_INSECURE_DEFAULTS") {
+            self.auth.allow_insecure_defaults = v == "1" || v.eq_ignore_ascii_case("true");
         }
         if let Ok(v) = std::env::var("MERIDIANOPS_DB_URL") {
             self.database.url = v;
@@ -408,5 +529,81 @@ impl GatewayConfig {
                 self.logs.alerting.silence_minutes = n;
             }
         }
+        if let Ok(v) = std::env::var("MERIDIANOPS_EVENTIDE_LOOKUP_ENABLED") {
+            self.eventide_lookup.enabled = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_EVENTIDE_LOOKUP_BASE_URL") {
+            self.eventide_lookup.base_url = v;
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_EVENTIDE_LOOKUP_TOKEN") {
+            self.eventide_lookup.lookup_sync_token = v;
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_EVENTIDE_LOOKUP_INTERVAL") {
+            if let Ok(n) = v.parse::<u64>() {
+                self.eventide_lookup.interval_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_EVENTIDE_LOOKUP_DEBOUNCE") {
+            if let Ok(n) = v.parse::<u64>() {
+                self.eventide_lookup.debounce_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_EVENTIDE_LOOKUP_ID") {
+            if self.eventide_lookup.targets.is_empty() {
+                self.eventide_lookup.targets.push(EventideLookupTarget {
+                    lookup_id: v,
+                    ..EventideLookupTarget::default()
+                });
+            } else {
+                self.eventide_lookup.targets[0].lookup_id = v;
+            }
+        }
     }
+
+    pub fn is_loopback_bind(&self) -> bool {
+        is_loopback_bind(&self.server.bind)
+    }
+
+    /// 非 loopback 且未显式放行时，拒绝默认 JWT / 种子密码 / CORS * / 关闭鉴权。
+    pub fn assert_secure_defaults(&self) -> anyhow::Result<()> {
+        if self.is_loopback_bind() {
+            return Ok(());
+        }
+        if self.auth.allow_insecure_defaults {
+            tracing::error!(
+                "allow_insecure_defaults=true：非 loopback 仍使用不安全默认，仅演示可用，禁止上生产"
+            );
+            return Ok(());
+        }
+
+        let mut reasons: Vec<&str> = Vec::new();
+        if self.auth.jwt_secret == default_jwt_secret() {
+            reasons.push("JWT secret 仍是默认值（设置 MERIDIANOPS_JWT_SECRET）");
+        }
+        if self.auth.seed_password == default_seed_password() {
+            reasons.push("种子密码仍是默认值 Admin123!");
+        }
+        if !self.auth.enabled {
+            reasons.push("鉴权已关闭 auth.enabled=false");
+        }
+        if self.server.cors_origins.iter().any(|o| o.trim() == "*") {
+            reasons.push("CORS 为 *（设置 MERIDIANOPS_CORS_ORIGINS 或 server.cors_origins）");
+        }
+        if reasons.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "bind={} 不是 loopback，拒绝使用不安全默认：\n  - {}\n演示可设 [auth] allow_insecure_defaults=true 或 MERIDIANOPS_ALLOW_INSECURE_DEFAULTS=1",
+            self.server.bind,
+            reasons.join("\n  - ")
+        )
+    }
+}
+
+pub fn is_loopback_bind(bind: &str) -> bool {
+    let host = bind
+        .rsplit_once(':')
+        .map(|(h, _)| h.trim_matches(['[', ']']))
+        .unwrap_or(bind);
+    host == "127.0.0.1" || host == "localhost" || host == "::1"
 }

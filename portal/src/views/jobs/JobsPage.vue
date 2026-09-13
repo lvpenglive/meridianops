@@ -548,7 +548,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted } from 'vue'
 import {
-  ElMessage, ElMessageBox, type FormInstance, type FormRules,
+  ElMessage, type FormInstance, type FormRules,
 } from 'element-plus'
 import {
   Search, Refresh, Plus, Edit, Delete, Operation, Promotion,

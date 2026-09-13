@@ -14,7 +14,6 @@ import type {
   BatchCreateInstancesRequest,
   BatchImportResult,
   SyncSource,
-  SyncLog,
   SyncLogPage,
   SyncLogQuery,
   SyncRequest,
@@ -23,6 +22,8 @@ import type {
   PullResult,
   UpdateSyncSourceRequest,
   CreateSyncSourceRequest,
+  HttpPushReport,
+  HttpPushPreview,
   CreateCiModelRequest,
   UpdateCiModelRequest,
   CreateCiModelAttrRequest,
@@ -32,6 +33,7 @@ import type {
   CiRelationType,
   CreateCiRelationTypeRequest,
   UpdateCiRelationTypeRequest,
+  CmdbUserOption,
 } from './types'
 
 // ---- CI 模型 ----
@@ -91,6 +93,11 @@ export function listCiInstances(params: CiInstanceQuery): Promise<CiInstancePage
 /** 获取实例详情 */
 export function getCiInstance(id: string): Promise<CiInstance> {
   return request.get(`/cmdb/instances/${id}`)
+}
+
+/** 资产负责人候选（在职启用用户，需 asset:read） */
+export function listCmdbUserOptions(): Promise<CmdbUserOption[]> {
+  return request.get('/cmdb/user-options')
 }
 
 /** 创建 CI 实例 */
@@ -164,6 +171,16 @@ export function pullInstances(data: PullRequest): Promise<PullResult> {
   return request.post('/cmdb/sync/pull', data)
 }
 
+/** 手动 HTTP 出站推送（优云 / AxleOps / 理想自动化等） */
+export function pushOutInstances(source: string): Promise<HttpPushReport> {
+  return request.post('/cmdb/sync/push-out', { source })
+}
+
+/** 出站推送内容预览（不发请求） */
+export function previewHttpPush(source: string): Promise<HttpPushPreview> {
+  return request.get('/cmdb/sync/push-out/preview', { params: { source } })
+}
+
 /** 更新数据源拉取配置 */
 export function updateSyncSource(code: string, data: UpdateSyncSourceRequest): Promise<boolean> {
   return request.put(`/cmdb/sync/sources/${code}`, data)
@@ -172,6 +189,104 @@ export function updateSyncSource(code: string, data: UpdateSyncSourceRequest): P
 /** 查询同步日志 */
 export function listSyncLogs(params: SyncLogQuery): Promise<SyncLogPage> {
   return request.get('/cmdb/sync/logs', { params })
+}
+
+export interface EventideLookupTargetStatus {
+  lookupId: string
+  name: string
+  rowCount?: number
+  httpStatus?: number | null
+  latencyMs?: number
+  syncedAt?: string | null
+  error?: string | null
+}
+
+export interface EventideLookupLast {
+  trigger: string
+  startedAt: string
+  finishedAt: string
+  ok: boolean
+  skipped: boolean
+  message: string
+  targets: EventideLookupTargetStatus[]
+}
+
+export interface EventideLookupStatus {
+  enabled: boolean
+  configured: boolean
+  baseUrl: string
+  intervalSecs: number
+  debounceSecs: number
+  tokenSet: boolean
+  tokenMasked: string
+  targets: EventideLookupTargetConfig[]
+  last: EventideLookupLast | null
+}
+
+export interface EventideLookupTargetConfig {
+  lookupId: string
+  name: string
+  source?: 'hosts' | 'sql'
+  sql?: string
+  keyColumn?: string
+}
+
+export interface UpdateEventideLookupConfig {
+  enabled?: boolean
+  baseUrl?: string
+  lookupSyncToken?: string
+  intervalSecs?: number
+  debounceSecs?: number
+  lookupId?: string
+  name?: string
+  targets?: EventideLookupTargetConfig[]
+}
+
+/** Eventide 外表同步状态 */
+export function getEventideLookupStatus(): Promise<EventideLookupStatus> {
+  return request.get('/cmdb/sync/eventide-lookups')
+}
+
+/** 手动推一轮 CMDB → Eventide 外表 */
+export function runEventideLookupSync(): Promise<EventideLookupLast> {
+  return request.post('/cmdb/sync/eventide-lookups')
+}
+
+/** 更新 Eventide 外表同步配置（立即生效，写入 system_settings） */
+export function updateEventideLookupConfig(
+  data: UpdateEventideLookupConfig,
+): Promise<EventideLookupStatus> {
+  return request.put('/cmdb/sync/eventide-lookups/config', data)
+}
+
+export interface EventideLookupPreviewRow {
+  ip: string
+  [col: string]: string
+}
+
+export interface EventideLookupPreviewTarget {
+  lookupId: string
+  name: string
+  source?: string
+  rowCount: number
+  rows: EventideLookupPreviewRow[]
+}
+
+export function previewEventideLookupSql(data: {
+  sql: string
+  keyColumn?: string
+}): Promise<{ rowCount: number; columns: string[]; rows: EventideLookupPreviewRow[] }> {
+  return request.post('/cmdb/sync/eventide-lookups/preview-sql', data)
+}
+
+export interface EventideLookupPreview {
+  rowCount: number
+  targets: EventideLookupPreviewTarget[]
+}
+
+/** 预览当前将推到 Eventide 的行（不写对端） */
+export function previewEventideLookup(): Promise<EventideLookupPreview> {
+  return request.get('/cmdb/sync/eventide-lookups/preview')
 }
 
 // ---- 拓扑视图 ----

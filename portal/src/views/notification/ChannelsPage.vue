@@ -4,7 +4,7 @@
       <div class="page-title">
         <el-icon><Message /></el-icon>
         <span>通知通道</span>
-        <span class="page-sub">配置邮件 / 飞书 / 通用 Webhook 通道，供通知规则调用分发消息</span>
+        <span class="page-sub">配置邮件 / 飞书 / 短信平台 / 通用 Webhook 通道，供通知策略勾选分发</span>
       </div>
       <div class="header-actions">
         <el-button
@@ -562,7 +562,7 @@ async function onTest(row: NotificationChannel) {
 async function onDelete(row: NotificationChannel) {
   try {
     await ElMessageBox.confirm(
-      `确定删除通道「${row.name}」吗？若通知规则引用该通道将无法分发。`,
+      `确定删除通道「${row.name}」吗？若通知策略引用该通道将无法分发。`,
       '删除确认',
       { type: 'warning' },
     )

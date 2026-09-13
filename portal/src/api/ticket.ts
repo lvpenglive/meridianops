@@ -378,12 +378,8 @@ export function getKnowledgeSuggestions(ticketId: string): Promise<KnowledgeSugg
 
 /* ============= 工单导出 ============= */
 
-/**
- * 导出工单 CSV
- * 直接返回下载 URL（带 token 参数，供 a 标签 / window.open 使用）
- */
-export function getExportUrl(params?: TicketListQuery): string {
-  const token = localStorage.getItem('meridianops_token') || ''
+/** 导出工单 CSV（走 Authorization 头，不把 token 放进 URL） */
+export async function exportTicketsCsv(params?: TicketListQuery): Promise<void> {
   const search = new URLSearchParams()
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -392,8 +388,19 @@ export function getExportUrl(params?: TicketListQuery): string {
       }
     }
   }
-  search.append('token', token)
-  return `/api/tickets/export?${search.toString()}`
+  const qs = search.toString()
+  const res = await request.get<Blob>(`/tickets/export${qs ? `?${qs}` : ''}`, {
+    responseType: 'blob',
+  })
+  const blob = res instanceof Blob ? res : new Blob([res as unknown as BlobPart], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `tickets_${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 /* ============= 自定义字段 ============= */

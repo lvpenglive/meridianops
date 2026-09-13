@@ -4,8 +4,9 @@
 #   MERIDIANOPS_DB_URL, MERIDIANOPS_JWT_SECRET, MERIDIANOPS_SERVER_BIND
 
 [server]
-bind = "0.0.0.0:8000"
-cors_origins = ["*"]
+bind = "0.0.0.0:8800"
+# 不要用 *。门户走 Vite 代理时同源，这里只放行直接访问网关的源。
+cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 # ===== 接入的下游系统（按需增加，MeridianOps Gateway 自动代理）=====
 # 每个系统配一个 [[systems]] 块，id 唯一
@@ -46,8 +47,13 @@ version = "v0.3.0"
 [database]
 # 数据库连接串（敏感！生产环境用环境变量 MERIDIANOPS_DB_URL 覆盖）
 url = "mysql://root:REPLACE_ME@HOST:3306/meridianops"
-max_connections = 10
-min_connections = 1
+max_connections = 24
+min_connections = 2
+# 拿连接超时（含坏连接探测）。过长会拖死 Eventide webhook。
+acquire_timeout_secs = 5
+# 空闲连接回收，避免被对端/防火墙掐死后还要等 TCP 超时。
+idle_timeout_secs = 30
+max_lifetime_secs = 300
 
 [auth]
 # JWT 签名密钥（敏感！生产环境必须用环境变量 MERIDIANOPS_JWT_SECRET 覆盖）
@@ -56,6 +62,8 @@ token_ttl_hours = 24
 seed_username = "admin"
 seed_password = "CHANGE_ON_FIRST_LOGIN"
 enabled = true
+# 非 loopback 且仍用默认 JWT/种子密码/CORS * 时进程拒绝启动。演示才开。
+allow_insecure_defaults = false
 
 [logs]
 # ClickHouse + Loki 日志平台对接（参见 README 日志平台集成方案）
@@ -81,3 +89,40 @@ levels = "error,critical,fatal"
 error_threshold = 50
 # 同主机告警后静默时间（分钟），避免重复触发
 silence_minutes = 30
+
+# ===== Eventide 外表（Lookup）同步：CMDB → Eventide，与告警 webhook 方向相反 =====
+# 其它 HTTP 出站样例（优云 CMDB / AxleOps / 理想自动化）不写在 toml，
+# 启动后出现在「数据源同步」页，默认关闭，填地址和 Token 后手推。
+# 启用前向 Eventide 管理员索取：外表同步 Token（lks_…）和 hosts 表 lookup_id
+# Token 也可用环境变量 MERIDIANOPS_EVENTIDE_LOOKUP_TOKEN / MERIDIANOPS_EVENTIDE_LOOKUP_ID
+[eventide_lookup]
+enabled = false
+# 空则复用 [[systems]] id=eventide 的 base_url
+base_url = ""
+lookup_sync_token = ""
+interval_secs = 300
+debounce_secs = 45
+
+[[eventide_lookup.targets]]
+lookup_id = ""
+name = "hosts"
+source = "hosts"
+
+[eventide_lookup.targets.columns]
+"主机名" = "name"
+"机房" = "datacenter"
+"联系人" = "owner_name"
+"电话" = "owner_phone"
+"邮箱" = "owner_email"
+"业务线" = "biz_line"
+
+# 自定义 SQL 外表：第一列（或 key_column）作为 Eventide key，其余列别名即属性名
+# [[eventide_lookup.targets]]
+# lookup_id = ""
+# name = "biz_owners"
+# source = "sql"
+# key_column = "ip"
+# sql = """
+# SELECT a.ip AS ip, u.display_name AS `联系人`, u.mobile AS `电话`
+# FROM ...
+# """

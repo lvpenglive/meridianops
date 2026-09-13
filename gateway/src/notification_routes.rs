@@ -242,8 +242,7 @@ async fn delete_notification(
 // ============================================================
 
 /// SSE 端点：GET /api/notifications/stream
-/// 客户端通过 EventSource 连接，实时接收当前用户的新通知。
-/// 鉴权方式：Authorization: Bearer <token>（与其他接口一致）。
+/// 客户端通过 fetch + Authorization 头连接（不要把 JWT 放进 URL query）。
 async fn stream_notifications(
     auth: AuthUser,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {

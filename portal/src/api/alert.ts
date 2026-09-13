@@ -37,6 +37,25 @@ export interface AlertEvent {
   updatedAt: string
   /** 资产责任人（CI owner） */
   contactName: string | null
+  /** 最近一次通知发送结果：success / failed / partial / skipped */
+  notifyStatus?: string | null
+  notifyCount?: number
+  notifyLogs?: AlertNotifyLog[]
+}
+
+export interface AlertNotifyLog {
+  id: string
+  ruleName?: string | null
+  channelName: string
+  channelType: string
+  recipients?: string | null
+  title: string
+  status: string
+  errorMsg?: string | null
+  responseSnippet?: string | null
+  durationMs?: number | null
+  triggeredBy?: string | null
+  sentAt: string
 }
 
 export interface AlertEventPage {
@@ -114,6 +133,10 @@ export function listAlertEvents(params: AlertEventQuery): Promise<AlertEventPage
 /** 获取告警详情 */
 export function getAlertEvent(id: string): Promise<AlertEvent> {
   return request.get(`/alerts/events/${id}`)
+}
+
+export function listAlertNotifications(id: string): Promise<{ list: AlertNotifyLog[] }> {
+  return request.get(`/alerts/events/${id}/notifications`)
 }
 
 /** 新建告警 */

@@ -3,8 +3,8 @@
     <div class="page-header">
       <div class="page-title">
         <el-icon><BellFilled /></el-icon>
-        <span>告警短信策略</span>
-        <span class="page-sub">按事件类型 + 级别 + 设备 + 事件名称匹配告警，通知选定人员</span>
+        <span>通知策略</span>
+        <span class="page-sub">按条件匹配后多选渠道发给选定人员；可同时通知资产责任人</span>
       </div>
       <div class="header-actions">
         <el-button
@@ -99,12 +99,33 @@
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="告警接收组" min-width="200" show-overflow-tooltip>
+        <el-table-column label="触发场景" width="110">
+          <template #default="{ row }">{{ triggerSceneLabel(row.triggerScene) }}</template>
+        </el-table-column>
+        <el-table-column label="通知渠道" min-width="200">
+          <template #default="{ row }">
+            <el-tag
+              v-for="k in channelKindsOf(row)"
+              :key="k"
+              size="small"
+              effect="plain"
+              style="margin-right: 4px; margin-bottom: 2px;"
+            >{{ channelKindLabel(k) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="告警接收组" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.recipientUserIds && row.recipientUserIds.length">
               {{ recipientNames(row.recipientUserIds) }}
             </span>
             <span v-else class="text-muted">—</span>
+            <el-tag
+              v-if="row.notifyOwner"
+              size="small"
+              type="warning"
+              effect="plain"
+              style="margin-left: 6px;"
+            >含责任人</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" width="180" show-overflow-tooltip />
@@ -141,7 +162,7 @@
         </el-table-column>
       </el-table>
       <div v-if="!loading && list.length === 0" class="empty-tip">
-        <el-empty description="暂无短信策略" />
+        <el-empty description="暂无通知策略" />
       </div>
 
       <div class="pagination-wrap">
@@ -162,11 +183,16 @@
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑策略' : '录入策略'"
-      width="720px"
+      width="780px"
       top="6vh"
       @closed="resetForm"
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+        <el-form-item label="触发场景" prop="triggerScene">
+          <el-select v-model="form.triggerScene" style="width: 100%;">
+            <el-option v-for="o in TRIGGER_SCENES" :key="o.value" :label="o.label" :value="o.value" />
+          </el-select>
+        </el-form-item>
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="事件类型" prop="eventType">
@@ -282,6 +308,49 @@
           </div>
         </el-form-item>
 
+        <el-form-item label="资产责任人">
+          <el-switch v-model="form.notifyOwner" @change="onNotifyOwnerChange" />
+          <span class="form-hint">同时通知告警 IP 关联资产的负责人（告警中心列表「联系人」）。对不上资产或无手机号则跳过。</span>
+        </el-form-item>
+
+        <el-form-item label="通知渠道" prop="channelKinds">
+          <el-checkbox-group v-model="form.channelKinds">
+            <el-checkbox v-for="o in CHANNEL_KIND_OPTIONS" :key="o.value" :value="o.value">
+              {{ o.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+          <div class="form-hint" style="margin-left: 0; margin-top: 4px;">勾选本次要发的渠道。短信走短信平台通道，邮件走 SMTP 通道。</div>
+        </el-form-item>
+
+        <el-form-item v-if="showExtraChannels" label="指定通道">
+          <el-select
+            v-model="form.extraChannelIds"
+            multiple
+            clearable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="不指定则用该类型第一条启用通道"
+            style="width: 100%;"
+          >
+            <el-option-group v-if="feishuChannelOptions.length" label="飞书">
+              <el-option
+                v-for="c in feishuChannelOptions"
+                :key="c.id"
+                :label="c.name"
+                :value="c.id"
+              />
+            </el-option-group>
+            <el-option-group v-if="webhookChannelOptions.length" label="Webhook">
+              <el-option
+                v-for="c in webhookChannelOptions"
+                :key="c.id"
+                :label="c.name"
+                :value="c.id"
+              />
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="策略说明（可选）" />
         </el-form-item>
@@ -314,10 +383,16 @@ import {
   deleteSmsStrategy,
   listSmsEventTypes,
   listSmsSubTypes,
+  listNotifyChannelOptions,
   SMS_TRIGGER_OPS,
   SMS_SEVERITIES,
+  CHANNEL_KIND_OPTIONS,
+  DEFAULT_CHANNEL_KINDS,
   type SmsStrategy,
+  type NotifyChannelKind,
+  type NotifyChannelOption,
 } from '../../api/smsStrategy'
+import { TRIGGER_SCENES } from '../../api/notification'
 import type { DictItem } from '../../api/dict'
 import { listUsers } from '../../api/users'
 import { listDepartments } from '../../api/departments'
@@ -340,6 +415,7 @@ const subTypeOptions = ref<DictItem[]>([])
 const allUsers = ref<UserInfo[]>([])
 const departments = ref<Department[]>([])
 const alertGroupTree = ref<AlertGroupTreeNode[]>([])
+const channelOptions = ref<NotifyChannelOption[]>([])
 
 const filters = reactive({
   keyword: '',
@@ -385,6 +461,10 @@ async function fetchMeta() {
   try { allUsers.value = await listUsers() } catch { /* 忽略，选人依赖此数据 */ }
   try { departments.value = await listDepartments() } catch { /* 忽略（候选行展示仍用部门名） */ }
   try { alertGroupTree.value = await getAlertGroupTree() } catch { /* 忽略 */ }
+  try {
+    const r = await listNotifyChannelOptions()
+    channelOptions.value = r.list || []
+  } catch { /* 忽略 */ }
 }
 
 function eventTypeLabel(t: string) {
@@ -407,6 +487,16 @@ function deptName(id?: string | null) {
   if (!id) return ''
   const d = departments.value.find((x) => x.id === id)
   return d ? d.name : ''
+}
+function triggerSceneLabel(t?: string) {
+  const o = TRIGGER_SCENES.find((x) => x.value === (t || 'alert_firing'))
+  return o ? o.label : (t || '告警触发')
+}
+function channelKindsOf(row: SmsStrategy): NotifyChannelKind[] {
+  return row.channelKinds?.length ? row.channelKinds : DEFAULT_CHANNEL_KINDS
+}
+function channelKindLabel(k: string) {
+  return CHANNEL_KIND_OPTIONS.find((x) => x.value === k)?.label || k
 }
 function recipientNames(ids: string[]) {
   const names = ids
@@ -435,9 +525,27 @@ const form = reactive({
   nameKeyword: '',
   alertGroupId: '' as string,
   recipientUserIds: [] as string[],
+  notifyOwner: false,
+  channelKinds: [...DEFAULT_CHANNEL_KINDS] as NotifyChannelKind[],
+  extraChannelIds: [] as string[],
+  triggerScene: 'alert_firing',
   description: '',
   enabled: true,
 })
+
+const showExtraChannels = computed(() =>
+  form.channelKinds.includes('feishu') || form.channelKinds.includes('webhook'),
+)
+const feishuChannelOptions = computed(() =>
+  form.channelKinds.includes('feishu')
+    ? channelOptions.value.filter((c) => c.channelType === 'feishu')
+    : [],
+)
+const webhookChannelOptions = computed(() =>
+  form.channelKinds.includes('webhook')
+    ? channelOptions.value.filter((c) => c.channelType === 'webhook')
+    : [],
+)
 
 /// 仅当一级类型为 database/middleware 时才允许选子类
 const canPickSubType = computed(() => ['database', 'middleware'].includes(form.eventType))
@@ -474,7 +582,35 @@ const selectedUsers = computed<UserInfo[]>(() => {
 
 const rules: FormRules = {
   eventType: [{ required: true, message: '请选择事件类型', trigger: 'change' }],
-  recipientUserIds: [{ required: true, type: 'array', min: 1, message: '请至少选择一名接收人员', trigger: 'change' }],
+  recipientUserIds: [
+    {
+      validator: (_rule, value, callback) => {
+        const ids = Array.isArray(value) ? value : []
+        if (ids.length === 0 && !form.notifyOwner) {
+          callback(new Error('请至少选择一名接收人员，或打开「同时通知资产责任人」'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change',
+    },
+  ],
+  channelKinds: [
+    {
+      validator: (_rule, value, callback) => {
+        if (!Array.isArray(value) || value.length === 0) {
+          callback(new Error('请至少勾选一个通知渠道'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change',
+    },
+  ],
+}
+
+function onNotifyOwnerChange() {
+  formRef.value?.validateField('recipientUserIds')
 }
 
 function onGroupChange() {
@@ -521,6 +657,10 @@ function openCreate() {
   form.nameKeyword = ''
   form.alertGroupId = ''
   form.recipientUserIds = []
+  form.notifyOwner = false
+  form.channelKinds = [...DEFAULT_CHANNEL_KINDS]
+  form.extraChannelIds = []
+  form.triggerScene = 'alert_firing'
   form.description = ''
   form.enabled = true
   candidateKeyword.value = ''
@@ -539,6 +679,10 @@ function openEdit(row: SmsStrategy) {
   form.nameKeyword = row.nameKeyword || ''
   form.alertGroupId = row.alertGroupId || ''
   form.recipientUserIds = Array.isArray(row.recipientUserIds) ? [...row.recipientUserIds] : []
+  form.notifyOwner = !!row.notifyOwner
+  form.channelKinds = row.channelKinds?.length ? [...row.channelKinds] : [...DEFAULT_CHANNEL_KINDS]
+  form.extraChannelIds = Array.isArray(row.extraChannelIds) ? [...row.extraChannelIds] : []
+  form.triggerScene = row.triggerScene || 'alert_firing'
   form.description = row.description || ''
   form.enabled = row.enabled
   candidateKeyword.value = ''
@@ -567,6 +711,12 @@ async function onSubmit() {
         nameKeyword: form.nameKeyword.trim() || undefined,
         alertGroupId: form.alertGroupId || undefined,
         recipientUserIds: form.recipientUserIds,
+        notifyOwner: form.notifyOwner,
+        channelKinds: form.channelKinds,
+        extraChannelIds: form.extraChannelIds.filter((id) =>
+          [...feishuChannelOptions.value, ...webhookChannelOptions.value].some((c) => c.id === id),
+        ),
+        triggerScene: form.triggerScene,
         description: form.description || undefined,
         enabled: form.enabled,
       }
@@ -621,6 +771,7 @@ onMounted(() => {
 }
 .page-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; color: #303133; }
 .page-sub { font-size: 12px; font-weight: normal; color: #909399; margin-left: 8px; }
+.form-hint { margin-left: 10px; font-size: 12px; color: #909399; line-height: 1.4; }
 .header-actions { display: flex; gap: 8px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .text-muted { color: #c0c4cc; font-size: 12px; }

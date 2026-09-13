@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use sqlx::Row;
 use uuid::Uuid;
 
 use crate::config::LogsAlertingConfig;
@@ -86,9 +85,16 @@ async fn run_round(state: &Arc<AppState>, cfg: &LogsAlertingConfig) -> anyhow::R
             continue;
         }
 
-        // 创建告警
+        // 创建告警（fingerprint 唯一约束兜底竞态：多实例同时过静默检查时只有一条能插入）
         match create_surge_alert(state, &surge, cfg).await {
-            Ok(alert_id) => {
+            Ok(None) => {
+                tracing::debug!(
+                    target: "log_alert",
+                    "host {} alert already inserted by another worker, skip notify",
+                    surge.hostname
+                );
+            }
+            Ok(Some(alert_id)) => {
                 tracing::info!(
                     target: "log_alert",
                     "created alert {} for host {} ({} errors, last_ts={})",
@@ -173,12 +179,13 @@ async fn is_silenced(
     Ok(count > 0)
 }
 
-/// 创建一条日志突增告警，返回告警 ID
+/// 创建一条日志突增告警。
+/// `Ok(Some(id))` 新插入；`Ok(None)` 指纹已存在（静默期内并发去重）。
 async fn create_surge_alert(
     state: &AppState,
     surge: &crate::log_routes::LogSurgeRow,
     cfg: &LogsAlertingConfig,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Option<String>> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -240,7 +247,7 @@ async fn create_surge_alert(
         }
     };
 
-    sqlx::query(
+    match sqlx::query(
         "INSERT INTO alert_events \
          (id, fingerprint, external_id, source, ingress_channel, ingress_actor, \
           severity, status, title, message, labels, ci_id, ci_name_snapshot, \
@@ -263,7 +270,12 @@ async fn create_surge_alert(
     .bind(&now)
     .bind(&now)
     .execute(&state.db)
-    .await?;
+    .await
+    {
+        Ok(_) => {}
+        Err(e) if crate::db::is_duplicate_key(&e) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
 
     // 审计
     let _ = crate::db::insert_audit_log(
@@ -284,7 +296,7 @@ async fn create_surge_alert(
     )
     .await;
 
-    Ok(id)
+    Ok(Some(id))
 }
 
 /// 生成时间桶 key：当前时间对齐到 window_minutes 边界

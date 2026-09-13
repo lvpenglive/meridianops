@@ -1,11 +1,12 @@
-//! 告警短信策略（对齐老系统「短信策略」）
+//! 通知策略（原「告警短信策略」，现可多选渠道）
 //!  - GET    /api/sms-strategies                分页列表（keyword / eventType / enabled）
+//!  - GET    /api/sms-strategies/channel-options 启用中的通知通道（供飞书/Webhook 勾选）
 //!  - POST   /api/sms-strategies                新建策略
 //!  - PUT    /api/sms-strategies/:id            更新策略
 //!  - PATCH  /api/sms-strategies/:id/enable     启停
 //!  - DELETE /api/sms-strategies/:id            删除策略
 //!
-//! 命中后由 notification_engine::dispatch_event 统一分发：站内信 + 通道通知。
+//! 命中后由 notification_engine::dispatch_event 按勾选渠道分发。
 
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/sms-strategies", get(list_strategies).post(create_strategy))
         .route("/api/sms-strategies/match", get(match_strategies))
+        .route("/api/sms-strategies/channel-options", get(list_channel_options))
         .route("/api/sms-strategies/:id", put(update_strategy).delete(delete_strategy))
         .route("/api/sms-strategies/:id/enable", patch(toggle_enable))
 }
@@ -59,7 +61,8 @@ async fn list_strategies(
 
     let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
         "SELECT s.id, s.event_type, s.event_sub_type, s.trigger_op, s.severity_filter, s.host_filter, s.name_keyword, \
-                s.alert_group_id, g.name AS alert_group_name, s.recipient_user_ids, s.description, s.enabled, \
+                s.alert_group_id, g.name AS alert_group_name, s.recipient_user_ids, s.notify_owner, \
+                s.channel_kinds, s.extra_channel_ids, s.trigger_scene, s.description, s.enabled, \
                 s.created_by, s.created_at, s.updated_at \
          FROM alert_sms_strategies s LEFT JOIN alert_groups g ON g.id = s.alert_group_id WHERE 1=1 "
     );
@@ -116,6 +119,10 @@ async fn list_strategies(
             "alertGroupId": r.try_get::<Option<String>, _>("alert_group_id").ok().flatten(),
             "alertGroupName": r.try_get::<Option<String>, _>("alert_group_name").ok().flatten().unwrap_or_default(),
             "recipientUserIds": rids.unwrap_or_else(|| json!([])),
+            "notifyOwner": r.try_get::<bool, _>("notify_owner").unwrap_or(false),
+            "channelKinds": json_string_list(r, "channel_kinds"),
+            "extraChannelIds": json_string_list(r, "extra_channel_ids"),
+            "triggerScene": r.try_get::<Option<String>, _>("trigger_scene").ok().flatten().unwrap_or_else(|| "alert_firing".to_string()),
             "description": r.try_get::<Option<String>, _>("description").ok().flatten().unwrap_or_default(),
             "enabled": r.try_get::<bool, _>("enabled").unwrap_or(true),
             "createdBy": r.try_get::<String, _>("created_by").unwrap_or_default(),
@@ -142,6 +149,13 @@ struct StrategyReq {
     name_keyword: Option<String>,
     alert_group_id: Option<String>,
     recipient_user_ids: Vec<String>,
+    #[serde(default)]
+    notify_owner: bool,
+    #[serde(default)]
+    channel_kinds: Vec<String>,
+    #[serde(default)]
+    extra_channel_ids: Vec<String>,
+    trigger_scene: Option<String>,
     description: Option<String>,
     #[serde(default = "default_enabled")]
     enabled: bool,
@@ -149,6 +163,83 @@ struct StrategyReq {
 
 fn default_op() -> String { "eq".to_string() }
 fn default_enabled() -> bool { true }
+
+const ALLOWED_KINDS: &[&str] = &["inbox", "sms", "email", "feishu", "webhook"];
+const ALLOWED_SCENES: &[&str] = &[
+    "alert_firing",
+    "alert_acknowledged",
+    "alert_resolved",
+    "ticket_assigned",
+    "ticket_closed",
+    "job_failed",
+    "log_surge",
+];
+
+fn json_string_list(row: &sqlx::mysql::MySqlRow, col: &str) -> Value {
+    let parsed = row
+        .try_get::<Option<serde_json::Value>, _>(col)
+        .ok()
+        .flatten()
+        .and_then(|v| match v {
+            serde_json::Value::Array(arr) => Some(
+                arr.into_iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>(),
+            ),
+            serde_json::Value::String(s) => serde_json::from_str(&s).ok(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    json!(normalize_channel_kinds_or_passthrough(col, parsed))
+}
+
+fn normalize_channel_kinds_or_passthrough(col: &str, raw: Vec<String>) -> Vec<String> {
+    if col == "channel_kinds" {
+        normalize_channel_kinds(&raw)
+    } else {
+        raw.into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+}
+
+fn normalize_channel_kinds(raw: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for k in raw {
+        let k = k.trim().to_lowercase();
+        if ALLOWED_KINDS.contains(&k.as_str()) && !out.contains(&k) {
+            out.push(k);
+        }
+    }
+    if out.is_empty() {
+        vec!["inbox".into(), "sms".into(), "email".into()]
+    } else {
+        out
+    }
+}
+
+fn normalize_trigger_scene(raw: Option<&str>) -> String {
+    let s = raw.unwrap_or("").trim().to_string();
+    if ALLOWED_SCENES.contains(&s.as_str()) {
+        s
+    } else {
+        "alert_firing".to_string()
+    }
+}
+
+fn kinds_json(raw: &[String]) -> String {
+    serde_json::to_string(&normalize_channel_kinds(raw)).unwrap_or_else(|_| "[\"inbox\",\"sms\",\"email\"]".to_string())
+}
+
+fn extras_json(raw: &[String]) -> String {
+    let ids: Vec<String> = raw
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string())
+}
 
 /// 归一化 trigger_op，只允许合法运算符，其余回退 eq
 fn norm_op(op: &str) -> String {
@@ -169,15 +260,23 @@ async fn create_strategy(
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     let rids = serde_json::to_string(&req.recipient_user_ids).unwrap_or_else(|_| "[]".to_string());
+    if req.recipient_user_ids.is_empty() && !req.notify_owner {
+        return Err(AppError::bad("请至少选择一名接收人员，或打开「同时通知资产责任人」"));
+    }
+
     let event_type = req.event_type.as_deref().unwrap_or("").trim().to_string();
     let event_sub_type = req.event_sub_type.as_deref().unwrap_or("").trim().to_string();
     let op = norm_op(&req.trigger_op);
+    let kinds = kinds_json(&req.channel_kinds);
+    let extras = extras_json(&req.extra_channel_ids);
+    let scene = normalize_trigger_scene(req.trigger_scene.as_deref());
 
     sqlx::query(
         "INSERT INTO alert_sms_strategies \
          (id, event_type, event_sub_type, trigger_op, severity_filter, host_filter, name_keyword, \
-          alert_group_id, recipient_user_ids, description, enabled, created_by, created_at, updated_at) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          alert_group_id, recipient_user_ids, notify_owner, channel_kinds, extra_channel_ids, trigger_scene, \
+          description, enabled, created_by, created_at, updated_at) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(&id)
     .bind(if event_type.is_empty() { None } else { Some(&event_type) })
@@ -188,6 +287,10 @@ async fn create_strategy(
     .bind(req.name_keyword.as_deref())
     .bind(req.alert_group_id.as_deref())
     .bind(&rids)
+    .bind(req.notify_owner)
+    .bind(&kinds)
+    .bind(&extras)
+    .bind(&scene)
     .bind(req.description.as_deref())
     .bind(req.enabled)
     .bind(&auth.0.sub)
@@ -208,16 +311,24 @@ async fn update_strategy(
     auth::require_permission(&auth, "sms_strategy:manage")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
+    if req.recipient_user_ids.is_empty() && !req.notify_owner {
+        return Err(AppError::bad("请至少选择一名接收人员，或打开「同时通知资产责任人」"));
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let rids = serde_json::to_string(&req.recipient_user_ids).unwrap_or_else(|_| "[]".to_string());
     let event_type = req.event_type.as_deref().unwrap_or("").trim().to_string();
     let event_sub_type = req.event_sub_type.as_deref().unwrap_or("").trim().to_string();
     let op = norm_op(&req.trigger_op);
+    let kinds = kinds_json(&req.channel_kinds);
+    let extras = extras_json(&req.extra_channel_ids);
+    let scene = normalize_trigger_scene(req.trigger_scene.as_deref());
 
     let result = sqlx::query(
         "UPDATE alert_sms_strategies SET \
             event_type = ?, event_sub_type = ?, trigger_op = ?, severity_filter = ?, host_filter = ?, \
-            name_keyword = ?, alert_group_id = ?, recipient_user_ids = ?, description = ?, enabled = ?, updated_at = ? \
+            name_keyword = ?, alert_group_id = ?, recipient_user_ids = ?, notify_owner = ?, \
+            channel_kinds = ?, extra_channel_ids = ?, trigger_scene = ?, description = ?, enabled = ?, updated_at = ? \
          WHERE id = ?",
     )
     .bind(if event_type.is_empty() { None } else { Some(&event_type) })
@@ -228,6 +339,10 @@ async fn update_strategy(
     .bind(req.name_keyword.as_deref())
     .bind(req.alert_group_id.as_deref())
     .bind(&rids)
+    .bind(req.notify_owner)
+    .bind(&kinds)
+    .bind(&extras)
+    .bind(&scene)
     .bind(req.description.as_deref())
     .bind(req.enabled)
     .bind(&now)
@@ -266,6 +381,35 @@ async fn toggle_enable(
         return Err(AppError::not_found("策略不存在"));
     }
     Ok(Json(json!({ "code": 0, "message": "ok" })))
+}
+
+async fn list_channel_options(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, AppError> {
+    auth::require_permission(&auth, "sms_strategy:read")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, name, channel_type FROM notification_channels \
+         WHERE enabled = 1 AND channel_type IN ('email','feishu','webhook','sms_http') \
+         ORDER BY channel_type ASC, created_at ASC",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let list: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<String, _>("id").unwrap_or_default(),
+                "name": r.try_get::<String, _>("name").unwrap_or_default(),
+                "channelType": r.try_get::<String, _>("channel_type").unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "code": 0, "data": { "list": list } })))
 }
 
 async fn delete_strategy(
@@ -463,6 +607,58 @@ fn wild_inner(tb: &[char], ti: usize, pb: &[char], pi: usize) -> bool {
     false
 }
 
+/// 用告警 IP 反查资产责任人（多人，与告警入库 / 列表「联系人」同源）。
+async fn lookup_owners_by_ips(pool: &sqlx::MySqlPool, ips: &[String]) -> Vec<String> {
+    for ip in ips {
+        let ip = ip.trim();
+        if ip.is_empty() {
+            continue;
+        }
+        let instance_id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM ci_instances \
+             WHERE JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.ip')) = ? \
+                OR JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.manageIp')) = ? \
+                OR JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.host_ip')) = ? \
+                OR JSON_UNQUOTE(JSON_EXTRACT(attributes, '$.mgmt_ip')) = ? \
+             LIMIT 1",
+        )
+        .bind(ip)
+        .bind(ip)
+        .bind(ip)
+        .bind(ip)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        let Some(iid) = instance_id else {
+            continue;
+        };
+        let owners = sqlx::query_scalar::<_, String>(
+            "SELECT user_id FROM ci_instance_owners WHERE instance_id = ? ORDER BY sort_order ASC, user_id ASC",
+        )
+        .bind(&iid)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+        if !owners.is_empty() {
+            return owners;
+        }
+        if let Some(owner) = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT owner_id FROM ci_instances WHERE id = ? AND owner_id IS NOT NULL AND owner_id <> ''",
+        )
+        .bind(&iid)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        {
+            return vec![owner];
+        }
+    }
+    Vec::new()
+}
+
 async fn match_strategies(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
@@ -483,7 +679,7 @@ async fn match_strategies(
     // 1. 查询所有启用的策略（按 event_type 预筛选，空值全量）
     let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
         "SELECT id, event_type, event_sub_type, trigger_op, severity_filter, host_filter, \
-                name_keyword, recipient_user_ids \
+                name_keyword, recipient_user_ids, notify_owner \
          FROM alert_sms_strategies WHERE enabled = 1 "
     );
     if let Some(t) = &ev_type {
@@ -497,6 +693,7 @@ async fn match_strategies(
     // 2. 逐条匹配
     let mut matched_ids: Vec<String> = Vec::new();
     let mut all_user_ids: Vec<String> = Vec::new();
+    let mut need_owner = false;
 
     for row in &rows {
         if strategy_matches(
@@ -517,7 +714,14 @@ async fn match_strategies(
                     }
                 }
             }
+            if row.try_get::<bool, _>("notify_owner").unwrap_or(false) {
+                need_owner = true;
+            }
         }
+    }
+
+    if need_owner {
+        all_user_ids.extend(lookup_owners_by_ips(&state.db, &ev_ips).await);
     }
 
     // 3. 去重 user_ids
