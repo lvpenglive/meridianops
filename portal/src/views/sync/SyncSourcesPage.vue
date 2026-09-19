@@ -1005,7 +1005,10 @@ async function openOutboundPreview(src: SyncSource) {
         name: t.error ? `${t.name}（${t.error}）` : t.name,
         source: t.contentSource === 'sql' ? 'sql' : 'hosts',
         rowCount: t.rowCount,
-        rows: t.rows,
+        rows: (t.rows || []).map((r) => ({
+          ...r,
+          ip: r.ip || r.IP || r.key || '',
+        })),
       })),
     }
     previewVisible.value = true
