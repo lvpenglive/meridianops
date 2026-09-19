@@ -1,6 +1,8 @@
 # ===== Rust / Gateway =====
 gateway/target/
 gateway/Cargo.lock
+.cargo-kylin/
+.rustup-kylin/
 
 # ===== Vue / Portal =====
 portal/node_modules/

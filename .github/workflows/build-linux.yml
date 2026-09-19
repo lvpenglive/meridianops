@@ -1,0 +1,175 @@
+name: Build Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    name: Linux x86_64 (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gateway
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+
+      - name: Test gateway
+        run: cargo test
+        working-directory: gateway
+
+      - name: Build gateway
+        run: cargo build --release
+        working-directory: gateway
+
+      - name: Build portal
+        run: |
+          npm ci
+          npm run build
+        working-directory: portal
+
+      - name: Stage package
+        env:
+          PACKAGE_NAME: meridianops-linux-x86_64
+          PACKAGE_LABEL: Linux x86_64 (glibc / Ubuntu runner)
+        run: bash .github/scripts/package-linux.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meridianops-linux-x86_64
+          path: dist/meridianops-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # GitHub 无官方麒麟 runner：在社区 Kylin V10 SP3 容器内编译网关，
+  # 以贴近银河麒麟高级服务器操作系统 V10 SP3 的 glibc / 依赖环境。
+  # 门户是静态资源，在 Ubuntu runner 上编一次即可。
+  kylin-v10-sp3-x86_64:
+    name: Kylin V10 SP3 x86_64
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Kylin cargo / rustup
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-kylin
+            .rustup-kylin
+            gateway/target
+          key: kylin-v10-sp3-${{ hashFiles('gateway/Cargo.toml') }}
+          restore-keys: |
+            kylin-v10-sp3-
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+
+      - name: Build portal
+        run: |
+          npm ci
+          npm run build
+        working-directory: portal
+
+      - name: Build gateway inside Kylin V10 SP3 container
+        run: |
+          set -euo pipefail
+          docker pull hxsoong/kylin:v10-sp3
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e CARGO_HOME=/workspace/.cargo-kylin \
+            -e RUSTUP_HOME=/workspace/.rustup-kylin \
+            hxsoong/kylin:v10-sp3 \
+            bash -lc '
+              set -euo pipefail
+              echo "=== host productinfo ==="
+              cat /etc/.productinfo 2>/dev/null || true
+              cat /etc/os-release 2>/dev/null || true
+
+              yum install -y \
+                gcc gcc-c++ make \
+                openssl-devel pkgconfig perl \
+                curl ca-certificates tar gzip git \
+                || yum install -y gcc gcc-c++ make openssl-devel pkgconfig perl curl tar gzip
+
+              export PATH="$CARGO_HOME/bin:$PATH"
+              if ! command -v rustc >/dev/null 2>&1; then
+                curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+                  | sh -s -- -y --default-toolchain stable --profile minimal
+              fi
+              # shellcheck source=/dev/null
+              source "$CARGO_HOME/env"
+              rustc -vV
+
+              cargo build --release --manifest-path gateway/Cargo.toml
+            '
+
+      - name: Stage package
+        env:
+          PACKAGE_NAME: meridianops-kylin-v10-sp3-x86_64
+          PACKAGE_LABEL: Kylin V10 SP3 x86_64 (built in hxsoong/kylin:v10-sp3)
+        run: bash .github/scripts/package-linux.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meridianops-kylin-v10-sp3-x86_64
+          path: dist/meridianops-kylin-v10-sp3-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Attach release assets
+    needs: [linux-x86_64, kylin-v10-sp3-x86_64]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: meridianops-*
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist/
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/meridianops-linux-x86_64.tar.gz
+            dist/meridianops-kylin-v10-sp3-x86_64.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
