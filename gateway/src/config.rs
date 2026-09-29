@@ -16,6 +16,8 @@ pub struct GatewayConfig {
     /// CMDB → Eventide 外表（Lookup）同步。与告警 ingress 方向相反。
     #[serde(default)]
     pub eventide_lookup: EventideLookupConfig,
+    #[serde(default)]
+    pub zabbix_ctl: ZabbixCtlConfig,
     pub systems: Vec<SystemConfig>,
 }
 
@@ -45,6 +47,21 @@ impl Default for EventideLookupConfig {
             interval_secs: 300,
             debounce_secs: 45,
             targets: Vec::new(),
+        }
+    }
+}
+
+/// zabbix-ctl 内网地址。服务令牌只从环境变量读取，不写进配置文件。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ZabbixCtlConfig {
+    pub base_url: String,
+}
+
+impl Default for ZabbixCtlConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://127.0.0.1:8090".to_string(),
         }
     }
 }
@@ -342,6 +359,7 @@ impl Default for GatewayConfig {
             notification_cleaner: NotificationCleanerConfig::default(),
             logs: LogsConfig::default(),
             eventide_lookup: EventideLookupConfig::default(),
+            zabbix_ctl: ZabbixCtlConfig::default(),
             systems: vec![
                 SystemConfig {
                     id: "axleops".to_string(),
@@ -557,6 +575,9 @@ impl GatewayConfig {
             } else {
                 self.eventide_lookup.targets[0].lookup_id = v;
             }
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_ZABBIX_CTL_URL") {
+            self.zabbix_ctl.base_url = v;
         }
     }
 

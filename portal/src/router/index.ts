@@ -121,6 +121,12 @@ const routes = [
         meta: { title: '日志中心', icon: 'Document', permission: 'log:read' }
       },
       {
+        path: 'monitor',
+        name: 'Monitor',
+        component: () => import('../views/monitor/MonitorPage.vue'),
+        meta: { title: '监控纳管', icon: 'Monitor', permission: 'monitor:read' }
+      },
+      {
         path: 'config',
         name: 'Config',
         component: () => import('../views/config/ConfigPage.vue'),

@@ -126,3 +126,7 @@ source = "hosts"
 # SELECT a.ip AS ip, u.display_name AS `联系人`, u.mobile AS `电话`
 # FROM ...
 # """
+
+[zabbix_ctl]
+# zabbix-ctl 内网地址。服务令牌用环境变量 MERIDIANOPS_ZABBIX_CTL_TOKEN，不要写进此文件。
+base_url = "http://127.0.0.1:8090"

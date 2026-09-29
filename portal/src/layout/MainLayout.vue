@@ -377,6 +377,7 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/notification/alert-groups', title: '告警组维护', icon: 'UserFilled', permission: 'alert_group:read' },
       { path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
       { path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
+      { path: '/monitor', title: '监控纳管', icon: 'Monitor', permission: 'monitor:read' },
       { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
     ]
   },
