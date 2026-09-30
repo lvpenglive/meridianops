@@ -128,5 +128,7 @@ source = "hosts"
 # """
 
 [zabbix_ctl]
-# zabbix-ctl 内网地址。服务令牌用环境变量 MERIDIANOPS_ZABBIX_CTL_TOKEN，不要写进此文件。
+# zabbix-ctl 内网地址。service_token 与 ctl 的 [server].service_token 相同；也可用环境变量 MERIDIANOPS_ZABBIX_CTL_TOKEN 覆盖。
 base_url = "http://127.0.0.1:8090"
+service_token = ""
+

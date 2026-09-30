@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把网关 release 二进制 + 门户静态资源打成 tar.gz
+# 把网关 + 门户 + 一键脚本打成 tar.gz（Gateway 可直接托管门户，无需 Nginx）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -11,6 +11,7 @@ cd "$ROOT"
 BIN="gateway/target/release/meridianops-gateway"
 PORTAL_DIST="portal/dist"
 CFG_EXAMPLE="gateway/gateway-config.toml.example"
+DEPLOY_CFG="deploy/gateway-config.deploy.toml.example"
 
 if [[ ! -f "$BIN" ]]; then
   echo "missing binary: $BIN" >&2
@@ -20,22 +21,25 @@ if [[ ! -d "$PORTAL_DIST" ]]; then
   echo "missing portal build: $PORTAL_DIST" >&2
   exit 1
 fi
-if [[ ! -f "$CFG_EXAMPLE" ]]; then
-  echo "missing config example: $CFG_EXAMPLE" >&2
-  exit 1
-fi
 
 STAGE="dist/${PACKAGE_NAME}"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/bin" "$STAGE/portal" "$STAGE/config"
+mkdir -p "$STAGE/bin" "$STAGE/portal" "$STAGE/config" "$STAGE/run"
 
 cp "$BIN" "$STAGE/bin/"
 chmod +x "$STAGE/bin/meridianops-gateway"
 if command -v strip >/dev/null 2>&1; then
   strip "$STAGE/bin/meridianops-gateway" || true
 fi
-cp "$CFG_EXAMPLE" "$STAGE/config/gateway-config.toml.example"
 cp -a "$PORTAL_DIST"/. "$STAGE/portal/"
+cp "$CFG_EXAMPLE" "$STAGE/config/gateway-config.toml.example"
+cp "$DEPLOY_CFG" "$STAGE/config/gateway-config.deploy.toml.example"
+# 部署示例里 portal_dir 用相对包根目录
+sed 's#portal_dir = "portal"#portal_dir = "portal"#' \
+  "$DEPLOY_CFG" > "$STAGE/config/gateway-config.deploy.toml.example"
+
+cp deploy/start.sh deploy/stop.sh deploy/status.sh "$STAGE/"
+chmod +x "$STAGE/start.sh" "$STAGE/stop.sh" "$STAGE/status.sh"
 
 {
   echo "package=${PACKAGE_NAME}"
@@ -45,22 +49,27 @@ cp -a "$PORTAL_DIST"/. "$STAGE/portal/"
   echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$STAGE/BUILD.txt"
 
-cat > "$STAGE/README.txt" <<'EOF'
-MeridianOps Linux 包
+cat > "$STAGE/README-DEPLOY.txt" <<'EOF'
+MeridianOps 一键部署包
 
 内容
-  bin/meridianops-gateway     网关二进制
-  portal/                     门户静态文件（Nginx 托管）
-  config/gateway-config.toml.example
+  bin/meridianops-gateway
+  portal/                         前端静态资源（由 Gateway 托管）
+  config/gateway-config.deploy.toml.example
+  start.sh / stop.sh / status.sh
 
-启动
-  1. 复制 example 为 gateway-config.toml，填 MySQL / JWT 等
-     生产用环境变量覆盖：MERIDIANOPS_DB_URL、MERIDIANOPS_JWT_SECRET
-  2. ./bin/meridianops-gateway --config gateway-config.toml
-  3. Nginx 托管 portal/，把 /api 反代到网关 8800
+三步启动
+  1. tar xzf 本包 && cd meridianops-*
+  2. cp config/gateway-config.deploy.toml.example config/gateway-config.toml
+     只改 [database].url（以及 jwt_secret）
+  3. ./start.sh
+  4. 浏览器打开 http://127.0.0.1:8800/
 
-Ubuntu 包在 glibc / Ubuntu runner 上编译；
-麒麟包在 hxsoong/kylin:v10-sp3 容器内编译网关，尽量贴近银河麒麟 V10 SP3。
+说明
+  - 无需单独 Nginx：Gateway 同时提供 /api 与门户页面
+  - 默认 bind 127.0.0.1:8800，满足本机安全校验
+  - 可选 zabbix-ctl：另解压 ctl 包，service_token 与 [zabbix_ctl].service_token 填成一样
+  - 停止: ./stop.sh
 EOF
 
 mkdir -p dist

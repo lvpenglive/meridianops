@@ -1,0 +1,39 @@
+# 一键部署示例：复制为 gateway-config.toml 后改数据库即可。
+# Gateway 同时托管 portal/，浏览器只访问本地址，无需再配 Nginx。
+
+[server]
+bind = "127.0.0.1:8800"
+cors_origins = ["http://127.0.0.1:8800", "http://localhost:8800"]
+# 打包脚本会写成绝对路径；也可用环境变量 MERIDIANOPS_PORTAL_DIR
+portal_dir = "portal"
+
+[database]
+url = "mysql://root:change-me@127.0.0.1:3306/meridianops"
+max_connections = 10
+min_connections = 1
+
+[auth]
+jwt_secret = "change-me-to-a-long-random-string"
+token_ttl_hours = 24
+seed_username = "admin"
+seed_password = "admin123!"
+enabled = true
+
+[alerts]
+ingress_token = "meridianops-eventide-shared-secret-change-me"
+ingress_enabled = false
+
+[zabbix_ctl]
+base_url = "http://127.0.0.1:8090"
+# 与 zabbix-ctl.toml 里 [server].service_token 相同
+service_token = "change-me"
+
+[[systems]]
+id = "eventide"
+name = "Eventide 告警中心"
+system_type = "alert-center"
+base_url = "http://127.0.0.1:8080"
+auth_type = "token"
+auth_token = "change-me"
+status = "online"
+version = "v0.3.0"

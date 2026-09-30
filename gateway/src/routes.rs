@@ -6,8 +6,10 @@ use axum::{
     Json, Router,
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use reqwest::Client;
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use crate::config::{AlertsConfig, EventideLookupConfig, GatewayConfig};
@@ -27,7 +29,8 @@ pub struct AppState {
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let portal_dir = state.config.server.portal_dir.trim().to_string();
+    let mut app = Router::new()
         .route("/api/health", get(health_check))
         .merge(crate::auth_routes::routes())
         .merge(crate::audit_routes::routes())
@@ -57,9 +60,36 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/systems/:id", get(get_system))
         .route("/api/proxy/*rest", proxy_any_method())
         .route("/api/aggregate/overview", get(aggregate_overview))
-        .route("/api/aggregate/alerts", get(aggregate_alerts))
-        .layer(build_cors_layer(&state.config.server.cors_origins))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .route("/api/aggregate/alerts", get(aggregate_alerts));
+
+    if !portal_dir.is_empty() {
+        let dir = PathBuf::from(&portal_dir);
+        if dir.is_dir() {
+            tracing::info!(path = %dir.display(), "托管门户静态资源");
+            let index = dir.join("index.html");
+            let serve = ServeDir::new(dir).append_index_html_on_directories(true);
+            if index.is_file() {
+                app = app.fallback_service(serve.not_found_service(ServeFile::new(index)));
+            } else {
+                app = app.fallback_service(serve);
+            }
+        } else {
+            tracing::warn!(path = %portal_dir, "portal_dir 不是目录，跳过静态托管");
+        }
+    }
+
+    app.layer(build_cors_layer(&state.config.server.cors_origins))
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http().make_span_with(
+                |req: &axum::http::Request<_>| {
+                    tracing::info_span!(
+                        "http",
+                        method = %req.method(),
+                        uri = %req.uri(),
+                    )
+                },
+            ),
+        )
         .with_state(state)
 }
 

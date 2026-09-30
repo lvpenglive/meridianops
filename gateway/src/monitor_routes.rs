@@ -272,9 +272,11 @@ fn ctl_endpoint(state: &AppState) -> Result<(String, String), AppError> {
     if base.is_empty() {
         return Err(AppError::bad("未配置 zabbix-ctl 地址"));
     }
-    let token = std::env::var("MERIDIANOPS_ZABBIX_CTL_TOKEN").unwrap_or_default();
+    let token = state.config.zabbix_ctl.resolved_service_token();
     if token.is_empty() {
-        return Err(AppError::bad("未配置 MERIDIANOPS_ZABBIX_CTL_TOKEN"));
+        return Err(AppError::bad(
+            "未配置 zabbix-ctl 令牌（toml [zabbix_ctl].service_token 或环境变量 MERIDIANOPS_ZABBIX_CTL_TOKEN）",
+        ));
     }
     Ok((base, token))
 }

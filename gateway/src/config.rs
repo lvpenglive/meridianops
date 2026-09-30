@@ -51,18 +51,30 @@ impl Default for EventideLookupConfig {
     }
 }
 
-/// zabbix-ctl 内网地址。服务令牌只从环境变量读取，不写进配置文件。
+/// zabbix-ctl 内网地址与服务令牌。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ZabbixCtlConfig {
     pub base_url: String,
+    /// 与 zabbix-ctl `[server].service_token` 相同。环境变量 MERIDIANOPS_ZABBIX_CTL_TOKEN 可覆盖。
+    pub service_token: String,
 }
 
 impl Default for ZabbixCtlConfig {
     fn default() -> Self {
         Self {
             base_url: "http://127.0.0.1:8090".to_string(),
+            service_token: String::new(),
         }
+    }
+}
+
+impl ZabbixCtlConfig {
+    pub fn resolved_service_token(&self) -> String {
+        std::env::var("MERIDIANOPS_ZABBIX_CTL_TOKEN")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| self.service_token.clone())
     }
 }
 
@@ -219,6 +231,9 @@ pub struct ServerConfig {
     pub bind: String,
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// 门户静态目录（一键部署时指向包内 portal/）。空则不托管前端。
+    #[serde(default)]
+    pub portal_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -352,6 +367,7 @@ impl Default for GatewayConfig {
                     "http://localhost:5173".to_string(),
                     "http://127.0.0.1:5173".to_string(),
                 ],
+                portal_dir: String::new(),
             },
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
@@ -448,12 +464,20 @@ impl GatewayConfig {
         if let Ok(v) = std::env::var("MERIDIANOPS_SERVER_BIND") {
             self.server.bind = v;
         }
+        if let Ok(v) = std::env::var("MERIDIANOPS_PORTAL_DIR") {
+            self.server.portal_dir = v;
+        }
         if let Ok(v) = std::env::var("MERIDIANOPS_CORS_ORIGINS") {
             self.server.cors_origins = v
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+        }
+        if let Ok(v) = std::env::var("MERIDIANOPS_ZABBIX_CTL_TOKEN") {
+            if !v.is_empty() {
+                self.zabbix_ctl.service_token = v;
+            }
         }
         if let Ok(v) = std::env::var("MERIDIANOPS_ALLOW_INSECURE_DEFAULTS") {
             self.auth.allow_insecure_defaults = v == "1" || v.eq_ignore_ascii_case("true");
