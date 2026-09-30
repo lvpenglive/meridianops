@@ -384,6 +384,7 @@ const allMenuGroups: MenuGroup[] = [
   {
     type: 'sub', title: '运维流程', icon: 'Operation', children: [
       { path: '/jobs', title: '作业中心', icon: 'List' },
+      { path: '/ops-tools', title: '运维工具', icon: 'SetUp', permission: 'ops_tool:read' },
       { path: '/system/credentials', title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' },
       { path: '/tickets', title: '工单系统', icon: 'Tickets', permission: 'ticket:read' },
       { path: '/tickets/stats', title: '工单统计', icon: 'DataAnalysis', permission: 'ticket:read' },

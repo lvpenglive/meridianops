@@ -151,6 +151,12 @@ const routes = [
         meta: { title: '作业中心', icon: 'Operation' }
       },
       {
+        path: 'ops-tools',
+        name: 'OpsTools',
+        component: () => import('../views/ops-tools/OpsToolsPage.vue'),
+        meta: { title: '运维工具', icon: 'SetUp', permission: 'ops_tool:read' }
+      },
+      {
         path: 'tickets',
         name: 'Tickets',
         component: () => import('../views/tickets/TicketsPage.vue'),

@@ -26,6 +26,7 @@ const PREFIX_MENU: Record<string, PermMenuNode> = {
   ticket: { parent: '运维流程', child: '工单系统' },
   workflow: { parent: '运维流程', child: '流程模板' },
   knowledge: { parent: '运维流程', child: '知识库' },
+  ops_tool: { parent: '运维流程', child: '运维工具' },
   user: { parent: '后台管理', child: '用户管理' },
   role: { parent: '后台管理', child: '角色管理' },
   dept: { parent: '后台管理', child: '部门管理' },
@@ -39,7 +40,7 @@ const CHILD_ORDER = [
   '态势中心', '报表中心', '审计中心', '费用中心',
   '资产清单', 'CI 模型', '关系类型', '拓扑视图', '数据源同步', '容器管理', 'DB数据库', '配置中心',
   '告警中心', '告警大屏', '通知通道', '通知策略', '告警组维护', '通知发送日志', '日志中心', 'AIOps运维',
-  '作业中心', 'SSH 凭据', '工单系统', '工单统计', '流程模板', '知识库',
+  '作业中心', '运维工具', 'SSH 凭据', '工单系统', '工单统计', '流程模板', '知识库',
   '用户管理', '角色管理', '部门管理', '系统设置', '组件状态', 'API 令牌', '字典管理', '授权管理',
 ]
 
@@ -99,6 +100,8 @@ const PERM_LABELS: Record<string, string> = {
   'ticket:delete': '删除工单',
   'workflow:read': '查看流程模板',
   'workflow:admin': '管理流程模板',
+  'ops_tool:read': '查看运维工具',
+  'ops_tool:manage': '管理运维工具',
 }
 
 /** 二级菜单下的动作文案（不再重复菜单名） */
@@ -158,6 +161,8 @@ const PERM_ACTION_LABELS: Record<string, string> = {
   'ticket:delete': '删除',
   'workflow:read': '查看',
   'workflow:admin': '管理',
+  'ops_tool:read': '查看',
+  'ops_tool:manage': '管理',
 }
 
 export function permissionPrefix(code: string): string {
