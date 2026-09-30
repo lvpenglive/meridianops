@@ -71,7 +71,7 @@ meridianops/
 
 - **Node.js** >= 18
 - **Rust** >= 1.75
-- **MySQL** >= 5.7（120.26.67.180:3306，独立库 `meridianops`）
+- **MySQL** >= 5.7（47.97.7.198:3306，独立库 `meridianops`）
 - **pnpm / npm**（前端包管理）
 
 ### 启动前端门户

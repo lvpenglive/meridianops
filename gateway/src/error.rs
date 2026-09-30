@@ -68,6 +68,9 @@ impl std::error::Error for AppError {}
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        if self.status.is_server_error() {
+            tracing::error!(code = self.code, status = %self.status, message = %self.message, "api error");
+        }
         let body = serde_json::json!({ "code": self.code, "message": self.message });
         (self.status, Json(body)).into_response()
     }

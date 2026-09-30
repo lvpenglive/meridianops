@@ -76,7 +76,7 @@ portal/src/
 ```rust
 // L144-146：默认 MySQL URL 包含真实服务器 IP 和密码
 fn default_mysql_url() -> String {
-    "mysql://root:886363@120.26.67.180:3306/meridianops".to_string()
+    "mysql://root:886363@47.97.7.198:3306/meridianops".to_string()
 }
 ```
 
