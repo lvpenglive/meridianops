@@ -343,13 +343,15 @@ cd gateway && cargo run
 > **本轮范围基线**：硬门槛全做 + 空壳模块隐藏或标「规划中」；演示可用、不写进可上生产。
 >
 > 来源：协作群审查（测试/架构/产品）+ [架构审查 PR#1](https://github.com/lvpenglive/meridianops/pull/1)
+>
+> **近期产品切片（混合运维控制面）**：见 [docs/product-next.md](./docs/product-next.md)。
 
 ### 🔴 硬门槛（本轮必须，先于产品优化）
 
 - [x] 前端正式 `npm run build` 通过（`vue-tsc` + Vite 生产打包）— **测试** `P0`
 - [x] 后端可复现构建：`rust-toolchain.toml` 使用 stable，`Cargo.toml` 声明 `rust-version = "1.85"`（edition2024 / time-core 不低于此）— **测试/架构** `P0`
 - [x] 补齐缺失页面：日志中心 `portal/src/views/logs/LogsPage.vue`（原被 gitignore 的 `logs` 规则误忽略）— **测试** `P0`
-- [ ] 未完成/空壳模块隐藏或标「规划中」：容器管理 `/containers`、数据库 `/database`、配置中心 `/config`、费用中心 `/cost`（避免误触空壳）— **产品** `P0`
+- [ ] 未完成/空壳模块隐藏或标「规划中」：容器管理 `/containers`、数据库 `/database`、配置中心 `/config`、费用中心 `/cost`（避免误触空壳）— **产品** `P0` → [product-next Now](./docs/product-next.md)
 - [x] 凭据/JWT/种子密码勿硬编码（config.rs 等）；非 loopback 环境不安全默认应阻断启动（不仅 warn）— **架构** `P0`
 - [x] Token 禁止走 URL query（工单导出、通知 SSE 改走 Authorization 头）— **架构** `P0`
 - [x] CORS 收紧（勿 `*`，按 `server.cors_origins` 放行）— **架构** `P0`
@@ -372,10 +374,14 @@ cd gateway && cargo run
 - [ ] Markdown javascript: 链接绕过风险 — **架构**
 - [ ] 同步数据源 Token 明文返回 — **架构**
 
-**下一轮产品 P0（硬门槛过后再开）：**
-- [ ] 态势中心 `/overview` 接真实 `/api/overview`（当前 mockOverview）— **产品**
-- [ ] 全局搜索 MVP：`GET /api/search` 聚合用户/资产/告警/知识 — **产品**
+**下一轮产品 P0（硬门槛过后再开；执行顺序以 [product-next.md](./docs/product-next.md) 为准）：**
+- [ ] 演示面收口：运维工具真实 URL、监控纳管降噪 — **产品**（Now）
+- [ ] CMDB 服务模型 + 云抽象字段 — **产品**（Next）
+- [ ] 态势中心 `/overview` 接真实 `/api/overview`（当前 mockOverview）— **产品**（Later）
+- [ ] 全局搜索 MVP：`GET /api/search` 聚合用户/资产/告警/知识 — **产品**（Later）
 - [ ] 密码过期 API 级拦截（路由守卫不完整）— **产品**
+- [ ] 首个云同步适配器 + 对账 — **产品**（Later）
+- [ ] 运维工具 SSO — **产品**（见 [ops-tools-sso-plan.md](./docs/ops-tools-sso-plan.md)）
 
 ### 🟢 延后 P2（技术债务，按需排期）
 
@@ -398,8 +404,11 @@ cd gateway && cargo run
 
 ### ❓ Open Questions（待用户拍板）
 
+- [x] 容器/库/配置/费用本期是否交付？→ **否**，隐藏或标规划中（2026-09-30）
+- [x] 云资源模型是否按厂商各建一套？→ **否**，跨云抽象 + 扩展字段（2026-09-30）
+- [x] 是否自建全量采集引擎？→ **否**，同步/导入/工单补录（2026-09-30）
 - [ ] 态势中心要哪些真实指标？
-- [ ] 容器/库/配置/费用本期是否交付？
+- [ ] 首个云同步适配器先做华为云还是紫光云？
 - [ ] 短信网关走移动还是联通？是否要钉钉/飞书？
 - [ ] 工作流要不要可视化编辑器？
 - [ ] 移动端优先级如何？
