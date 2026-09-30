@@ -66,7 +66,7 @@ export function listInstances(): Promise<MonitorInstance[]> {
 
 export function listHosts(code: string, search?: string): Promise<MonitorHost[]> {
   return request.get(`/monitor/instances/${code}/hosts`, {
-    params: { limit: 100, search: search || undefined },
+    params: { search: search || undefined },
   })
 }
 
