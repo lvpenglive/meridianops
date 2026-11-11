@@ -150,6 +150,9 @@ struct ExecuteRequest {
     /// 选择的资产 ID 数组（CI 实例 UUID 字符串）；空数组 => 走作业定义的 target_asset_ids
     #[serde(default)]
     asset_ids: Option<Vec<String>>,
+    /// 仅允许大写环境变量名。值会写成 export，供剧本读取。
+    #[serde(default)]
+    env: std::collections::HashMap<String, String>,
 }
 
 // ===== 作业定义 CRUD =====
@@ -478,7 +481,10 @@ async fn execute_job(
 
     // 4. 创建 job_run
     let script_type = def["scriptType"].as_str().unwrap_or("shell").to_string();
-    let script_content = def["scriptContent"].as_str().unwrap_or("").to_string();
+    let mut script_content = def["scriptContent"].as_str().unwrap_or("").to_string();
+    if !req.env.is_empty() {
+        script_content = format!("{}\n{}", shell_exports(&req.env)?, script_content);
+    }
     let job_name = def["name"].as_str().unwrap_or("Unknown Job").to_string();
 
     let run_res = sqlx::query(
@@ -1029,6 +1035,24 @@ async fn load_def(pool: &MySqlPool, id: i64) -> Result<serde_json::Value, AppErr
         "createdAt": format_dt(&row, "created_at"),
         "updatedAt": format_dt(&row, "updated_at"),
     }))
+}
+
+fn shell_exports(env: &std::collections::HashMap<String, String>) -> Result<String, AppError> {
+    let mut lines = Vec::new();
+    for (key, value) in env {
+        let key_ok = !key.is_empty()
+            && key.len() <= 64
+            && key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        if !key_ok {
+            return Err(AppError::bad("环境变量名无效"));
+        }
+        if value.contains('\n') || value.contains('\r') || value.contains('\0') {
+            return Err(AppError::bad("环境变量值无效"));
+        }
+        let escaped = value.replace('\'', "'\\''");
+        lines.push(format!("export {key}='{escaped}'"));
+    }
+    Ok(lines.join("\n"))
 }
 
 fn validate_script_content(s: &str) -> Result<(), AppError> {

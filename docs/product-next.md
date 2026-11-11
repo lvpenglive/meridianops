@@ -16,7 +16,8 @@
 相关文档：
 
 - [运维工具 SSO 计划](./ops-tools-sso-plan.md)
-- [Zabbix 纳管设计](./zabbix-control-design.md)（能力保留；产品优先级低于控制面主线）
+- [Zabbix 纳管设计](./zabbix-control-design.md)（已实现的只读纳管和 Agent 启停）
+- [Zabbix 控制台方案](./zabbix-console-plan.md)（2026-11-11：改方案、安装 Agent、模板设计器。仍不自建采集，不建第二套告警中心）
 
 ---
 

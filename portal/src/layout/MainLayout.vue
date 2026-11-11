@@ -378,6 +378,9 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
       { path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
       { path: '/monitor', title: '监控纳管', icon: 'Monitor', permission: 'monitor:read' },
+      { path: '/monitor/scheme', title: '改方案', icon: 'Edit', permission: 'monitor:read' },
+      { path: '/monitor/install', title: '安装 Agent', icon: 'Download', permission: 'monitor:read' },
+      { path: '/monitor/templates', title: '模板库', icon: 'Files', permission: 'monitor:read' },
       { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
     ]
   },

@@ -127,6 +127,30 @@ const routes = [
         meta: { title: '监控纳管', icon: 'Monitor', permission: 'monitor:read' }
       },
       {
+        path: 'monitor/scheme',
+        name: 'MonitorScheme',
+        component: () => import('../views/monitor/SchemePage.vue'),
+        meta: { title: '改方案', icon: 'Edit', permission: 'monitor:read' }
+      },
+      {
+        path: 'monitor/install',
+        name: 'MonitorInstall',
+        component: () => import('../views/monitor/InstallPage.vue'),
+        meta: { title: '安装 Agent', icon: 'Download', permission: 'monitor:read' }
+      },
+      {
+        path: 'monitor/templates',
+        name: 'MonitorTemplates',
+        component: () => import('../views/monitor/TemplatesPage.vue'),
+        meta: { title: '模板库', icon: 'Files', permission: 'monitor:read' }
+      },
+      {
+        path: 'monitor/templates/:id',
+        name: 'MonitorTemplateDesigner',
+        component: () => import('../views/monitor/TemplateDesigner.vue'),
+        meta: { title: '模板设计', icon: 'EditPen', permission: 'monitor:read' }
+      },
+      {
         path: 'config',
         name: 'Config',
         component: () => import('../views/config/ConfigPage.vue'),

@@ -1,5 +1,7 @@
 # Zabbix 纳管设计实现方案
 
+> 后续的改方案、安装 Agent、模板设计器见 [zabbix-console-plan.md](./zabbix-console-plan.md)。下文「不重做模板编辑器」只约束已经做完的纳管，不约束那份新方案。
+
 值班人员只登录 MeridianOps 完成资源监控和 Agent 批量启停、升级。Zabbix 继续负责采集、触发器和历史存储。不重做报表、拨测、模板编辑器。
 
 ## 1. 目标

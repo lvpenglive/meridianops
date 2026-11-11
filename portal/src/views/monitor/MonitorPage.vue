@@ -97,6 +97,9 @@
           <el-option label="未关联 CMDB" value="unlinked" />
           <el-option label="已关联 CMDB" value="linked" />
         </el-select>
+        <el-select v-model="groupId" placeholder="主机组" clearable filterable style="width: 180px" @change="loadHosts">
+          <el-option v-for="item in hostGroups" :key="item.groupId" :label="item.name" :value="item.groupId" />
+        </el-select>
         <el-button type="primary" @click="loadHosts">查询</el-button>
         <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="runAction('restart')">
           重启 Agent
@@ -125,6 +128,9 @@
         <el-table-column prop="displayName" label="名称" min-width="160" />
         <el-table-column prop="hostname" label="主机名" min-width="140" />
         <el-table-column prop="ip" label="IP" width="150" />
+        <el-table-column label="主机组" min-width="160">
+          <template #default="{ row }">{{ (row.groups || []).map((g: { name: string }) => g.name).join('、') || '-' }}</template>
+        </el-table-column>
         <el-table-column label="Agent" width="100">
           <template #default="{ row }">
             <el-tag v-if="row.agentAvailable === true" type="success" size="small">通</el-tag>
@@ -157,6 +163,11 @@
             <el-table-column label="级别" width="90">
               <template #default="{ row }">{{ severityLabel(row.severity) }}</template>
             </el-table-column>
+            <el-table-column label="操作" width="80">
+              <template #default="{ row }">
+                <el-button v-permission="'monitor:operate'" link type="primary" @click="openAck(row)">确认</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
       </el-col>
@@ -174,6 +185,26 @@
         <el-table-column prop="error" label="说明" min-width="200" />
       </el-table>
     </el-card>
+
+    <el-dialog v-model="ackVisible" title="确认问题" width="420px">
+      <el-form label-width="80px">
+        <el-form-item label="说明">
+          <el-input v-model="ackMessage" type="textarea" :rows="3" />
+        </el-form-item>
+        <el-form-item label="级别">
+          <el-select v-model="ackSeverity" clearable placeholder="不修改" style="width: 100%">
+            <el-option v-for="(label, index) in severityLabels" :key="label" :label="label" :value="index" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="关闭">
+          <el-switch v-model="ackClose" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="ackVisible = false">取消</el-button>
+        <el-button type="primary" :loading="ackSubmitting" @click="submitAck">提交</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="upgradeVisible" title="升级 Agent" width="420px">
       <el-form label-width="90px">
@@ -195,17 +226,21 @@ import { Monitor, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import {
+  ackMonitorEvent,
   createTask,
   getGovernance,
   getTask,
   hostMetrics,
   hostProblems,
+  hostsInGroup,
+  listHostGroups,
   listHosts,
   listInstances,
   syncHosts,
   type GovernanceData,
   type MetricSeries,
   type MonitorAction,
+  type MonitorGroupRef,
   type MonitorHost,
   type MonitorInstance,
   type MonitorProblem,
@@ -216,18 +251,21 @@ const instances = ref<MonitorInstance[]>([])
 const instanceCode = ref('')
 const search = ref('')
 const hostFilter = ref('')
+const groupId = ref('')
+const hostGroups = ref<MonitorGroupRef[]>([])
 const hosts = ref<MonitorHost[]>([])
 const filteredHosts = computed(() => {
+  let rows = hosts.value
   if (hostFilter.value === 'offline') {
-    return hosts.value.filter((h) => h.agentAvailable === false)
+    return rows.filter((h) => h.agentAvailable === false)
   }
   if (hostFilter.value === 'unlinked') {
-    return hosts.value.filter((h) => !h.cmdbLinked)
+    return rows.filter((h) => !h.cmdbLinked)
   }
   if (hostFilter.value === 'linked') {
-    return hosts.value.filter((h) => !!h.cmdbLinked)
+    return rows.filter((h) => !!h.cmdbLinked)
   }
-  return hosts.value
+  return rows
 })
 const loading = ref(false)
 const syncing = ref(false)
@@ -243,6 +281,12 @@ const task = ref<MonitorTask | null>(null)
 const taskSubmitting = ref(false)
 const upgradeVisible = ref(false)
 const targetVersion = ref('')
+const ackVisible = ref(false)
+const ackMessage = ref('')
+const ackSeverity = ref<number | undefined>()
+const ackClose = ref(false)
+const ackSubmitting = ref(false)
+const ackEvent = ref<MonitorProblem | null>(null)
 let pollTimer: number | undefined
 
 const severityLabels = ['未分类', '信息', '警告', '一般', '严重', '灾难']
@@ -255,7 +299,7 @@ onMounted(async () => {
     instances.value = await listInstances()
     instanceCode.value = instances.value[0]?.code || ''
     if (instanceCode.value) {
-      await Promise.all([loadHosts(), loadGovernance()])
+      await Promise.all([loadHosts(), loadGovernance(), loadHostGroups()])
     }
   } catch {
     instances.value = []
@@ -272,7 +316,17 @@ async function loadHosts() {
   if (!instanceCode.value) return
   loading.value = true
   try {
-    hosts.value = await listHosts(instanceCode.value, search.value)
+    if (groupId.value) {
+      const rows = await hostsInGroup(instanceCode.value, groupId.value)
+      const keyword = search.value.trim().toLowerCase()
+      hosts.value = keyword
+        ? rows.filter((row) =>
+            `${row.displayName} ${row.hostname} ${row.ip}`.toLowerCase().includes(keyword),
+          )
+        : rows
+    } else {
+      hosts.value = await listHosts(instanceCode.value, search.value)
+    }
     selected.value = null
     selectedIds.value = []
     problems.value = []
@@ -297,7 +351,42 @@ async function loadGovernance() {
 }
 
 async function onInstanceChange() {
-  await Promise.all([loadHosts(), loadGovernance()])
+  groupId.value = ''
+  await Promise.all([loadHosts(), loadGovernance(), loadHostGroups()])
+}
+
+async function loadHostGroups() {
+  if (!instanceCode.value) return
+  try {
+    hostGroups.value = await listHostGroups(instanceCode.value)
+  } catch {
+    hostGroups.value = []
+  }
+}
+
+function openAck(row: MonitorProblem) {
+  ackEvent.value = row
+  ackMessage.value = ''
+  ackSeverity.value = undefined
+  ackClose.value = false
+  ackVisible.value = true
+}
+
+async function submitAck() {
+  if (!ackEvent.value || !instanceCode.value || !selected.value) return
+  ackSubmitting.value = true
+  try {
+    await ackMonitorEvent(instanceCode.value, ackEvent.value.eventId, {
+      message: ackMessage.value,
+      severity: ackSeverity.value,
+      close: ackClose.value,
+    })
+    ElMessage.success('已提交确认')
+    ackVisible.value = false
+    problems.value = await hostProblems(instanceCode.value, selected.value.hostId)
+  } finally {
+    ackSubmitting.value = false
+  }
 }
 
 async function doSync() {

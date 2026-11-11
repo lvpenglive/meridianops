@@ -32,6 +32,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/monitor/instances/:code/governance", get(governance))
         .route("/api/monitor/tasks", post(create_task))
         .route("/api/monitor/tasks/:id", get(get_task))
+        .merge(crate::monitor_scheme::routes())
+        .merge(crate::monitor_designer::routes())
 }
 
 async fn instances(
@@ -109,16 +111,40 @@ async fn governance(
 struct CreateTaskBody {
     instance_code: String,
     action: String,
+    #[serde(default)]
     host_ids: Vec<String>,
     target_version: Option<String>,
     concurrency: Option<i32>,
+    #[serde(default)]
+    ci_ids: Vec<String>,
+    #[serde(default)]
+    group_ids: Vec<String>,
+    #[serde(default)]
+    template_ids: Vec<String>,
+    server: Option<String>,
+    server_active: Option<String>,
 }
 
 async fn create_task(
     State(state): State<Arc<AppState>>,
     auth: auth::AuthUser,
     Json(body): Json<CreateTaskBody>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<axum::response::Response, AppError> {
+    if body.action == "install" {
+        let response = crate::monitor_scheme::start_install(
+            &state,
+            &auth,
+            &body.instance_code,
+            &body.ci_ids,
+            &body.group_ids,
+            &body.template_ids,
+            body.server.as_deref().unwrap_or(""),
+            body.server_active.as_deref().unwrap_or(""),
+            body.concurrency.unwrap_or(10),
+        )
+        .await?;
+        return Ok(response.into_response());
+    }
     match body.action.as_str() {
         "start" | "stop" | "restart" => {
             auth::require_permission(&auth, "monitor:operate")?;
@@ -210,7 +236,7 @@ async fn create_task(
         "success",
     )
     .await;
-    Ok(resp)
+    Ok(resp.into_response())
 }
 
 async fn get_task(
@@ -226,6 +252,70 @@ async fn permit_read(state: &AppState, auth: &auth::AuthUser) -> Result<(), AppE
     auth::require_permission(auth, "monitor:read")?;
     license_routes::require_active_license(&state.db).await?;
     Ok(())
+}
+
+pub(crate) async fn ctl_request(
+    state: &AppState,
+    method: reqwest::Method,
+    path: &str,
+    query: Option<&str>,
+    body: Option<&Value>,
+) -> Result<Value, AppError> {
+    ctl_request_inner(state, method, path, query, body, false).await
+}
+
+pub(crate) async fn ctl_request_approved(
+    state: &AppState,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<Value, AppError> {
+    ctl_request_inner(state, method, path, None, body, true).await
+}
+
+async fn ctl_request_inner(
+    state: &AppState,
+    method: reqwest::Method,
+    path: &str,
+    query: Option<&str>,
+    body: Option<&Value>,
+    approved: bool,
+) -> Result<Value, AppError> {
+    let (base, token) = ctl_endpoint(state)?;
+    let mut url = format!("{base}{path}");
+    if let Some(q) = query.filter(|s| !s.is_empty()) {
+        url.push('?');
+        url.push_str(q);
+    }
+    let mut request = state
+        .client
+        .request(method, url)
+        .header("Authorization", format!("Bearer {token}"));
+    if approved {
+        request = request.header("X-Monitor-Approved", "1");
+    }
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("调用 zabbix-ctl 失败: {e}")))?;
+    let status = response.status();
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|e| AppError::internal(format!("解析 zabbix-ctl 响应失败: {e}")))?;
+    if !status.is_success() {
+        let message = payload["message"].as_str().unwrap_or("zabbix-ctl 调用失败");
+        return Err(match status.as_u16() {
+            400 => AppError::bad(message),
+            401 => AppError::forbidden(message),
+            404 => AppError::not_found(message),
+            _ => AppError::internal(message),
+        });
+    }
+    Ok(payload)
 }
 
 async fn proxy_get(
