@@ -169,6 +169,17 @@ function openTool(tool: OpsTool) {
     ElMessage.warning('该工具已停用')
     return
   }
+  let host = ''
+  try {
+    host = new URL(tool.url).hostname.toLowerCase()
+  } catch {
+    ElMessage.warning('地址无效，请管理员改为目标系统的真实 URL')
+    return
+  }
+  if (host === 'example.com' || host.endsWith('.example.com') || host === 'example.org' || host.endsWith('.example.org') || host === 'example.net' || host.endsWith('.example.net')) {
+    ElMessage.warning('这是占位地址，请管理员改成目标系统的真实 URL')
+    return
+  }
   window.open(tool.url, '_blank', 'noopener,noreferrer')
 }
 

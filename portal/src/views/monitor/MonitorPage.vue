@@ -13,71 +13,80 @@
       </div>
     </div>
 
-    <el-row v-if="governance" :gutter="16" class="gov-row">
-      <el-col :span="8">
-        <el-card shadow="never">
-          <template #header>采集队列</template>
-          <div v-if="governance.queue.available" class="gov-stat">
-            <span class="gov-num" :class="{ danger: governance.queue.backedUp }">{{ governance.queue.count }}</span>
-            <span class="gov-hint">阈值 {{ governance.queue.warn }}{{ governance.queue.backedUp ? ' · 积压' : '' }}</span>
-          </div>
-          <el-empty v-else :description="governance.queue.message || '队列接口不可用'" :image-size="48" />
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="never">
-          <template #header>Proxy 离线</template>
-          <div class="gov-stat">
-            <span class="gov-num" :class="{ danger: governance.offlineProxyCount > 0 }">{{ governance.offlineProxyCount }}</span>
-            <span class="gov-hint">共 {{ governance.proxies.length }} 个 Proxy</span>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="never">
-          <template #header>模板偏离</template>
-          <div class="gov-stat">
-            <span class="gov-num" :class="{ danger: governance.driftCount > 0 }">{{ governance.driftCount }}</span>
-            <span class="gov-hint">
-              {{ governance.standardTemplates.length ? '相对标准模板' : '未配置标准模板，仅供查看' }}
-            </span>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-row v-if="governance" :gutter="16" class="gov-row">
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>Proxy 状态</template>
-          <el-table :data="governance.proxies" size="small" max-height="220">
-            <el-table-column prop="name" label="名称" min-width="140" />
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.online ? 'success' : 'danger'" size="small">{{ row.online ? '在线' : '离线' }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="未上报(秒)" width="110">
-              <template #default="{ row }">{{ row.ageSecs ?? '-' }}</template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>模板偏离主机</template>
-          <el-table :data="governance.templateDrift" size="small" max-height="220">
-            <el-table-column prop="hostname" label="主机" min-width="120" />
-            <el-table-column label="缺少" min-width="160">
-              <template #default="{ row }">{{ (row.missing || []).join(', ') || '-' }}</template>
-            </el-table-column>
-            <el-table-column label="已挂模板" min-width="160">
-              <template #default="{ row }">{{ (row.templates || []).join(', ') || '-' }}</template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+    <el-collapse v-if="governance" class="gov-fold">
+      <el-collapse-item name="health">
+        <template #title>
+          <span>平台健康</span>
+          <span class="gov-summary">
+            队列 {{ governance.queue.available ? governance.queue.count : '不可用' }}
+            · Proxy 离线 {{ governance.offlineProxyCount }}
+            <template v-if="governance.standardTemplates.length"> · 模板偏离 {{ governance.driftCount }}</template>
+          </span>
+        </template>
+        <el-row :gutter="16" class="gov-row">
+          <el-col :span="governance.standardTemplates.length ? 8 : 12">
+            <el-card shadow="never">
+              <template #header>采集队列</template>
+              <div v-if="governance.queue.available" class="gov-stat">
+                <span class="gov-num" :class="{ danger: governance.queue.backedUp }">{{ governance.queue.count }}</span>
+                <span class="gov-hint">阈值 {{ governance.queue.warn }}{{ governance.queue.backedUp ? ' · 积压' : '' }}</span>
+              </div>
+              <el-empty v-else :description="governance.queue.message || '队列接口不可用'" :image-size="48" />
+            </el-card>
+          </el-col>
+          <el-col :span="governance.standardTemplates.length ? 8 : 12">
+            <el-card shadow="never">
+              <template #header>Proxy 离线</template>
+              <div class="gov-stat">
+                <span class="gov-num" :class="{ danger: governance.offlineProxyCount > 0 }">{{ governance.offlineProxyCount }}</span>
+                <span class="gov-hint">共 {{ governance.proxies.length }} 个 Proxy</span>
+              </div>
+            </el-card>
+          </el-col>
+          <el-col v-if="governance.standardTemplates.length" :span="8">
+            <el-card shadow="never">
+              <template #header>模板偏离</template>
+              <div class="gov-stat">
+                <span class="gov-num" :class="{ danger: governance.driftCount > 0 }">{{ governance.driftCount }}</span>
+                <span class="gov-hint">相对标准模板</span>
+              </div>
+            </el-card>
+          </el-col>
+        </el-row>
+        <el-row :gutter="16" class="gov-row">
+          <el-col :span="governance.standardTemplates.length ? 12 : 24">
+            <el-card shadow="never">
+              <template #header>Proxy 状态</template>
+              <el-table :data="governance.proxies" size="small" max-height="220">
+                <el-table-column prop="name" label="名称" min-width="140" />
+                <el-table-column label="状态" width="90">
+                  <template #default="{ row }">
+                    <el-tag :type="row.online ? 'success' : 'danger'" size="small">{{ row.online ? '在线' : '离线' }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="未上报(秒)" width="110">
+                  <template #default="{ row }">{{ row.ageSecs ?? '-' }}</template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+          </el-col>
+          <el-col v-if="governance.standardTemplates.length" :span="12">
+            <el-card shadow="never">
+              <template #header>模板偏离主机</template>
+              <el-table :data="governance.templateDrift" size="small" max-height="220">
+                <el-table-column prop="hostname" label="主机" min-width="120" />
+                <el-table-column label="缺少" min-width="160">
+                  <template #default="{ row }">{{ (row.missing || []).join(', ') || '-' }}</template>
+                </el-table-column>
+                <el-table-column label="已挂模板" min-width="160">
+                  <template #default="{ row }">{{ (row.templates || []).join(', ') || '-' }}</template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+          </el-col>
+        </el-row>
+      </el-collapse-item>
+    </el-collapse>
 
     <el-card shadow="never">
       <div class="filter-bar">
@@ -553,6 +562,16 @@ function formatClock(clock: string) {
 }
 .detail {
   margin-top: 16px;
+}
+.gov-fold {
+  margin-bottom: 16px;
+  border: none;
+}
+.gov-summary {
+  margin-left: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  font-weight: 400;
 }
 .gov-row {
   margin-bottom: 16px;

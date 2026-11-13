@@ -85,7 +85,32 @@ fn validate_body(body: &ToolBody) -> Result<(), AppError> {
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
         return Err(AppError::bad("URL 须以 http:// 或 https:// 开头"));
     }
+    if is_placeholder_url(&lower) {
+        return Err(AppError::bad("请填写目标系统的真实地址，不能使用 example.com 等占位域名"));
+    }
     Ok(())
+}
+
+fn is_placeholder_url(url: &str) -> bool {
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or("")
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .split('@')
+        .last()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    host == "example.com"
+        || host.ends_with(".example.com")
+        || host == "example.org"
+        || host.ends_with(".example.org")
+        || host == "example.net"
+        || host.ends_with(".example.net")
 }
 
 /// 列表：普通用户只看启用项；有 manage 权限可见全部。

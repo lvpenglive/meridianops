@@ -34,7 +34,7 @@
                 :index="c.path"
               >
                 <el-icon><component :is="c.icon" /></el-icon>
-                <template #title>{{ c.title }}</template>
+                <template #title>{{ c.planned ? `${c.title}（规划中）` : c.title }}</template>
               </el-menu-item>
             </el-sub-menu>
           </template>
@@ -337,7 +337,7 @@ function formatNotifTime(s: string): string {
 }
 
 // 菜单分组：态势中心独立一级，其余按运维场景分 4 组（资产/监控/运维/后台）
-type MenuItem = { path: string; title: string; icon: string; permission?: string }
+type MenuItem = { path: string; title: string; icon: string; permission?: string; planned?: boolean }
 type MenuGroup =
   | ({ type: 'item' } & MenuItem)
   | { type: 'sub'; title: string; icon: string; children: MenuItem[] }
@@ -353,7 +353,7 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/overview', title: '态势中心', icon: 'Monitor' },
       { path: '/report', title: '报表中心', icon: 'TrendCharts', permission: 'audit:read' },
       { path: '/audit', title: '审计中心', icon: 'Notebook', permission: 'audit:read' },
-      { path: '/cost', title: '费用中心', icon: 'Money' },
+      { path: '/cost', title: '费用中心', icon: 'Money', planned: true },
     ]
   },
   {
@@ -363,9 +363,9 @@ const allMenuGroups: MenuGroup[] = [
       { path: '/cmdb/relation-types', title: '关系类型', icon: 'Link', permission: 'asset:read' },
       { path: '/topology', title: '拓扑视图', icon: 'Share', permission: 'asset:read' },
       { path: '/sync-sources', title: '数据源同步', icon: 'Promotion', permission: 'asset:read' },
-      { path: '/containers', title: '容器管理', icon: 'Box' },
-      { path: '/database', title: 'DB数据库', icon: 'Coin' },
-      { path: '/config', title: '配置中心', icon: 'Setting' },
+      { path: '/containers', title: '容器管理', icon: 'Box', planned: true },
+      { path: '/database', title: 'DB数据库', icon: 'Coin', planned: true },
+      { path: '/config', title: '配置中心', icon: 'Setting', planned: true },
     ]
   },
   {

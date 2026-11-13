@@ -1,7 +1,7 @@
 # Zabbix 控制台方案（改方案、装 Agent、模板设计器）
 
 > 日期：2026-11-11  
-> 状态：待开发。已实现的只读纳管和 Agent 启停升级仍以 [zabbix-control-design.md](./zabbix-control-design.md) 为准。  
+> 状态：四期已落地（2026-11-11）。只读纳管和 Agent 启停升级仍以 [zabbix-control-design.md](./zabbix-control-design.md) 为准。  
 > 本文覆盖其后的目标：值班和监控管理员只登录 MeridianOps，即可改监控方案、安装 Agent、设计模板。
 
 Zabbix Server / Proxy / Agent 继续负责采集、触发器计算和历史存储。MeridianOps 不保存第二份模板定义，只通过现有链路读写 Zabbix API。全行告警仍由 Eventide 汇聚，本方案不建第二套告警中心。
