@@ -10,6 +10,16 @@ export interface MonitorInstance {
 export interface MonitorGroupRef {
   groupId: string
   name: string
+  hostCount?: number
+}
+
+export interface HostRoster {
+  total: number
+  matched: number
+  page: number
+  pageSize: number
+  groups: MonitorGroupRef[]
+  items: MonitorHost[]
 }
 
 export interface MonitorTemplateRef {
@@ -76,9 +86,26 @@ export function listInstances(): Promise<MonitorInstance[]> {
   return request.get('/monitor/instances')
 }
 
-export function listHosts(code: string, search?: string): Promise<MonitorHost[]> {
+export function listHosts(
+  code: string,
+  params: {
+    search?: string
+    page?: number
+    pageSize?: number
+    groupId?: string
+    agent?: 'online' | 'offline' | 'unknown'
+    cmdb?: 'linked' | 'unlinked'
+  } = {},
+): Promise<HostRoster> {
   return request.get(`/monitor/instances/${code}/hosts`, {
-    params: { search: search || undefined },
+    params: {
+      search: params.search || undefined,
+      page: params.page,
+      pageSize: params.pageSize,
+      groupId: params.groupId || undefined,
+      agent: params.agent,
+      cmdb: params.cmdb,
+    },
   })
 }
 
@@ -88,6 +115,46 @@ export function hostProblems(code: string, hostId: string): Promise<MonitorProbl
 
 export function hostMetrics(code: string, hostId: string, hours = 24): Promise<MetricSeries[]> {
   return request.get(`/monitor/instances/${code}/hosts/${hostId}/metrics`, { params: { hours } })
+}
+
+export interface HostItem {
+  itemId: string
+  name: string
+  key: string
+  lastValue: string
+  lastClock: string
+  units: string
+  status: string
+  state: string
+  valueType: string
+  inherited: boolean
+  templateId?: string
+  templateName?: string
+  error: string
+}
+
+export interface HostTrigger {
+  triggerId: string
+  name: string
+  severity: string
+  value: string
+  status: string
+  state: string
+  lastChange: string
+  inherited: boolean
+  templateId?: string
+  templateName?: string
+  error: string
+}
+
+export function hostItems(code: string, hostId: string, search?: string): Promise<HostItem[]> {
+  return request.get(`/monitor/instances/${code}/hosts/${hostId}/items`, {
+    params: { search: search || undefined },
+  })
+}
+
+export function hostTriggers(code: string, hostId: string): Promise<HostTrigger[]> {
+  return request.get(`/monitor/instances/${code}/hosts/${hostId}/triggers`)
 }
 
 export function syncHosts(code: string): Promise<{ synced: number }> {

@@ -404,11 +404,13 @@ async fn ack_event(
     if host_ids.is_empty() {
         return Err(AppError::bad("事件没有关联主机"));
     }
-    let allowed = allowed_host_ids(&state, &auth, &code).await?;
-    for id in &host_ids {
-        let id = id.as_str().unwrap_or("");
-        if !allowed.contains(id) {
-            return Err(AppError::forbidden("事件关联了权限范围外的主机"));
+    if auth.0.role != Role::Admin {
+        let allowed = allowed_host_ids(&state, &auth, &code).await?;
+        for id in &host_ids {
+            let id = id.as_str().unwrap_or("");
+            if !allowed.contains(id) {
+                return Err(AppError::forbidden("事件关联了权限范围外的主机"));
+            }
         }
     }
     let payload = json!({
@@ -504,6 +506,7 @@ async fn ensure_ci_visible(state: &AppState, auth: &auth::AuthUser, ci: &CiRow) 
     Err(AppError::forbidden("配置项不在可操作范围内"))
 }
 
+/// 改监控方案、读方案详情用。管理员可操作任意主机；其他人只能操作已关联且归自己管的配置项。
 async fn require_host(
     state: &AppState,
     auth: &auth::AuthUser,
@@ -512,11 +515,28 @@ async fn require_host(
 ) -> Result<(), AppError> {
     require_code(code)?;
     require_zbx_id(host_id)?;
+    if auth.0.role == Role::Admin {
+        return Ok(());
+    }
     let allowed = allowed_host_ids(state, auth, code).await?;
-    if !allowed.contains(host_id) {
+    if allowed.contains(host_id) {
+        return Ok(());
+    }
+    let linked: Option<String> = sqlx::query_scalar(
+        "SELECT ci_id FROM zbx_host_links \
+         WHERE instance_code = ? AND host_id = ? \
+           AND ci_id IS NOT NULL AND ci_id <> '' \
+         LIMIT 1",
+    )
+    .bind(code)
+    .bind(host_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::internal(format!("查询主机对照失败: {e}")))?;
+    if linked.is_some() {
         return Err(AppError::forbidden("主机不在可操作的配置项范围内"));
     }
-    Ok(())
+    Err(AppError::forbidden("主机未关联配置项，不能修改监控方案"))
 }
 
 async fn allowed_host_ids(

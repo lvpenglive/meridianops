@@ -28,6 +28,14 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/monitor/instances/:code/hosts/:host_id/metrics",
             get(metrics),
         )
+        .route(
+            "/api/monitor/instances/:code/hosts/:host_id/items",
+            get(host_items),
+        )
+        .route(
+            "/api/monitor/instances/:code/hosts/:host_id/triggers",
+            get(host_triggers),
+        )
         .route("/api/monitor/instances/:code/sync", post(sync_hosts))
         .route("/api/monitor/instances/:code/governance", get(governance))
         .route("/api/monitor/tasks", post(create_task))
@@ -84,6 +92,35 @@ async fn metrics(
         &state,
         &format!("/api/instances/{code}/hosts/{host_id}/metrics"),
         query.as_deref(),
+    )
+    .await
+}
+
+async fn host_items(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path((code, host_id)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
+) -> Result<impl IntoResponse, AppError> {
+    permit_read(&state, &auth).await?;
+    proxy_get(
+        &state,
+        &format!("/api/instances/{code}/hosts/{host_id}/items"),
+        query.as_deref(),
+    )
+    .await
+}
+
+async fn host_triggers(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path((code, host_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    permit_read(&state, &auth).await?;
+    proxy_get(
+        &state,
+        &format!("/api/instances/{code}/hosts/{host_id}/triggers"),
+        None,
     )
     .await
 }

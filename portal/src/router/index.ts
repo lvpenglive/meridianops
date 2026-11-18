@@ -128,9 +128,7 @@ const routes = [
       },
       {
         path: 'monitor/scheme',
-        name: 'MonitorScheme',
-        component: () => import('../views/monitor/SchemePage.vue'),
-        meta: { title: '改方案', icon: 'Edit', permission: 'monitor:read' }
+        redirect: '/monitor'
       },
       {
         path: 'monitor/install',
