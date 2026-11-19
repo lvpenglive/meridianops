@@ -71,6 +71,14 @@ instance.interceptors.request.use((config) => {
   if (token) {
     config.headers['Authorization'] = `Bearer ${token}`
   }
+  // FormData 必须由浏览器带 boundary；删掉手写/默认 Content-Type
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    if (typeof config.headers?.delete === 'function') {
+      config.headers.delete('Content-Type')
+    } else if (config.headers) {
+      delete (config.headers as Record<string, unknown>)['Content-Type']
+    }
+  }
   return config
 })
 

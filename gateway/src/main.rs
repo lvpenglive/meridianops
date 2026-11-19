@@ -21,6 +21,7 @@ mod license_routes;
 mod job_routes;
 mod log_alert_scheduler;
 mod log_routes;
+mod monitor_agent_pkg;
 mod monitor_designer;
 mod monitor_routes;
 mod monitor_scheme;

@@ -54,6 +54,18 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/api/monitor/instances/:code/hosts", post(register_host))
         .route(
+            "/api/monitor/instances/:code/hosts/massupdate",
+            post(mass_update_hosts),
+        )
+        .route(
+            "/api/monitor/instances/:code/hosts/delete",
+            post(delete_hosts),
+        )
+        .route(
+            "/api/monitor/instances/:code/hosts/:host_id",
+            get(get_host_detail).put(update_host),
+        )
+        .route(
             "/api/monitor/instances/:code/events/:event_id/ack",
             post(ack_event),
         )
@@ -303,69 +315,280 @@ async fn save_macros(
     Ok(Json(result))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RegisterBody {
-    ci_id: String,
-    group_ids: Vec<String>,
-    #[serde(default)]
-    template_ids: Vec<String>,
-}
-
 async fn register_host(
     State(state): State<Arc<AppState>>,
     auth: auth::AuthUser,
     Path(code): Path<String>,
-    Json(body): Json<RegisterBody>,
+    Json(mut body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     permit_operate(&state, &auth).await?;
     require_code(&code)?;
-    let ci = load_ci(&state, &body.ci_id).await?;
-    ensure_ci_visible(&state, &auth, &ci).await?;
-    let ip = attr_str(&ci.attributes, &["ip", "mgmt_ip"]);
-    let hostname = attr_str(&ci.attributes, &["hostname"]).unwrap_or_else(|| ci.name.clone());
-    let ip = ip.ok_or_else(|| AppError::bad("配置项没有管理 IP"))?;
-    if hostname.trim().is_empty() {
-        return Err(AppError::bad("配置项没有主机名"));
+
+    let ci_id = body["ciId"]
+        .as_str()
+        .or_else(|| body["ci_id"].as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let mut hostname = body["hostname"].as_str().unwrap_or("").trim().to_string();
+    let mut display_name = body["displayName"]
+        .as_str()
+        .or_else(|| body["display_name"].as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let has_interfaces = body["interfaces"]
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    let has_ip = !body["ip"].as_str().unwrap_or("").trim().is_empty();
+
+    // 兼容旧「登记配置项」：仅传 ciId + 组/模板时从 CI 推导主机名/IP
+    let mut linked_ci_id: Option<String> = None;
+    if !ci_id.is_empty() {
+        let ci = load_ci(&state, &ci_id).await?;
+        ensure_ci_visible(&state, &auth, &ci).await?;
+        linked_ci_id = Some(ci.id.clone());
+        if hostname.is_empty() {
+            hostname = attr_str(&ci.attributes, &["hostname"]).unwrap_or_else(|| ci.name.clone());
+            body["hostname"] = json!(hostname);
+        }
+        if display_name.is_empty() {
+            display_name = ci.name.clone();
+            body["displayName"] = json!(display_name);
+        }
+        if !has_interfaces && !has_ip {
+            let ip = attr_str(&ci.attributes, &["ip", "mgmt_ip"])
+                .ok_or_else(|| AppError::bad("配置项没有管理 IP"))?;
+            body["ip"] = json!(ip);
+        }
     }
-    let payload = json!({
-        "hostname": hostname,
-        "displayName": ci.name,
-        "ip": ip,
-        "groupIds": body.group_ids,
-        "templateIds": body.template_ids,
-    });
+
+    hostname = body["hostname"].as_str().unwrap_or("").trim().to_string();
+    if hostname.is_empty() {
+        return Err(AppError::bad("主机名不能为空"));
+    }
+    let group_ids = body["groupIds"]
+        .as_array()
+        .or_else(|| body["group_ids"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    if group_ids.is_empty() {
+        return Err(AppError::bad("请选择主机组"));
+    }
+
     let result = ctl_request(
         &state,
         reqwest::Method::POST,
         &format!("/api/instances/{code}/hosts"),
         None,
-        Some(&payload),
+        Some(&body),
     )
     .await?;
     let host_id = result["data"]["hostId"].as_str().unwrap_or("").to_string();
+    let link_ip = result["data"]["ip"]
+        .as_str()
+        .unwrap_or_else(|| body["ip"].as_str().unwrap_or(""))
+        .to_string();
+    let link_hostname = body["hostname"].as_str().unwrap_or(&hostname).to_string();
+
     if !host_id.is_empty() {
-        sqlx::query(
-            "INSERT INTO zbx_host_links (instance_code, host_id, hostname, ip, ci_id, synced_at) \
-             VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
-             ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip = VALUES(ip), \
-             ci_id = VALUES(ci_id), synced_at = UTC_TIMESTAMP()",
-        )
-        .bind(&code)
-        .bind(&host_id)
-        .bind(&hostname)
-        .bind(&ip)
-        .bind(&ci.id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::internal(format!("写入主机对照失败: {e}")))?;
+        if let Some(ref cid) = linked_ci_id {
+            sqlx::query(
+                "INSERT INTO zbx_host_links (instance_code, host_id, hostname, ip, ci_id, synced_at) \
+                 VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
+                 ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip = VALUES(ip), \
+                 ci_id = VALUES(ci_id), synced_at = UTC_TIMESTAMP()",
+            )
+            .bind(&code)
+            .bind(&host_id)
+            .bind(&link_hostname)
+            .bind(&link_ip)
+            .bind(cid)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::internal(format!("写入主机对照失败: {e}")))?;
+        } else {
+            // 无 CI 也写入对照，方便名册展示；ci_id 留空
+            sqlx::query(
+                "INSERT INTO zbx_host_links (instance_code, host_id, hostname, ip, synced_at) \
+                 VALUES (?, ?, ?, ?, UTC_TIMESTAMP()) \
+                 ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip = VALUES(ip), \
+                 synced_at = UTC_TIMESTAMP()",
+            )
+            .bind(&code)
+            .bind(&host_id)
+            .bind(&link_hostname)
+            .bind(&link_ip)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::internal(format!("写入主机对照失败: {e}")))?;
+        }
     }
     audit_ok(
         &state,
         &auth,
         "monitor_host_register",
         &host_id,
-        &json!({ "instanceCode": code, "ciId": ci.id, "created": result["data"]["created"] }),
+        &json!({
+            "instanceCode": code,
+            "ciId": linked_ci_id,
+            "hostname": link_hostname,
+            "created": result["data"]["created"],
+        }),
+    )
+    .await;
+    Ok(Json(result))
+}
+
+async fn get_host_detail(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path((code, host_id)): Path<(String, String)>,
+) -> Result<Json<Value>, AppError> {
+    permit_read(&state, &auth).await?;
+    require_code(&code)?;
+    require_zbx_id(&host_id)?;
+    let result = ctl_request(
+        &state,
+        reqwest::Method::GET,
+        &format!("/api/instances/{code}/hosts/{host_id}"),
+        None,
+        None,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+async fn update_host(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path((code, host_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    permit_operate(&state, &auth).await?;
+    require_code(&code)?;
+    require_zbx_id(&host_id)?;
+    let result = ctl_request(
+        &state,
+        reqwest::Method::PUT,
+        &format!("/api/instances/{code}/hosts/{host_id}"),
+        None,
+        Some(&body),
+    )
+    .await?;
+    if let Some(hostname) = body["hostname"].as_str() {
+        let ip = body["interfaces"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|i| i["ip"].as_str())
+            .or_else(|| body["ip"].as_str())
+            .unwrap_or("");
+        let _ = sqlx::query(
+            "UPDATE zbx_host_links SET hostname = ?, ip = COALESCE(NULLIF(?, ''), ip), synced_at = UTC_TIMESTAMP() \
+             WHERE instance_code = ? AND host_id = ?",
+        )
+        .bind(hostname)
+        .bind(ip)
+        .bind(&code)
+        .bind(&host_id)
+        .execute(&state.db)
+        .await;
+    }
+    audit_ok(
+        &state,
+        &auth,
+        "monitor_host_update",
+        &host_id,
+        &json!({ "instanceCode": code }),
+    )
+    .await;
+    Ok(Json(result))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HostIdsBody {
+    host_ids: Vec<String>,
+}
+
+async fn delete_hosts(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path(code): Path<String>,
+    Json(body): Json<HostIdsBody>,
+) -> Result<Json<Value>, AppError> {
+    permit_operate(&state, &auth).await?;
+    require_code(&code)?;
+    if body.host_ids.is_empty() {
+        return Err(AppError::bad("请选择主机"));
+    }
+    for id in &body.host_ids {
+        require_zbx_id(id)?;
+    }
+    let payload = json!({ "hostIds": body.host_ids });
+    let result = ctl_request(
+        &state,
+        reqwest::Method::POST,
+        &format!("/api/instances/{code}/hosts/delete"),
+        None,
+        Some(&payload),
+    )
+    .await?;
+    for id in &body.host_ids {
+        let _ = sqlx::query("DELETE FROM zbx_host_links WHERE instance_code = ? AND host_id = ?")
+            .bind(&code)
+            .bind(id)
+            .execute(&state.db)
+            .await;
+    }
+    audit_ok(
+        &state,
+        &auth,
+        "monitor_host_delete",
+        &body.host_ids.join(","),
+        &json!({ "instanceCode": code, "count": body.host_ids.len() }),
+    )
+    .await;
+    Ok(Json(result))
+}
+
+async fn mass_update_hosts(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path(code): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    permit_operate(&state, &auth).await?;
+    require_code(&code)?;
+    let host_ids = body["hostIds"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if host_ids.is_empty() {
+        return Err(AppError::bad("请选择主机"));
+    }
+    for id in &host_ids {
+        require_zbx_id(id.as_str().unwrap_or(""))?;
+    }
+    let result = ctl_request(
+        &state,
+        reqwest::Method::POST,
+        &format!("/api/instances/{code}/hosts/massupdate"),
+        None,
+        Some(&body),
+    )
+    .await?;
+    audit_ok(
+        &state,
+        &auth,
+        "monitor_host_massupdate",
+        &host_ids
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+        &json!({ "instanceCode": code, "count": host_ids.len() }),
     )
     .await;
     Ok(Json(result))
@@ -636,7 +859,13 @@ pub(crate) async fn start_install(
     group_ids: &[String],
     template_ids: &[String],
     server: &str,
+    agent_port: &str,
     server_active: &str,
+    proxy_id: &str,
+    proxy_group_id: &str,
+    package_id: &str,
+    install_path: &str,
+    conf_suffix: &str,
     concurrency: i32,
 ) -> Result<Json<Value>, AppError> {
     auth::require_permission(auth, "monitor:agent")?;
@@ -648,11 +877,53 @@ pub(crate) async fn start_install(
     if group_ids.is_empty() || template_ids.is_empty() {
         return Err(AppError::bad("请选择主机组和模板"));
     }
-    if !valid_server(server) {
-        return Err(AppError::bad("Zabbix Server 地址无效"));
+    crate::monitor_routes::ensure_agent_job_credential(&state.db, "install").await?;
+    let package_id = package_id.trim();
+    if package_id.is_empty() {
+        return Err(AppError::bad("请选择 Agent 安装包"));
+    }
+    let _ = crate::monitor_agent_pkg::resolve_package_path(&state.db, package_id).await?;
+
+    let proxy_id = proxy_id.trim();
+    let proxy_group_id = proxy_group_id.trim();
+    let mut conf_suffix = conf_suffix.trim().to_string();
+    if conf_suffix.is_empty() && !proxy_group_id.is_empty() {
+        if let Some(mapped) =
+            crate::monitor_agent_pkg::lookup_conf_suffix(&state.db, instance_code, proxy_group_id)
+                .await?
+        {
+            conf_suffix = mapped;
+        }
+    }
+    if !server.is_empty() && !valid_server(server) {
+        return Err(AppError::bad("Agent 的 Server / Proxy 地址无效"));
     }
     if !server_active.is_empty() && !valid_server(server_active) {
         return Err(AppError::bad("ServerActive 地址无效"));
+    }
+    let agent_port = normalize_agent_port(agent_port)?;
+    if server.is_empty() && conf_suffix.is_empty() {
+        return Err(AppError::bad("请填写 Server，或选择带 conf 映射的 Proxy Group / 手工填模板后缀"));
+    }
+    if !proxy_id.is_empty() && !proxy_group_id.is_empty() {
+        return Err(AppError::bad("不能同时指定 Proxy 与 Proxy Group"));
+    }
+    if !proxy_id.is_empty() && !proxy_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AppError::bad("Proxy ID 无效"));
+    }
+    if !proxy_group_id.is_empty() && !proxy_group_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AppError::bad("Proxy Group ID 无效"));
+    }
+    let install_path = {
+        let p = install_path.trim();
+        if p.is_empty() {
+            crate::monitor_agent_pkg::default_install_path().to_string()
+        } else {
+            p.to_string()
+        }
+    };
+    if !install_path.starts_with('/') || install_path.contains("..") || install_path.len() > 512 {
+        return Err(AppError::bad("安装目录无效"));
     }
     for ci_id in ci_ids {
         let ci = load_ci(state, ci_id).await?;
@@ -661,17 +932,26 @@ pub(crate) async fn start_install(
             return Err(AppError::bad(&format!("配置项 {} 没有管理 IP", ci.name)));
         }
     }
-    let payload = json!({
+    let mut payload = json!({
         "instanceCode": instance_code,
         "action": "install",
         "ciIds": ci_ids,
         "groupIds": group_ids,
         "templateIds": template_ids,
         "server": server,
+        "agentPort": agent_port,
         "serverActive": server_active,
+        "packageId": package_id,
+        "installPath": install_path,
+        "confSuffix": conf_suffix,
         "concurrency": concurrency,
-        "requestedBy": auth.0.sub,
+        "requestedBy": auth.username(),
     });
+    if !proxy_group_id.is_empty() {
+        payload["proxyGroupId"] = json!(proxy_group_id);
+    } else if !proxy_id.is_empty() {
+        payload["proxyId"] = json!(proxy_id);
+    }
     let result = ctl_request(state, reqwest::Method::POST, "/api/tasks", None, Some(&payload)).await?;
     let task_id = result["data"]["id"].as_str().unwrap_or("");
     audit_ok(
@@ -683,17 +963,42 @@ pub(crate) async fn start_install(
             "instanceCode": instance_code,
             "ciCount": ci_ids.len(),
             "server": server,
+            "agentPort": agent_port,
+            "proxyId": proxy_id,
+            "proxyGroupId": proxy_group_id,
+            "packageId": package_id,
+            "installPath": install_path,
+            "confSuffix": conf_suffix,
         }),
     )
     .await;
     Ok(Json(result))
 }
 
+/// 空则默认 10050；否则须为 1–65535。
+fn normalize_agent_port(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok("10050".to_string());
+    }
+    let Ok(n) = value.parse::<u16>() else {
+        return Err(AppError::bad("Agent 端口无效"));
+    };
+    if n == 0 {
+        return Err(AppError::bad("Agent 端口无效"));
+    }
+    Ok(n.to_string())
+}
+
+/// 允许单地址，或 Proxy Group 的逗号/分号多地址（含端口、IPv6 方括号）。
 fn valid_server(value: &str) -> bool {
     let value = value.trim();
     !value.is_empty()
-        && value.len() <= 255
-        && !value.chars().any(|c| c.is_whitespace() || c == '\'' || c == '"' || c == ';')
+        && value.len() <= 1024
+        && value.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '.' | ':' | ',' | ';' | '-' | '_' | '[' | ']')
+        })
 }
 
 async fn audit_ok(state: &AppState, auth: &auth::AuthUser, action: &str, target: &str, detail: &Value) {

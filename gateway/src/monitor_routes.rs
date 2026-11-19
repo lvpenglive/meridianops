@@ -38,6 +38,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/api/monitor/instances/:code/sync", post(sync_hosts))
         .route("/api/monitor/instances/:code/governance", get(governance))
+        .route("/api/monitor/instances/:code/proxies", get(proxies))
+        .route("/api/monitor/instances/:code/proxy-groups", get(proxy_groups))
         .route("/api/monitor/tasks", post(create_task))
         .route("/api/monitor/tasks/:id", get(get_task))
         .merge(crate::monitor_scheme::routes())
@@ -143,6 +145,24 @@ async fn governance(
     proxy_get(&state, &format!("/api/instances/{code}/governance"), None).await
 }
 
+async fn proxies(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path(code): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    permit_read(&state, &auth).await?;
+    proxy_get(&state, &format!("/api/instances/{code}/proxies"), None).await
+}
+
+async fn proxy_groups(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path(code): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    permit_read(&state, &auth).await?;
+    proxy_get(&state, &format!("/api/instances/{code}/proxy-groups"), None).await
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateTaskBody {
@@ -159,7 +179,13 @@ struct CreateTaskBody {
     #[serde(default)]
     template_ids: Vec<String>,
     server: Option<String>,
+    agent_port: Option<String>,
     server_active: Option<String>,
+    proxy_id: Option<String>,
+    proxy_group_id: Option<String>,
+    package_id: Option<String>,
+    install_path: Option<String>,
+    conf_suffix: Option<String>,
 }
 
 async fn create_task(
@@ -176,7 +202,13 @@ async fn create_task(
             &body.group_ids,
             &body.template_ids,
             body.server.as_deref().unwrap_or(""),
+            body.agent_port.as_deref().unwrap_or(""),
             body.server_active.as_deref().unwrap_or(""),
+            body.proxy_id.as_deref().unwrap_or(""),
+            body.proxy_group_id.as_deref().unwrap_or(""),
+            body.package_id.as_deref().unwrap_or(""),
+            body.install_path.as_deref().unwrap_or(""),
+            body.conf_suffix.as_deref().unwrap_or(""),
             body.concurrency.unwrap_or(10),
         )
         .await?;
@@ -195,6 +227,7 @@ async fn create_task(
     if body.host_ids.is_empty() {
         return Err(AppError::bad("主机列表为空"));
     }
+    ensure_agent_job_credential(&state.db, &body.action).await?;
 
     // 只允许已同步且关联了配置项的主机执行作业类动作
     let placeholders = body
@@ -234,7 +267,7 @@ async fn create_task(
         .collect();
     if !not_synced.is_empty() {
         let msg = format!(
-            "以下主机尚未同步对照，请先点「同步对照」: {}",
+            "以下主机尚未关联配置项，请先点「关联资源」: {}",
             not_synced.join(",")
         );
         return Err(AppError::bad(&msg));
@@ -247,14 +280,31 @@ async fn create_task(
         return Err(AppError::bad(&msg));
     }
 
-    let payload = json!({
+    let mut target_version = body.target_version.clone();
+    let package_id = body.package_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if matches!(body.action.as_str(), "upgrade" | "rollback") {
+        let Some(pkg) = package_id else {
+            return Err(AppError::bad("请选择 Agent 包"));
+        };
+        let _ = crate::monitor_agent_pkg::resolve_package_path(&state.db, pkg).await?;
+        if target_version.as_deref().unwrap_or("").is_empty() {
+            target_version = Some(
+                crate::monitor_agent_pkg::resolve_package_version(&state.db, pkg).await?,
+            );
+        }
+    }
+
+    let mut payload = json!({
         "instanceCode": body.instance_code,
         "action": body.action,
         "hostIds": body.host_ids,
-        "targetVersion": body.target_version,
+        "targetVersion": target_version,
         "concurrency": body.concurrency.unwrap_or(10),
         "requestedBy": auth.0.sub,
     });
+    if let Some(pkg) = package_id {
+        payload["packageId"] = json!(pkg);
+    }
     let resp = proxy_post(&state, "/api/tasks", &payload).await?;
 
     let detail = json!({
@@ -406,6 +456,48 @@ fn ctl_endpoint(state: &AppState) -> Result<(String, String), AppError> {
         ));
     }
     Ok((base, token))
+}
+
+/// 作业剧本若为 SSH 执行，必须已绑定凭据，否则任务会整批失败。
+pub(crate) async fn ensure_agent_job_credential(
+    pool: &sqlx::MySqlPool,
+    action: &str,
+) -> Result<(), AppError> {
+    let name = match action {
+        "install" => "Zabbix Agent 安装",
+        "start" => "Zabbix Agent 启动",
+        "stop" => "Zabbix Agent 停止",
+        "restart" => "Zabbix Agent 重启",
+        "upgrade" => "Zabbix Agent 升级",
+        "rollback" => "Zabbix Agent 回滚",
+        _ => return Ok(()),
+    };
+    use sqlx::Row;
+    let row = sqlx::query(
+        "SELECT executor_type, credential_id FROM job_definitions \
+         WHERE name = ? AND enabled = 1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::internal(format!("查询作业定义失败: {e}")))?;
+    let Some(row) = row else {
+        return Err(AppError::bad(&format!(
+            "未找到作业「{name}」，请确认迁移已执行且剧本已启用"
+        )));
+    };
+    let executor: String = row
+        .try_get::<Option<String>, _>("executor_type")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "ssh".into());
+    let cred: Option<i64> = row.try_get("credential_id").ok().flatten();
+    if executor == "ssh" && cred.is_none() {
+        return Err(AppError::bad(&format!(
+            "作业「{name}」未绑定 SSH 凭据，请先在作业中心配置后再执行"
+        )));
+    }
+    Ok(())
 }
 
 async fn forward(response: reqwest::Response) -> Result<impl IntoResponse, AppError> {

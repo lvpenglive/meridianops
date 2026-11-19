@@ -13,6 +13,9 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8800',
         changeOrigin: true,
+        // Agent 包可达数百 MB，避免代理中途断开
+        timeout: 300000,
+        proxyTimeout: 300000,
       },
     },
   },

@@ -124,7 +124,7 @@ const routes = [
         path: 'monitor',
         name: 'Monitor',
         component: () => import('../views/monitor/MonitorPage.vue'),
-        meta: { title: '监控纳管', icon: 'Monitor', permission: 'monitor:read' }
+        meta: { title: '主机名册', icon: 'Monitor', permission: 'monitor:read' }
       },
       {
         path: 'monitor/scheme',
@@ -134,7 +134,13 @@ const routes = [
         path: 'monitor/install',
         name: 'MonitorInstall',
         component: () => import('../views/monitor/InstallPage.vue'),
-        meta: { title: '安装 Agent', icon: 'Download', permission: 'monitor:read' }
+        meta: { title: '安装 Agent', icon: 'Download', permission: 'monitor:agent' }
+      },
+      {
+        path: 'monitor/agent-packages',
+        name: 'MonitorAgentPackages',
+        component: () => import('../views/monitor/AgentPackagesPage.vue'),
+        meta: { title: '部署配置', icon: 'Box', permission: 'monitor:agent' }
       },
       {
         path: 'monitor/templates',

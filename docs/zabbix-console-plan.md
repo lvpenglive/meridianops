@@ -88,20 +88,24 @@ MySQL 只保留已经在用的对照和任务，外加审计：
 
 新增剧本 **Zabbix Agent 安装**，不复用「升级」占位脚本。动作名 `install`。目标是配置项，不是已经存在的 `hostid`。当前「必须先同步对照」的校验只约束启停和升级，不约束安装。
 
-1. 操作者选择配置项、Zabbix 实例、要套的模板、`Server` / `ServerActive` 地址。主机名默认用配置项名称。
+1. 操作者选择配置项、Zabbix 实例、要套的模板，以及**监控通道**：
+   - **经 Proxy Group**（Zabbix 7 生产 HA 默认）：必选 Proxy Group；主机挂 `monitored_by=2` + `proxy_groupid`。`Server` 用逗号拼组成员可达地址，`ServerActive` 用**分号**拼同组地址（负载均衡/重定向）。双网卡多 IP 时 API 往往只回填「Address for active agents」各一条，需手工补全全部可达地址（例如 2 台 Proxy × 双网卡 = 4 个 IP）。
+   - **经单 Proxy**：必选一个 Proxy；`Server` / `ServerActive` 填该 Proxy 地址。
+   - **直连 Server**：实验室/同网段。
+   主机名默认用配置项名称。
 2. Gateway 校验 `monitor:agent`，以及这些配置项落在操作者的业务系统和部门范围内。SSH 凭据使用作业中心已经绑定的凭据。
 3. 该 IP 在 Zabbix 里已有主机时，先建维护期，失败则停止，不继续装。
-4. SSH 安装 `zabbix-agent2`，写入 `Server`、`ServerActive`、`Hostname`，`systemctl enable --now`。包不存在或系统类型不在支持列表里，记失败原因并停止，不调用建主机。
-5. `host.create` 或 `host.update`，套上所选模板。
-6. 轮询 `agent.ping`，默认 3 分钟。通了才把这台记成功，并写入 `zbx_host_links`。超时记未知，不算成功。
+4. SSH：**门户包库 SCP 下发压缩包** → 校验 SHA256 → 解压到可配安装目录 → 按 conf 后缀选模板 → 写入 `Hostname`（及可选 Server/ServerActive 覆盖）→ 用 conf 路径启停进程。包缺失、校验失败或 conf 模板不存在则记失败，不调用建主机。
+5. `host.create` 或 `host.update`，套上所选模板；经单 Proxy 时挂 Proxy（6.x `proxy_hostid`，7+ `monitored_by` + `proxyid`）；经 Proxy Group 时挂 `monitored_by=2` + `proxy_groupid`。
+6. 轮询 `agent.ping`，约 5 分钟。通了才把这台记成功，并写入 `zbx_host_links`（含 `install_path` / `package_id` / `conf_suffix`）。经 Proxy/Group 时数据回传 Server，超时文案按该路径提示。
 7. 若第 3 步建过维护期，结束时删除或把结束时间改到当前。
-8. 审计：发起人、配置项、实例、成功数、失败数、任务 id。
+8. 审计：发起人、配置项、实例、Proxy/Proxy Group、成功数、失败数、任务 id。
 
-第一期安装只支持行内已经统一的一种系统包（rpm 或 deb 二选一，实施时写死在剧本里）。名册里标不出安装类型的主机，拒绝升级；安装时系统探测失败同样拒绝。
+启停/重启从对照表读 `install_path` 传给剧本。升级/回滚同样选包 SCP 覆盖二进制并保留 conf，不再走 yum/apt。名册当前页通断以 `agent.ping` 为准。
 
-门户替代不了这三件事：包仓库里要有 Agent 包、目标机 SSH 可达、主机到 Zabbix Server 的 10051 端口可达。失败原因按这三项回显。
+部署前请：在侧栏「主机监控 → 部署配置」上传包、配置 Proxy Group→conf 后缀映射；作业中心给安装/启停/升级等剧本绑定 SSH 凭据（未绑定时门户会直接拒绝提交）。目标机 SSH 可达，且 Agent 到 Proxy（或直连 Server）可达。
 
-验收：一台未纳管主机从门户安装后出现在名册里，`agent.ping` 为通，并已套上选定模板。
+验收：一台未纳管主机从门户经 Proxy 安装后出现在名册里并挂在所选 Proxy 下，`agent.ping` 为通，并已套上选定模板。
 
 ### 第 3 期：模板设计器（普通对象）
 
@@ -171,15 +175,16 @@ MySQL 只保留已经在用的对照和任务，外加审计：
 
 ## 6. 页面
 
-| 路径 | 内容 | 期 |
-|------|------|----|
-| `/monitor` | 现有名册、曲线、当前问题、启停升级。名册显示主机组。问题行增加确认、评论、关闭。可按主机组筛选，筛选结果仍受配置项范围限制 | 1 |
-| `/monitor/scheme` | 左侧模板组、主机组两棵列表。选主机后套用或卸下模板、增删主机组、编辑主机宏，为配置项登记主机 | 1 |
-| `/monitor/install` | 选配置项和模板，填写 Server 地址，看每台安装和 `agent.ping` 结果 | 2 |
-| `/monitor/templates` | 模板库：按模板组浏览、搜索、导入导出。第 3 期可新建和改名模板组、主机组 | 1 起只读，3 起可写 |
-| `/monitor/templates/:id` | 设计器页签：监控项、触发器、宏、上级模板；第 4 期加「发现规则」 | 3、4 |
+侧栏与「监控告警」并列一级「主机监控」：
 
-无 `monitor:template` 的用户可以打开模板页，表单为只读。无 `monitor:read` 的用户不出现这些菜单。
+| 菜单 | 路径 | 内容 | 权限 |
+|------|------|------|------|
+| 主机名册 | `/monitor` | 名册、问题、启停升级、套模板/宏、登记 CI；页内可跳转安装 | `monitor:read`（写操作另鉴权） |
+| 安装 Agent | `/monitor/install` | 选包、CI、通道（Proxy Group / Proxy / 直连），看安装与 `agent.ping` | `monitor:agent` |
+| 模板库 | `/monitor/templates` | 浏览/导入导出；设计器在 `/monitor/templates/:id` | `monitor:read`（写要 `monitor:template`） |
+| 部署配置 | `/monitor/agent-packages` | 安装包库 + Proxy Group→conf 映射 | `monitor:agent` |
+
+`/monitor/scheme` 已并入主机名册。无 `monitor:read` 不出现主机监控子组中的只读项；安装与部署配置仅 `monitor:agent` 可见。
 
 ## 7. 边界
 

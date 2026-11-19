@@ -3,14 +3,17 @@
     <div class="page-header">
       <div class="page-title">
         <el-icon><Monitor /></el-icon>
-        <span>监控纳管</span>
-        <span class="page-sub">选中主机可改模板、主机组和宏</span>
+        <span>主机名册</span>
+        <span class="page-sub">通断与版本、启用禁用、编辑批量更新、启停升级</span>
       </div>
       <div class="header-actions">
-        <el-button v-permission="'monitor:operate'" @click="openRegister">登记配置项</el-button>
-        <el-button :loading="govLoading" @click="loadGovernance">刷新治理</el-button>
-        <el-button :loading="syncing" @click="doSync">同步对照</el-button>
-        <el-button :icon="Refresh" @click="loadHosts">刷新</el-button>
+        <el-button v-permission="'monitor:agent'" type="primary" @click="router.push('/monitor/install')">
+          安装 Agent
+        </el-button>
+        <el-button v-permission="'monitor:operate'" type="success" @click="openCreateHost">添加主机</el-button>
+        <el-button :loading="govLoading" @click="loadGovernance">健康检查</el-button>
+        <el-button :loading="syncing" @click="doSync">关联资源</el-button>
+        <el-button :icon="Refresh" @click="loadHosts">刷新名册</el-button>
       </div>
     </div>
 
@@ -124,11 +127,28 @@
           @clear="reloadHosts"
         />
         <el-select v-model="hostFilter" placeholder="筛选" clearable style="width: 140px" @change="reloadHosts">
+          <el-option label="已启用" value="enabled" />
+          <el-option label="已禁用" value="disabled" />
           <el-option label="Agent 离线" value="offline" />
           <el-option label="未关联 CMDB" value="unlinked" />
           <el-option label="已关联 CMDB" value="linked" />
         </el-select>
         <el-button type="primary" @click="reloadHosts">查询</el-button>
+        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="setHostsStatus(0)">
+          启用
+        </el-button>
+        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="setHostsStatus(1)">
+          禁用
+        </el-button>
+        <el-button v-permission="'monitor:operate'" :disabled="selectedIds.length !== 1" @click="openEditHost">
+          编辑
+        </el-button>
+        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="openMassUpdate">
+          批量更新
+        </el-button>
+        <el-button v-permission="'monitor:operate'" type="danger" plain :disabled="!selectedIds.length" @click="deleteSelectedHosts">
+          删除
+        </el-button>
         <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="runAction('restart')">
           重启 Agent
         </el-button>
@@ -155,7 +175,16 @@
         <el-table-column type="selection" width="48" />
         <el-table-column prop="displayName" label="名称" min-width="160" />
         <el-table-column prop="hostname" label="主机名" min-width="140" />
-        <el-table-column prop="ip" label="IP" width="150" />
+        <el-table-column prop="ip" label="IP" width="140" />
+        <el-table-column label="端口" width="90">
+          <template #default="{ row }">{{ row.port || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag v-if="row.status === '1'" type="info" size="small">禁用</el-tag>
+            <el-tag v-else type="success" size="small">启用</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="主机组" min-width="160">
           <template #default="{ row }">{{ (row.groups || []).map((g: { name: string }) => g.name).join('、') || '-' }}</template>
         </el-table-column>
@@ -169,7 +198,14 @@
         <el-table-column prop="agentVersion" label="版本" width="120" />
         <el-table-column label="CMDB" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.cmdbLinked" type="success" size="small">已关联</el-tag>
+            <el-tag
+              v-if="row.cmdbLinked && row.ciId"
+              type="success"
+              size="small"
+              class="cmdb-link"
+              @click.stop="goAsset(row.ciId)"
+            >已关联</el-tag>
+            <el-tag v-else-if="row.cmdbLinked" type="success" size="small">已关联</el-tag>
             <el-tag v-else type="info" size="small">未关联</el-tag>
           </template>
         </el-table-column>
@@ -193,7 +229,9 @@
         <div class="detail-head">
           <div>
             <div class="detail-title">{{ selected.displayName || selected.hostname }}</div>
-            <div class="detail-sub">{{ selected.hostname }} · {{ selected.ip || '无 IP' }}</div>
+            <div class="detail-sub">
+              {{ selected.hostname }} · {{ selected.ip || '无 IP' }}{{ selected.port ? `:${selected.port}` : '' }}
+            </div>
           </div>
         </div>
       </template>
@@ -211,7 +249,14 @@
         </div>
         <div class="status-item">
           <span class="status-label">配置项</span>
-          <el-tag v-if="selected.cmdbLinked" type="success" size="small">已关联</el-tag>
+          <el-tag
+            v-if="selected.cmdbLinked && selected.ciId"
+            type="success"
+            size="small"
+            class="cmdb-link"
+            @click="goAsset(selected.ciId)"
+          >已关联</el-tag>
+          <el-tag v-else-if="selected.cmdbLinked" type="success" size="small">已关联</el-tag>
           <el-tag v-else type="info" size="small">未关联</el-tag>
         </div>
         <div class="status-item">
@@ -462,48 +507,387 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="upgradeVisible" title="升级 Agent" width="420px">
+    <el-dialog v-model="upgradeVisible" title="升级 / 回滚 Agent" width="480px">
       <el-form label-width="90px">
-        <el-form-item label="目标版本">
-          <el-input v-model="targetVersion" placeholder="例如 6.0.31" />
+        <el-form-item label="动作">
+          <el-radio-group v-model="upgradeAction">
+            <el-radio-button value="upgrade">升级</el-radio-button>
+            <el-radio-button value="rollback">回滚</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="目标包" required>
+          <el-select
+            v-model="upgradePackageId"
+            filterable
+            style="width: 100%"
+            placeholder="选择包库中的 Agent 包"
+            :disabled="!agentPackages.length"
+          >
+            <el-option
+              v-for="p in agentPackages"
+              :key="p.id"
+              :label="`${p.name} · ${p.version}${p.osArch ? ' · ' + p.osArch : ''}`"
+              :value="p.id"
+            />
+          </el-select>
+          <div v-if="!agentPackages.length" style="margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12px">
+            无可用包，请先到「部署配置」上传。
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="upgradeVisible = false">取消</el-button>
-        <el-button type="primary" :loading="taskSubmitting" @click="confirmUpgrade">提交</el-button>
+        <el-button
+          type="primary"
+          :loading="taskSubmitting"
+          :disabled="!upgradePackageId"
+          @click="confirmUpgrade"
+        >
+          提交
+        </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="registerVisible" title="把配置项登记到 Zabbix" width="520px">
-      <el-form label-width="90px">
-        <el-form-item label="配置项">
-          <el-select
-            v-model="registerCiId"
-            filterable
-            remote
-            reserve-keyword
-            placeholder="搜索资产名称"
-            :remote-method="searchCi"
-            :loading="ciLoading"
-            style="width: 100%"
+    <el-dialog
+      v-model="createVisible"
+      :title="editingHostId ? '编辑主机' : '添加主机'"
+      width="920px"
+      top="4vh"
+      destroy-on-close
+      class="create-host-dialog"
+    >
+      <el-tabs v-model="createTab">
+        <el-tab-pane label="主机" name="host">
+          <el-form label-width="100px">
+            <el-form-item v-if="!editingHostId" label="配置项">
+              <el-select
+                v-model="createForm.ciId"
+                filterable
+                remote
+                clearable
+                reserve-keyword
+                placeholder="可选：选中后自动带入主机名/IP，并关联资产"
+                :remote-method="searchCi"
+                :loading="ciLoading"
+                style="width: 100%"
+                @change="onCreateCiChange"
+              >
+                <el-option v-for="item in ciOptions" :key="item.id" :label="item.name" :value="item.id" />
+              </el-select>
+              <div class="field-hint">不选也可手工创建（如 ICMP）；选了会写入名册关联。</div>
+            </el-form-item>
+            <el-form-item label="主机名" required>
+              <el-input v-model="createForm.hostname" placeholder="技术名，唯一，如 47.114.59.131_icmp" />
+            </el-form-item>
+            <el-form-item label="可见名称">
+              <el-input v-model="createForm.displayName" placeholder="默认与主机名相同" />
+            </el-form-item>
+            <el-form-item label="状态">
+              <el-radio-group v-model="createForm.status">
+                <el-radio :value="0">启用</el-radio>
+                <el-radio :value="1">禁用</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="主机组" required>
+              <el-select v-model="createForm.groupIds" multiple filterable style="width: 100%">
+                <el-option
+                  v-for="item in schemeGroups"
+                  :key="item.groupId"
+                  :label="item.name"
+                  :value="item.groupId"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="模板">
+              <el-select v-model="createForm.templateIds" multiple filterable style="width: 100%">
+                <el-option
+                  v-for="item in schemeTemplates"
+                  :key="item.templateId"
+                  :label="item.name"
+                  :value="item.templateId"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="监控通道">
+              <el-radio-group v-model="createForm.channel">
+                <el-radio-button value="direct">Server</el-radio-button>
+                <el-radio-button value="proxy">Proxy</el-radio-button>
+                <el-radio-button value="proxyGroup">Proxy Group</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="createForm.channel === 'proxy'" label="Proxy">
+              <el-select v-model="createForm.proxyId" filterable clearable style="width: 100%" :loading="createProxyLoading">
+                <el-option
+                  v-for="p in createProxies"
+                  :key="p.proxyId"
+                  :label="`${p.name}${p.address ? ' · ' + p.address : ''}`"
+                  :value="p.proxyId"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="createForm.channel === 'proxyGroup'" label="Proxy Group">
+              <el-select
+                v-model="createForm.proxyGroupId"
+                filterable
+                clearable
+                style="width: 100%"
+                :loading="createProxyLoading"
+              >
+                <el-option
+                  v-for="g in createProxyGroups"
+                  :key="g.proxyGroupId"
+                  :label="g.name"
+                  :value="g.proxyGroupId"
+                />
+              </el-select>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
+        <el-tab-pane label="接口" name="ifaces">
+          <div class="create-toolbar">
+            <el-button size="small" @click="addIface">添加接口</el-button>
+          </div>
+          <div v-for="(iface, idx) in createForm.interfaces" :key="idx" class="iface-card">
+            <div class="iface-head">
+              <span>接口 {{ idx + 1 }}</span>
+              <el-button
+                link
+                type="danger"
+                size="small"
+                :disabled="createForm.interfaces.length <= 1"
+                @click="removeIface(idx)"
+              >
+                删除
+              </el-button>
+            </div>
+            <el-form label-width="100px" size="small">
+              <el-form-item label="类型">
+                <el-select v-model="iface.type" style="width: 160px" @change="onIfaceTypeChange(iface)">
+                  <el-option :value="1" label="Agent" />
+                  <el-option :value="2" label="SNMP" />
+                  <el-option :value="3" label="IPMI" />
+                  <el-option :value="4" label="JMX" />
+                </el-select>
+                <el-checkbox
+                  v-model="iface.main"
+                  style="margin-left: 16px"
+                  @change="(v: boolean | string | number) => { if (v) setMainIface(idx) }"
+                >
+                  主接口
+                </el-checkbox>
+              </el-form-item>
+              <el-form-item label="连接">
+                <el-radio-group v-model="iface.useip">
+                  <el-radio :value="1">IP</el-radio>
+                  <el-radio :value="0">DNS</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item v-if="iface.useip === 1" label="IP">
+                <el-input v-model="iface.ip" placeholder="如 47.114.59.131" />
+              </el-form-item>
+              <el-form-item v-else label="DNS">
+                <el-input v-model="iface.dns" placeholder="主机 DNS 名" />
+              </el-form-item>
+              <el-form-item label="端口">
+                <el-input v-model="iface.port" style="width: 140px" :placeholder="defaultPort(iface.type)" />
+              </el-form-item>
+              <template v-if="iface.type === 2">
+                <el-form-item label="SNMP 版本">
+                  <el-select v-model="iface.snmpVersion" style="width: 160px">
+                    <el-option :value="1" label="SNMPv1" />
+                    <el-option :value="2" label="SNMPv2c" />
+                    <el-option :value="3" label="SNMPv3" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item v-if="iface.snmpVersion !== 3" label="Community">
+                  <el-input v-model="iface.community" placeholder="{$SNMP_COMMUNITY}" />
+                </el-form-item>
+                <template v-else>
+                  <el-form-item label="Context">
+                    <el-input v-model="iface.contextName" />
+                  </el-form-item>
+                  <el-form-item label="Security name">
+                    <el-input v-model="iface.securityName" />
+                  </el-form-item>
+                  <el-form-item label="Security level">
+                    <el-select v-model="iface.securityLevel" style="width: 200px">
+                      <el-option :value="0" label="noAuthNoPriv" />
+                      <el-option :value="1" label="authNoPriv" />
+                      <el-option :value="2" label="authPriv" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="Auth passphrase">
+                    <el-input v-model="iface.authPassphrase" type="password" show-password />
+                  </el-form-item>
+                  <el-form-item label="Priv passphrase">
+                    <el-input v-model="iface.privPassphrase" type="password" show-password />
+                  </el-form-item>
+                </template>
+              </template>
+            </el-form>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="宏" name="macros">
+          <div class="create-toolbar">
+            <el-button size="small" @click="createForm.macros.push({ macro: '', value: '', description: '' })">
+              添加宏
+            </el-button>
+          </div>
+          <el-table :data="createForm.macros" size="small">
+            <el-table-column label="宏" min-width="160">
+              <template #default="{ row }">
+                <el-input v-model="row.macro" placeholder="{$MACRO}" />
+              </template>
+            </el-table-column>
+            <el-table-column label="值" min-width="160">
+              <template #default="{ row }">
+                <el-input v-model="row.value" />
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="140">
+              <template #default="{ row }">
+                <el-input v-model="row.description" />
+              </template>
+            </el-table-column>
+            <el-table-column width="70">
+              <template #default="{ $index }">
+                <el-button link type="danger" @click="createForm.macros.splice($index, 1)">删</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="标签" name="tags">
+          <div class="create-toolbar">
+            <el-button size="small" @click="createForm.tags.push({ tag: '', value: '' })">添加标签</el-button>
+          </div>
+          <el-table :data="createForm.tags" size="small">
+            <el-table-column label="标签" min-width="160">
+              <template #default="{ row }">
+                <el-input v-model="row.tag" />
+              </template>
+            </el-table-column>
+            <el-table-column label="值" min-width="160">
+              <template #default="{ row }">
+                <el-input v-model="row.value" />
+              </template>
+            </el-table-column>
+            <el-table-column width="70">
+              <template #default="{ $index }">
+                <el-button link type="danger" @click="createForm.tags.splice($index, 1)">删</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="库存" name="inventory">
+          <el-form label-width="110px" size="small">
+            <el-form-item label="库存模式">
+              <el-radio-group v-model="createForm.inventoryMode">
+                <el-radio :value="-1">禁用</el-radio>
+                <el-radio :value="0">手动</el-radio>
+                <el-radio :value="1">自动</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <template v-if="createForm.inventoryMode !== -1">
+              <el-form-item v-for="f in inventoryFields" :key="f.key" :label="f.label">
+                <el-input v-model="createForm.inventory[f.key]" />
+              </el-form-item>
+            </template>
+          </el-form>
+        </el-tab-pane>
+      </el-tabs>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="submitCreateHost">
+          {{ editingHostId ? '保存' : '创建' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="massVisible" title="批量更新" width="640px" destroy-on-close>
+      <div class="field-hint" style="margin-bottom: 12px">已选 {{ selectedIds.length }} 台主机；只更新勾选的项。</div>
+      <el-form label-width="110px">
+        <el-form-item>
+          <el-checkbox v-model="massForm.useStatus">状态</el-checkbox>
+          <el-radio-group v-model="massForm.status" :disabled="!massForm.useStatus" style="margin-left: 12px">
+            <el-radio :value="0">启用</el-radio>
+            <el-radio :value="1">禁用</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="massForm.useGroups">主机组（替换）</el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="massForm.useGroups" label="主机组">
+          <el-select v-model="massForm.groupIds" multiple filterable style="width: 100%">
+            <el-option
+              v-for="item in schemeGroups"
+              :key="item.groupId"
+              :label="item.name"
+              :value="item.groupId"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="massForm.useTemplates">模板</el-checkbox>
+          <el-radio-group
+            v-model="massForm.templateAction"
+            :disabled="!massForm.useTemplates"
+            style="margin-left: 12px"
           >
-            <el-option v-for="item in ciOptions" :key="item.id" :label="item.name" :value="item.id" />
+            <el-radio value="replace">替换</el-radio>
+            <el-radio value="link">追加</el-radio>
+            <el-radio value="unlink">取消链接</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="massForm.useTemplates" label="模板">
+          <el-select v-model="massForm.templateIds" multiple filterable style="width: 100%">
+            <el-option
+              v-for="item in schemeTemplates"
+              :key="item.templateId"
+              :label="item.name"
+              :value="item.templateId"
+            />
           </el-select>
         </el-form-item>
-        <el-form-item label="主机组">
-          <el-select v-model="registerGroups" multiple filterable style="width: 100%">
-            <el-option v-for="item in schemeGroups" :key="item.groupId" :label="item.name" :value="item.groupId" />
-          </el-select>
+        <el-form-item>
+          <el-checkbox v-model="massForm.useChannel">监控通道</el-checkbox>
         </el-form-item>
-        <el-form-item label="模板">
-          <el-select v-model="registerTemplates" multiple filterable style="width: 100%">
-            <el-option v-for="item in schemeTemplates" :key="item.templateId" :label="item.name" :value="item.templateId" />
-          </el-select>
-        </el-form-item>
+        <template v-if="massForm.useChannel">
+          <el-form-item label="通道">
+            <el-radio-group v-model="massForm.channel">
+              <el-radio-button value="direct">Server</el-radio-button>
+              <el-radio-button value="proxy">Proxy</el-radio-button>
+              <el-radio-button value="proxyGroup">Proxy Group</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="massForm.channel === 'proxy'" label="Proxy">
+            <el-select v-model="massForm.proxyId" filterable clearable style="width: 100%" :loading="createProxyLoading">
+              <el-option
+                v-for="p in createProxies"
+                :key="p.proxyId"
+                :label="`${p.name}${p.address ? ' · ' + p.address : ''}`"
+                :value="p.proxyId"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="massForm.channel === 'proxyGroup'" label="Proxy Group">
+            <el-select v-model="massForm.proxyGroupId" filterable clearable style="width: 100%" :loading="createProxyLoading">
+              <el-option
+                v-for="g in createProxyGroups"
+                :key="g.proxyGroupId"
+                :label="g.name"
+                :value="g.proxyGroupId"
+              />
+            </el-select>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
-        <el-button @click="registerVisible = false">取消</el-button>
-        <el-button type="primary" :loading="registering" @click="submitRegister">登记</el-button>
+        <el-button @click="massVisible = false">取消</el-button>
+        <el-button type="primary" :loading="massSaving" @click="submitMassUpdate">更新</el-button>
       </template>
     </el-dialog>
   </div>
@@ -515,7 +899,7 @@ import { useRouter } from 'vue-router'
 import { Monitor, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../../stores/user'
-import { listCiInstances } from '../../api/cmdb'
+import { getCiInstance, listCiInstances } from '../../api/cmdb'
 import {
   ackMonitorEvent,
   createTask,
@@ -526,27 +910,40 @@ import {
   hostMacros,
   hostProblems,
   hostTriggers,
+  listAgentPackages,
   linkHostGroups,
   linkHostTemplates,
   listHostGroups,
   listHosts,
   listInstances,
+  listProxies,
+  listProxyGroups,
   listTemplates,
+  massUpdateMonitorHosts,
+  deleteMonitorHosts,
+  getMonitorHost,
   registerMonitorHost,
+  updateMonitorHost,
   saveHostMacros,
   syncHosts,
+  type AgentPackage,
+  type CreateMonitorHostInput,
   type GovernanceData,
   type HostItem,
   type HostMacro,
   type HostTrigger,
+  type MassUpdateHostsInput,
   type MonitorAction,
   type MonitorGroupRef,
   type MonitorHost,
   type MonitorInstance,
   type MonitorProblem,
+  type MonitorProxy,
+  type MonitorProxyGroup,
   type MonitorTask,
   type MonitorTemplate,
   type MonitorTemplateRef,
+  type UpdateMonitorHostInput,
 } from '../../api/monitor'
 
 const router = useRouter()
@@ -560,7 +957,7 @@ const canEditScheme = computed(() => {
 const schemeBlockedReason = computed(() => {
   if (!selected.value) return ''
   if (isAdmin.value || selected.value.cmdbLinked) return ''
-  return '这台主机还没关联配置项。用右上角「登记配置项」挂上后再改监控方案。'
+  return '这台主机还没关联配置项。可用「添加主机」选配置项关联，或点「关联资源」按 IP 匹配。'
 })
 
 const instances = ref<MonitorInstance[]>([])
@@ -593,7 +990,9 @@ const triggersLoadedFor = ref('')
 const task = ref<MonitorTask | null>(null)
 const taskSubmitting = ref(false)
 const upgradeVisible = ref(false)
-const targetVersion = ref('')
+const upgradeAction = ref<'upgrade' | 'rollback'>('upgrade')
+const upgradePackageId = ref('')
+const agentPackages = ref<AgentPackage[]>([])
 const ackVisible = ref(false)
 const ackMessage = ref('')
 const ackSeverity = ref<number | undefined>()
@@ -609,13 +1008,101 @@ const templateToAdd = ref('')
 const groupToAdd = ref('')
 const savingMacros = ref(false)
 const newMacro = reactive({ macro: '', value: '' })
-const registerVisible = ref(false)
-const registerCiId = ref('')
-const registerGroups = ref<string[]>([])
-const registerTemplates = ref<string[]>([])
 const ciOptions = ref<{ id: string; name: string }[]>([])
 const ciLoading = ref(false)
-const registering = ref(false)
+
+type CreateIface = {
+  interfaceId?: string
+  type: number
+  main: boolean
+  useip: number
+  ip: string
+  dns: string
+  port: string
+  snmpVersion: number
+  community: string
+  contextName: string
+  securityName: string
+  securityLevel: number
+  authPassphrase: string
+  privPassphrase: string
+}
+
+const createVisible = ref(false)
+const createTab = ref('host')
+const creating = ref(false)
+const editingHostId = ref('')
+const createProxyLoading = ref(false)
+const createProxies = ref<MonitorProxy[]>([])
+const createProxyGroups = ref<MonitorProxyGroup[]>([])
+const massVisible = ref(false)
+const massSaving = ref(false)
+const massForm = reactive({
+  useStatus: false,
+  status: 0,
+  useGroups: false,
+  groupIds: [] as string[],
+  useTemplates: false,
+  templateAction: 'replace' as 'replace' | 'link' | 'unlink',
+  templateIds: [] as string[],
+  useChannel: false,
+  channel: 'direct' as 'direct' | 'proxy' | 'proxyGroup',
+  proxyId: '',
+  proxyGroupId: '',
+})
+const inventoryFields = [
+  { key: 'type', label: '类型' },
+  { key: 'name', label: '名称' },
+  { key: 'alias', label: '别名' },
+  { key: 'os', label: '操作系统' },
+  { key: 'os_full', label: 'OS 完整' },
+  { key: 'serialno_a', label: '序列号 A' },
+  { key: 'tag', label: '资产标签' },
+  { key: 'macaddress_a', label: 'MAC A' },
+  { key: 'hardware', label: '硬件' },
+  { key: 'software', label: '软件' },
+  { key: 'contact', label: '联系人' },
+  { key: 'location', label: '位置' },
+  { key: 'model', label: '型号' },
+  { key: 'vendor', label: '厂商' },
+  { key: 'notes', label: '备注' },
+]
+
+function blankIface(main = false): CreateIface {
+  return {
+    interfaceId: '',
+    type: 1,
+    main,
+    useip: 1,
+    ip: '',
+    dns: '',
+    port: '',
+    snmpVersion: 2,
+    community: '{$SNMP_COMMUNITY}',
+    contextName: '',
+    securityName: '',
+    securityLevel: 0,
+    authPassphrase: '',
+    privPassphrase: '',
+  }
+}
+
+const createForm = reactive({
+  hostname: '',
+  displayName: '',
+  status: 0,
+  groupIds: [] as string[],
+  templateIds: [] as string[],
+  channel: 'direct' as 'direct' | 'proxy' | 'proxyGroup',
+  proxyId: '',
+  proxyGroupId: '',
+  ciId: '',
+  interfaces: [blankIface(true)] as CreateIface[],
+  macros: [] as Array<{ macro: string; value: string; description: string }>,
+  tags: [] as Array<{ tag: string; value: string }>,
+  inventoryMode: -1,
+  inventory: {} as Record<string, string>,
+})
 const detailLoading = computed(() => problemLoading.value || schemeLoading.value)
 const templateChoices = computed(() =>
   schemeTemplates.value.filter((item) => !linkage.value.templates.some((linked) => linked.templateId === item.templateId)),
@@ -646,10 +1133,16 @@ onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
 })
 
-function rosterFilter(): { agent?: 'online' | 'offline' | 'unknown'; cmdb?: 'linked' | 'unlinked' } {
+function rosterFilter(): {
+  agent?: 'online' | 'offline' | 'unknown'
+  cmdb?: 'linked' | 'unlinked'
+  status?: '0' | '1'
+} {
   if (hostFilter.value === 'offline') return { agent: 'offline' }
   if (hostFilter.value === 'linked') return { cmdb: 'linked' }
   if (hostFilter.value === 'unlinked') return { cmdb: 'unlinked' }
+  if (hostFilter.value === 'enabled') return { status: '0' }
+  if (hostFilter.value === 'disabled') return { status: '1' }
   return {}
 }
 
@@ -756,12 +1249,17 @@ async function submitAck() {
   }
 }
 
+function goAsset(ciId: string) {
+  if (!ciId) return
+  router.push(`/assets/${ciId}`)
+}
+
 async function doSync() {
   if (!instanceCode.value) return
   syncing.value = true
   try {
     const res = await syncHosts(instanceCode.value)
-    ElMessage.success(`已同步 ${res.synced} 台主机对照`)
+    ElMessage.success(`已按 IP 关联 ${res.synced} 台主机与配置项`)
   } finally {
     syncing.value = false
   }
@@ -904,11 +1402,350 @@ async function saveMacros() {
   }
 }
 
-function openRegister() {
-  registerCiId.value = ''
-  registerGroups.value = groupId.value ? [groupId.value] : []
-  registerTemplates.value = []
-  registerVisible.value = true
+function defaultPort(type: number) {
+  if (type === 2) return '161'
+  if (type === 3) return '623'
+  if (type === 4) return '12345'
+  return '10050'
+}
+
+function resetCreateForm() {
+  editingHostId.value = ''
+  createForm.hostname = ''
+  createForm.displayName = ''
+  createForm.status = 0
+  createForm.groupIds = groupId.value ? [groupId.value] : []
+  createForm.templateIds = []
+  createForm.channel = 'direct'
+  createForm.proxyId = ''
+  createForm.proxyGroupId = ''
+  createForm.ciId = ''
+  createForm.interfaces = [blankIface(true)]
+  createForm.macros = []
+  createForm.tags = []
+  createForm.inventoryMode = -1
+  createForm.inventory = {}
+  createTab.value = 'host'
+}
+
+async function loadCreateProxies() {
+  if (!instanceCode.value) return
+  createProxyLoading.value = true
+  try {
+    const [px, pg] = await Promise.all([
+      listProxies(instanceCode.value),
+      listProxyGroups(instanceCode.value),
+    ])
+    createProxies.value = px
+    createProxyGroups.value = pg
+  } catch {
+    createProxies.value = []
+    createProxyGroups.value = []
+  } finally {
+    createProxyLoading.value = false
+  }
+}
+
+async function openCreateHost() {
+  if (!instanceCode.value) {
+    ElMessage.warning('请先选择 Zabbix 实例')
+    return
+  }
+  resetCreateForm()
+  createVisible.value = true
+  if (!schemeGroups.value.length || !schemeTemplates.value.length) {
+    await loadSchemeCatalog()
+  }
+  await loadCreateProxies()
+}
+
+async function openEditHost() {
+  if (!instanceCode.value || selectedIds.value.length !== 1) {
+    ElMessage.warning('请只选择一台主机进行编辑')
+    return
+  }
+  const hostId = selectedIds.value[0]
+  if (!schemeGroups.value.length || !schemeTemplates.value.length) {
+    await loadSchemeCatalog()
+  }
+  creating.value = true
+  try {
+    const detail = await getMonitorHost(instanceCode.value, hostId)
+    editingHostId.value = hostId
+    createForm.hostname = detail.hostname || ''
+    createForm.displayName = detail.displayName || ''
+    createForm.status = detail.status === '1' ? 1 : 0
+    createForm.groupIds = [...(detail.groupIds || [])]
+    createForm.templateIds = [...(detail.templateIds || [])]
+    createForm.channel =
+      detail.channel === 'proxy' || detail.channel === 'proxyGroup' ? detail.channel : 'direct'
+    createForm.proxyId = detail.proxyId || ''
+    createForm.proxyGroupId = detail.proxyGroupId || ''
+    createForm.ciId = ''
+    createForm.interfaces = (detail.interfaces || []).length
+      ? detail.interfaces.map((iface) => ({
+          interfaceId: iface.interfaceId || '',
+          type: Number(iface.type) || 1,
+          main: iface.main === true || iface.main === 1 || String(iface.main) === '1',
+          useip: Number(iface.useip ?? 1) === 0 ? 0 : 1,
+          ip: iface.ip || '',
+          dns: iface.dns || '',
+          port: String(iface.port || ''),
+          snmpVersion: Number(iface.snmpVersion ?? 2),
+          community: iface.community || '{$SNMP_COMMUNITY}',
+          contextName: iface.contextName || '',
+          securityName: iface.securityName || '',
+          securityLevel: Number(iface.securityLevel ?? 0),
+          authPassphrase: iface.authPassphrase || '',
+          privPassphrase: iface.privPassphrase || '',
+        }))
+      : [blankIface(true)]
+    createForm.macros = (detail.macros || []).map((m) => ({
+      macro: m.macro,
+      value: m.secret ? '' : m.value,
+      description: m.description || '',
+    }))
+    createForm.tags = (detail.tags || []).map((t) => ({ tag: t.tag, value: t.value || '' }))
+    createForm.inventoryMode = detail.inventoryMode ?? -1
+    createForm.inventory = { ...(detail.inventory || {}) }
+    createTab.value = 'host'
+    createVisible.value = true
+    await loadCreateProxies()
+  } finally {
+    creating.value = false
+  }
+}
+
+async function setHostsStatus(status: 0 | 1) {
+  if (!instanceCode.value || !selectedIds.value.length) return
+  const label = status === 0 ? '启用' : '禁用'
+  await ElMessageBox.confirm(`确认${label}选中的 ${selectedIds.value.length} 台主机？`, '提示', {
+    type: 'warning',
+  })
+  await massUpdateMonitorHosts(instanceCode.value, {
+    hostIds: [...selectedIds.value],
+    status,
+  })
+  ElMessage.success(`已${label} ${selectedIds.value.length} 台主机`)
+  await loadHosts(true)
+}
+
+async function deleteSelectedHosts() {
+  if (!instanceCode.value || !selectedIds.value.length) return
+  await ElMessageBox.confirm(
+    `确认从 Zabbix 删除选中的 ${selectedIds.value.length} 台主机？此操作不可恢复。`,
+    '删除主机',
+    { type: 'warning', confirmButtonText: '删除', confirmButtonClass: 'el-button--danger' },
+  )
+  await deleteMonitorHosts(instanceCode.value, [...selectedIds.value])
+  ElMessage.success('已删除')
+  selected.value = null
+  selectedIds.value = []
+  await loadHosts()
+}
+
+function openMassUpdate() {
+  if (!instanceCode.value || !selectedIds.value.length) return
+  massForm.useStatus = false
+  massForm.status = 0
+  massForm.useGroups = false
+  massForm.groupIds = []
+  massForm.useTemplates = false
+  massForm.templateAction = 'replace'
+  massForm.templateIds = []
+  massForm.useChannel = false
+  massForm.channel = 'direct'
+  massForm.proxyId = ''
+  massForm.proxyGroupId = ''
+  massVisible.value = true
+  void loadCreateProxies()
+  if (!schemeGroups.value.length || !schemeTemplates.value.length) {
+    void loadSchemeCatalog()
+  }
+}
+
+async function submitMassUpdate() {
+  if (!instanceCode.value || !selectedIds.value.length) return
+  const payload: MassUpdateHostsInput = { hostIds: [...selectedIds.value] }
+  if (massForm.useStatus) payload.status = massForm.status
+  if (massForm.useGroups) {
+    if (!massForm.groupIds.length) {
+      ElMessage.warning('请选择主机组')
+      return
+    }
+    payload.groupIds = [...massForm.groupIds]
+  }
+  if (massForm.useTemplates) {
+    payload.templateIds = [...massForm.templateIds]
+    payload.templateAction = massForm.templateAction
+  }
+  if (massForm.useChannel) {
+    payload.channel = massForm.channel
+    if (massForm.channel === 'proxy') {
+      if (!massForm.proxyId) {
+        ElMessage.warning('请选择 Proxy')
+        return
+      }
+      payload.proxyId = massForm.proxyId
+    }
+    if (massForm.channel === 'proxyGroup') {
+      if (!massForm.proxyGroupId) {
+        ElMessage.warning('请选择 Proxy Group')
+        return
+      }
+      payload.proxyGroupId = massForm.proxyGroupId
+    }
+  }
+  if (!massForm.useStatus && !massForm.useGroups && !massForm.useTemplates && !massForm.useChannel) {
+    ElMessage.warning('请至少勾选一项要更新的内容')
+    return
+  }
+  massSaving.value = true
+  try {
+    await massUpdateMonitorHosts(instanceCode.value, payload)
+    ElMessage.success(`已更新 ${selectedIds.value.length} 台主机`)
+    massVisible.value = false
+    await loadHosts(true)
+  } finally {
+    massSaving.value = false
+  }
+}
+
+function addIface() {
+  createForm.interfaces.push(blankIface(false))
+}
+
+function removeIface(idx: number) {
+  if (createForm.interfaces.length <= 1) return
+  const wasMain = createForm.interfaces[idx].main
+  createForm.interfaces.splice(idx, 1)
+  if (wasMain && createForm.interfaces.length) {
+    createForm.interfaces[0].main = true
+  }
+}
+
+function setMainIface(idx: number) {
+  createForm.interfaces.forEach((iface, i) => {
+    iface.main = i === idx
+  })
+}
+
+function onIfaceTypeChange(iface: CreateIface) {
+  if (!iface.port) iface.port = defaultPort(iface.type)
+}
+
+function buildCreatePayload(): UpdateMonitorHostInput {
+  const interfaces = createForm.interfaces.map((iface, idx) => {
+    const row: NonNullable<CreateMonitorHostInput['interfaces']>[number] = {
+      interfaceId: iface.interfaceId || undefined,
+      type: iface.type,
+      main: (iface.main || idx === 0) ? 1 : 0,
+      useip: iface.useip,
+      ip: iface.ip.trim(),
+      dns: iface.dns.trim(),
+      port: iface.port.trim() || defaultPort(iface.type),
+    }
+    if (iface.type === 2) {
+      row.details = {
+        version: iface.snmpVersion,
+        community: iface.community || '{$SNMP_COMMUNITY}',
+        contextname: iface.contextName,
+        securityname: iface.securityName,
+        securitylevel: iface.securityLevel,
+        authpassphrase: iface.authPassphrase,
+        privpassphrase: iface.privPassphrase,
+      }
+      if (iface.snmpVersion !== 3) {
+        row.community = iface.community
+        row.snmpVersion = iface.snmpVersion
+      }
+    }
+    return row
+  })
+  const payload: UpdateMonitorHostInput = {
+    hostname: createForm.hostname.trim(),
+    displayName: createForm.displayName.trim() || undefined,
+    status: createForm.status,
+    groupIds: createForm.groupIds,
+    templateIds: createForm.templateIds,
+    interfaces,
+  }
+  payload.channel = createForm.channel
+  if (createForm.channel === 'proxy' && createForm.proxyId) {
+    payload.proxyId = createForm.proxyId
+  }
+  if (createForm.channel === 'proxyGroup' && createForm.proxyGroupId) {
+    payload.proxyGroupId = createForm.proxyGroupId
+  }
+  if (!editingHostId.value && createForm.ciId) payload.ciId = createForm.ciId
+  const macros = createForm.macros
+    .filter((m) => m.macro.trim())
+    .map((m) => ({
+      macro: m.macro.trim(),
+      value: m.value,
+      description: m.description || undefined,
+    }))
+  if (macros.length || editingHostId.value) payload.macros = macros
+  const tags = createForm.tags
+    .filter((t) => t.tag.trim())
+    .map((t) => ({ tag: t.tag.trim(), value: t.value || '' }))
+  if (tags.length || editingHostId.value) payload.tags = tags
+  payload.inventoryMode = createForm.inventoryMode
+  if (createForm.inventoryMode !== -1) {
+    const inv: Record<string, string> = {}
+    for (const f of inventoryFields) {
+      const v = (createForm.inventory[f.key] || '').trim()
+      if (v) inv[f.key] = v
+    }
+    payload.inventory = inv
+  }
+  return payload
+}
+
+async function submitCreateHost() {
+  if (!instanceCode.value) return
+  if (!createForm.hostname.trim()) {
+    ElMessage.warning('请填写主机名')
+    createTab.value = 'host'
+    return
+  }
+  if (!createForm.groupIds.length) {
+    ElMessage.warning('请选择主机组')
+    createTab.value = 'host'
+    return
+  }
+  for (let i = 0; i < createForm.interfaces.length; i++) {
+    const iface = createForm.interfaces[i]
+    if (iface.useip === 1 && !iface.ip.trim()) {
+      ElMessage.warning(`接口 ${i + 1} 请填写 IP`)
+      createTab.value = 'ifaces'
+      return
+    }
+    if (iface.useip === 0 && !iface.dns.trim()) {
+      ElMessage.warning(`接口 ${i + 1} 请填写 DNS`)
+      createTab.value = 'ifaces'
+      return
+    }
+  }
+  if (!createForm.interfaces.some((i) => i.main)) {
+    createForm.interfaces[0].main = true
+  }
+  creating.value = true
+  try {
+    const payload = buildCreatePayload()
+    if (editingHostId.value) {
+      await updateMonitorHost(instanceCode.value, editingHostId.value, payload)
+      ElMessage.success('主机已保存')
+    } else {
+      const res = await registerMonitorHost(instanceCode.value, payload)
+      ElMessage.success(res.created ? `已创建主机 ${res.hostId}` : `主机已存在，已更新关联 ${res.hostId}`)
+    }
+    createVisible.value = false
+    editingHostId.value = ''
+    await loadHosts(true)
+  } finally {
+    creating.value = false
+  }
 }
 
 async function searchCi(keyword: string) {
@@ -921,23 +1758,35 @@ async function searchCi(keyword: string) {
   }
 }
 
-async function submitRegister() {
-  if (!instanceCode.value || !registerCiId.value || !registerGroups.value.length) {
-    ElMessage.warning('请选择配置项和主机组')
-    return
+function attrText(attrs: Record<string, unknown>, keys: string[]): string {
+  for (const k of keys) {
+    const v = attrs[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+    if (typeof v === 'number') return String(v)
   }
-  registering.value = true
+  return ''
+}
+
+async function onCreateCiChange(ciId: string | null | undefined) {
+  if (!ciId) return
+  ciLoading.value = true
   try {
-    const res = await registerMonitorHost(instanceCode.value, {
-      ciId: registerCiId.value,
-      groupIds: registerGroups.value,
-      templateIds: registerTemplates.value,
-    })
-    ElMessage.success(res.created ? '已创建 Zabbix 主机' : '已更新已有 Zabbix 主机')
-    registerVisible.value = false
-    await loadHosts(true)
+    const ci = await getCiInstance(ciId)
+    const attrs = ci.attributes || {}
+    const hostname = attrText(attrs, ['hostname']) || ci.name
+    const ip = attrText(attrs, ['ip', 'mgmt_ip', 'bk_host_innerip'])
+    if (!createForm.hostname.trim()) createForm.hostname = hostname
+    if (!createForm.displayName.trim()) createForm.displayName = ci.name
+    const main = createForm.interfaces[0]
+    if (main && main.useip === 1 && !main.ip.trim() && ip) {
+      main.ip = ip
+    }
+    ElMessage.success('已从配置项带入主机名/IP，可继续改接口与模板')
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '读取配置项失败'
+    ElMessage.error(msg)
   } finally {
-    registering.value = false
+    ciLoading.value = false
   }
 }
 
@@ -951,21 +1800,31 @@ async function runAction(action: MonitorAction) {
   await submitTask(action)
 }
 
-function openUpgrade() {
-  targetVersion.value = ''
+async function openUpgrade() {
+  upgradeAction.value = 'upgrade'
+  upgradePackageId.value = ''
+  try {
+    agentPackages.value = (await listAgentPackages()).filter((p) => p.enabled)
+    upgradePackageId.value = agentPackages.value[0]?.id || ''
+  } catch {
+    agentPackages.value = []
+  }
+  if (!agentPackages.value.length) {
+    ElMessage.warning('无可用 Agent 包，请先到部署配置上传')
+  }
   upgradeVisible.value = true
 }
 
 async function confirmUpgrade() {
-  if (!targetVersion.value.trim()) {
-    ElMessage.warning('请填写目标版本')
+  if (!upgradePackageId.value) {
+    ElMessage.warning('请选择 Agent 包')
     return
   }
   upgradeVisible.value = false
-  await submitTask('upgrade', targetVersion.value.trim())
+  await submitTask(upgradeAction.value, undefined, upgradePackageId.value)
 }
 
-async function submitTask(action: MonitorAction, version?: string) {
+async function submitTask(action: MonitorAction, version?: string, packageId?: string) {
   taskSubmitting.value = true
   try {
     const res = await createTask({
@@ -973,6 +1832,7 @@ async function submitTask(action: MonitorAction, version?: string) {
       action,
       hostIds: selectedIds.value,
       targetVersion: version,
+      packageId,
     })
     ElMessage.success('任务已创建')
     await refreshTask(res.id)
@@ -1117,6 +1977,34 @@ async function refreshTask(id: string) {
 }
 .detail-title {
   font-size: 16px;
+  font-weight: 600;
+}
+.cmdb-link {
+  cursor: pointer;
+}
+.cmdb-link:hover {
+  opacity: 0.85;
+}
+.field-hint {
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.create-toolbar {
+  margin-bottom: 10px;
+}
+.iface-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  padding: 10px 12px 4px;
+  margin-bottom: 12px;
+}
+.iface-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
   font-weight: 600;
 }
 .detail-sub {

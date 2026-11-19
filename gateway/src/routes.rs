@@ -56,6 +56,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .merge(crate::aiops_routes::routes())
         .merge(crate::log_routes::routes())
         .merge(crate::monitor_routes::routes())
+        .merge(crate::monitor_agent_pkg::routes())
         .merge(crate::ops_tool_routes::routes())
         .route("/api/systems", get(list_systems))
         .route("/api/systems/:id", get(get_system))

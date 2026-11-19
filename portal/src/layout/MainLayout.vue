@@ -16,26 +16,34 @@
           active-text-color="#409EFF"
           router
         >
-          <template v-for="g in menuGroups" :key="g.type === 'item' ? g.path : g.title">
-            <!-- 独立一级菜单 -->
+          <template v-for="g in menuGroups" :key="menuNodeKey(g)">
             <el-menu-item v-if="g.type === 'item'" :index="g.path">
               <el-icon><component :is="g.icon" /></el-icon>
-              <template #title>{{ g.title }}</template>
+              <template #title>{{ g.planned ? `${g.title}（规划中）` : g.title }}</template>
             </el-menu-item>
-            <!-- 二级菜单分组 -->
             <el-sub-menu v-else :index="g.title">
               <template #title>
                 <el-icon><component :is="g.icon" /></el-icon>
                 <span>{{ g.title }}</span>
               </template>
-              <el-menu-item
-                v-for="c in g.children"
-                :key="c.path"
-                :index="c.path"
-              >
-                <el-icon><component :is="c.icon" /></el-icon>
-                <template #title>{{ c.planned ? `${c.title}（规划中）` : c.title }}</template>
-              </el-menu-item>
+              <template v-for="c in g.children" :key="menuNodeKey(c)">
+                <el-menu-item v-if="c.type === 'item'" :index="c.path">
+                  <el-icon><component :is="c.icon" /></el-icon>
+                  <template #title>{{ c.planned ? `${c.title}（规划中）` : c.title }}</template>
+                </el-menu-item>
+                <el-sub-menu v-else :index="c.title">
+                  <template #title>
+                    <el-icon><component :is="c.icon" /></el-icon>
+                    <span>{{ c.title }}</span>
+                  </template>
+                  <template v-for="leaf in c.children" :key="menuNodeKey(leaf)">
+                    <el-menu-item v-if="leaf.type === 'item'" :index="leaf.path">
+                      <el-icon><component :is="leaf.icon" /></el-icon>
+                      <template #title>{{ leaf.planned ? `${leaf.title}（规划中）` : leaf.title }}</template>
+                    </el-menu-item>
+                  </template>
+                </el-sub-menu>
+              </template>
             </el-sub-menu>
           </template>
         </el-menu>
@@ -336,96 +344,117 @@ function formatNotifTime(s: string): string {
   return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-// 菜单分组：态势中心独立一级，其余按运维场景分 4 组（资产/监控/运维/后台）
+// 菜单：一级场景分组；「监控告警」下再挂「主机监控」子组
 type MenuItem = { path: string; title: string; icon: string; permission?: string; planned?: boolean }
-type MenuGroup =
+type MenuNode =
   | ({ type: 'item' } & MenuItem)
-  | { type: 'sub'; title: string; icon: string; children: MenuItem[] }
+  | { type: 'sub'; title: string; icon: string; children: MenuNode[] }
+type MenuGroup = MenuNode
+
+function menuNodeKey(n: MenuNode): string {
+  return n.type === 'item' ? n.path : `sub:${n.title}`
+}
+
+function filterMenuNode(n: MenuNode): MenuNode | null {
+  if (n.type === 'item') {
+    if (n.permission && !userStore.hasPermission(n.permission)) return null
+    return n
+  }
+  const children = n.children
+    .map(filterMenuNode)
+    .filter((c): c is MenuNode => c != null)
+  if (!children.length) return null
+  return { ...n, children }
+}
+
+function collectOpeneds(nodes: MenuNode[], out: string[] = []): string[] {
+  for (const n of nodes) {
+    if (n.type === 'sub') {
+      out.push(n.title)
+      collectOpeneds(n.children, out)
+    }
+  }
+  return out
+}
 
 const allMenuGroups: MenuGroup[] = [
   {
     type: 'sub', title: '工作台', icon: 'HomeFilled', children: [
-      { path: '/dashboard', title: '个人工作台', icon: 'HomeFilled' },
+      { type: 'item', path: '/dashboard', title: '个人工作台', icon: 'HomeFilled' },
     ]
   },
   {
     type: 'sub', title: '运营分析', icon: 'DataAnalysis', children: [
-      { path: '/overview', title: '态势中心', icon: 'Monitor' },
-      { path: '/report', title: '报表中心', icon: 'TrendCharts', permission: 'audit:read' },
-      { path: '/audit', title: '审计中心', icon: 'Notebook', permission: 'audit:read' },
-      { path: '/cost', title: '费用中心', icon: 'Money', planned: true },
+      { type: 'item', path: '/overview', title: '态势中心', icon: 'Monitor' },
+      { type: 'item', path: '/report', title: '报表中心', icon: 'TrendCharts', permission: 'audit:read' },
+      { type: 'item', path: '/audit', title: '审计中心', icon: 'Notebook', permission: 'audit:read' },
+      { type: 'item', path: '/cost', title: '费用中心', icon: 'Money', planned: true },
     ]
   },
   {
     type: 'sub', title: '资产管理', icon: 'Platform', children: [
-      { path: '/assets', title: '资产清单', icon: 'Connection', permission: 'asset:read' },
-      { path: '/cmdb/models', title: 'CI 模型', icon: 'Files', permission: 'asset:read' },
-      { path: '/cmdb/relation-types', title: '关系类型', icon: 'Link', permission: 'asset:read' },
-      { path: '/topology', title: '拓扑视图', icon: 'Share', permission: 'asset:read' },
-      { path: '/sync-sources', title: '数据源同步', icon: 'Promotion', permission: 'asset:read' },
-      { path: '/containers', title: '容器管理', icon: 'Box', planned: true },
-      { path: '/database', title: 'DB数据库', icon: 'Coin', planned: true },
-      { path: '/config', title: '配置中心', icon: 'Setting', planned: true },
+      { type: 'item', path: '/assets', title: '资产清单', icon: 'Connection', permission: 'asset:read' },
+      { type: 'item', path: '/cmdb/models', title: 'CI 模型', icon: 'Files', permission: 'asset:read' },
+      { type: 'item', path: '/cmdb/relation-types', title: '关系类型', icon: 'Link', permission: 'asset:read' },
+      { type: 'item', path: '/topology', title: '拓扑视图', icon: 'Share', permission: 'asset:read' },
+      { type: 'item', path: '/sync-sources', title: '数据源同步', icon: 'Promotion', permission: 'asset:read' },
+      { type: 'item', path: '/containers', title: '容器管理', icon: 'Box', planned: true },
+      { type: 'item', path: '/database', title: 'DB数据库', icon: 'Coin', planned: true },
+      { type: 'item', path: '/config', title: '配置中心', icon: 'Setting', planned: true },
     ]
   },
   {
     type: 'sub', title: '监控告警', icon: 'Bell', children: [
-      { path: '/alerts', title: '告警中心', icon: 'BellFilled' },
-      { path: '/alerts/screen', title: '告警大屏', icon: 'Monitor' },
-      { path: '/notification/channels', title: '通知通道', icon: 'Message', permission: 'notification:read' },
-      { path: '/notification/sms-strategies', title: '通知策略', icon: 'BellFilled', permission: 'sms_strategy:read' },
-      { path: '/notification/alert-groups', title: '告警组维护', icon: 'UserFilled', permission: 'alert_group:read' },
-      { path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
-      { path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
-      { path: '/monitor', title: '监控纳管', icon: 'Monitor', permission: 'monitor:read' },
-      { path: '/monitor/install', title: '安装 Agent', icon: 'Download', permission: 'monitor:read' },
-      { path: '/monitor/templates', title: '模板库', icon: 'Files', permission: 'monitor:read' },
-      { path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
+      { type: 'item', path: '/alerts', title: '告警中心', icon: 'BellFilled' },
+      { type: 'item', path: '/alerts/screen', title: '告警大屏', icon: 'Monitor' },
+      { type: 'item', path: '/notification/channels', title: '通知通道', icon: 'Message', permission: 'notification:read' },
+      { type: 'item', path: '/notification/sms-strategies', title: '通知策略', icon: 'BellFilled', permission: 'sms_strategy:read' },
+      { type: 'item', path: '/notification/alert-groups', title: '告警组维护', icon: 'UserFilled', permission: 'alert_group:read' },
+      { type: 'item', path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
+      { type: 'item', path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
+      { type: 'item', path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
+    ]
+  },
+  {
+    type: 'sub', title: '主机监控', icon: 'Monitor', children: [
+      { type: 'item', path: '/monitor', title: '主机名册', icon: 'Monitor', permission: 'monitor:read' },
+      { type: 'item', path: '/monitor/install', title: '安装 Agent', icon: 'Download', permission: 'monitor:agent' },
+      { type: 'item', path: '/monitor/templates', title: '模板库', icon: 'Files', permission: 'monitor:read' },
+      { type: 'item', path: '/monitor/agent-packages', title: '部署配置', icon: 'Box', permission: 'monitor:agent' },
     ]
   },
   {
     type: 'sub', title: '运维流程', icon: 'Operation', children: [
-      { path: '/jobs', title: '作业中心', icon: 'List' },
-      { path: '/ops-tools', title: '运维工具', icon: 'SetUp', permission: 'ops_tool:read' },
-      { path: '/system/credentials', title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' },
-      { path: '/tickets', title: '工单系统', icon: 'Tickets', permission: 'ticket:read' },
-      { path: '/tickets/stats', title: '工单统计', icon: 'DataAnalysis', permission: 'ticket:read' },
-      { path: '/workflows', title: '流程模板', icon: 'Share', permission: 'workflow:read' },
-      { path: '/knowledge', title: '知识库', icon: 'Collection', permission: 'knowledge:read' },
+      { type: 'item', path: '/jobs', title: '作业中心', icon: 'List' },
+      { type: 'item', path: '/ops-tools', title: '运维工具', icon: 'SetUp', permission: 'ops_tool:read' },
+      { type: 'item', path: '/system/credentials', title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' },
+      { type: 'item', path: '/tickets', title: '工单系统', icon: 'Tickets', permission: 'ticket:read' },
+      { type: 'item', path: '/tickets/stats', title: '工单统计', icon: 'DataAnalysis', permission: 'ticket:read' },
+      { type: 'item', path: '/workflows', title: '流程模板', icon: 'Share', permission: 'workflow:read' },
+      { type: 'item', path: '/knowledge', title: '知识库', icon: 'Collection', permission: 'knowledge:read' },
     ]
   },
   {
     type: 'sub', title: '后台管理', icon: 'User', children: [
-      { path: '/system/users', title: '用户管理', icon: 'User', permission: 'user:read' },
-      { path: '/system/roles', title: '角色管理', icon: 'UserFilled', permission: 'role:read' },
-      { path: '/system/departments', title: '部门管理', icon: 'OfficeBuilding', permission: 'dept:read' },
-      { path: '/system', title: '系统设置', icon: 'Tools', permission: 'system:read' },
-      { path: '/system/components', title: '组件状态', icon: 'Monitor', permission: 'system:read' },
-      { path: '/system/api-tokens', title: 'API 令牌', icon: 'Key', permission: 'system:read' },
-      { path: '/system/dict', title: '字典管理', icon: 'Collection', permission: 'dict:read' },
-      { path: '/system/license', title: '授权管理', icon: 'Key', permission: 'system:read' },
+      { type: 'item', path: '/system/users', title: '用户管理', icon: 'User', permission: 'user:read' },
+      { type: 'item', path: '/system/roles', title: '角色管理', icon: 'UserFilled', permission: 'role:read' },
+      { type: 'item', path: '/system/departments', title: '部门管理', icon: 'OfficeBuilding', permission: 'dept:read' },
+      { type: 'item', path: '/system', title: '系统设置', icon: 'Tools', permission: 'system:read' },
+      { type: 'item', path: '/system/components', title: '组件状态', icon: 'Monitor', permission: 'system:read' },
+      { type: 'item', path: '/system/api-tokens', title: 'API 令牌', icon: 'Key', permission: 'system:read' },
+      { type: 'item', path: '/system/dict', title: '字典管理', icon: 'Collection', permission: 'dict:read' },
+      { type: 'item', path: '/system/license', title: '授权管理', icon: 'Key', permission: 'system:read' },
     ]
   },
 ]
 
-// 按权限过滤菜单：无 permission 字段的项始终显示；有则检查 hasPermission。
-// 分组内子项全部被过滤后，整个分组隐藏。
 const menuGroups = computed<MenuGroup[]>(() => {
   return allMenuGroups
-    .map((g) => {
-      if (g.type === 'item') return g
-      const children = g.children.filter((c) => !c.permission || userStore.hasPermission(c.permission))
-      return { ...g, children }
-    })
-    .filter((g) => g.type === 'item' || g.children.length > 0)
+    .map(filterMenuNode)
+    .filter((g): g is MenuGroup => g != null)
 })
 
-// 默认展开所有分组：运维平台菜单项不多，全展开方便快速导航，用户可手动折叠
-const defaultOpeneds = computed(() =>
-  menuGroups.value
-    .filter((g): g is Extract<MenuGroup, { type: 'sub' }> => g.type === 'sub')
-    .map((g) => g.title),
-)
+const defaultOpeneds = computed(() => collectOpeneds(menuGroups.value))
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta.title as string || '')

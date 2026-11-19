@@ -7,6 +7,7 @@
 //!   PUT    /api/credentials/:id         更新凭据(空字段=不修改)              (credential:create)
 //!   DELETE /api/credentials/:id         删除凭据(有作业引用时禁止)           (credential:delete)
 //!   GET    /api/credentials/list-all    不分页简易列表(供作业定义下拉选择)    (credential:read)
+//!   POST   /api/credentials/test        测试 SSH 连通与认证                   (credential:create)
 
 use std::net::SocketAddr;
 
@@ -21,6 +22,7 @@ use crate::auth;
 use crate::crypto;
 use crate::error::AppError;
 use crate::routes::AppState;
+use crate::ssh_executor;
 
 pub fn routes() -> Router<std::sync::Arc<AppState>> {
     Router::new()
@@ -28,6 +30,7 @@ pub fn routes() -> Router<std::sync::Arc<AppState>> {
             "/api/credentials",
             get(list_credentials).post(create_credential),
         )
+        .route("/api/credentials/test", post(test_credential))
         .route(
             "/api/credentials/:id",
             get(get_credential)
@@ -94,6 +97,26 @@ struct UpdateCredentialRequest {
     host_key_fingerprint: Option<String>,
     #[serde(default)]
     description: Option<String>,
+}
+
+/// 测试连接：凭据不绑主机，必须带目标 host/port。
+/// 编辑时敏感字段可留空，传 credentialId 则用库里已存的密码/私钥。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TestCredentialRequest {
+    host: String,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    credential_id: Option<i64>,
+    auth_type: String,
+    username: String,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    private_key: Option<String>,
+    #[serde(default)]
+    passphrase: Option<String>,
 }
 
 // ===== 列表 =====
@@ -448,6 +471,119 @@ async fn delete_credential(
         "code": 0,
         "message": "凭据已删除"
     })))
+}
+
+async fn test_credential(
+    State(state): State<std::sync::Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: auth::AuthUser,
+    Json(req): Json<TestCredentialRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::require_permission(&auth, "credential:create")?;
+    crate::license_routes::require_active_license(&state.db).await?;
+
+    let host = req.host.trim();
+    if host.is_empty() {
+        return Err(AppError::bad("请填写测试目标主机 IP 或域名"));
+    }
+    let username = req.username.trim();
+    if username.is_empty() {
+        return Err(AppError::bad("请填写 SSH 用户名"));
+    }
+    let auth_type = req.auth_type.trim();
+    if auth_type != "password" && auth_type != "key" {
+        return Err(AppError::bad("认证方式须为 password 或 key"));
+    }
+    let port = req.port.unwrap_or(22);
+
+    let mut password = req.password.unwrap_or_default();
+    let mut private_key = req.private_key.unwrap_or_default();
+    let mut passphrase = req.passphrase.unwrap_or_default();
+
+    if let Some(cid) = req.credential_id.filter(|id| *id > 0) {
+        let stored = ssh_executor::load_credential(&state.db, cid).await?;
+        if auth_type == "password" && password.is_empty() {
+            password = stored.password;
+        }
+        if auth_type == "key" {
+            if private_key.is_empty() {
+                private_key = stored.private_key_pem;
+            }
+            if passphrase.is_empty() {
+                passphrase = stored.passphrase;
+            }
+        }
+    }
+
+    if auth_type == "password" && password.is_empty() {
+        return Err(AppError::bad("请填写密码，或选择已保存的凭据进行测试"));
+    }
+    if auth_type == "key" && private_key.is_empty() {
+        return Err(AppError::bad("请粘贴私钥，或选择已保存的凭据进行测试"));
+    }
+
+    let result = ssh_executor::test_connection(
+        host,
+        port,
+        auth_type,
+        username,
+        &password,
+        &private_key,
+        &passphrase,
+    )
+    .await;
+
+    match result {
+        Ok(latency_ms) => {
+            audit::log_async(
+                &state.db,
+                &auth,
+                "test_credential",
+                "ssh_credential",
+                &req.credential_id.map(|id| id.to_string()).unwrap_or_default(),
+                Some(&serde_json::json!({
+                    "host": host,
+                    "port": port,
+                    "username": username,
+                    "authType": auth_type,
+                    "ok": true,
+                    "latencyMs": latency_ms,
+                })),
+                &addr.ip().to_string(),
+                "success",
+            )
+            .await;
+            Ok(Json(serde_json::json!({
+                "code": 0,
+                "data": {
+                    "ok": true,
+                    "latencyMs": latency_ms,
+                    "message": format!("连接成功（{latency_ms} ms）"),
+                }
+            })))
+        }
+        Err(err) => {
+            audit::log_async(
+                &state.db,
+                &auth,
+                "test_credential",
+                "ssh_credential",
+                &req.credential_id.map(|id| id.to_string()).unwrap_or_default(),
+                Some(&serde_json::json!({
+                    "host": host,
+                    "port": port,
+                    "username": username,
+                    "authType": auth_type,
+                    "ok": false,
+                    "error": err,
+                })),
+                &addr.ip().to_string(),
+                "failed",
+            )
+            .await;
+            Err(AppError::bad(&err))
+        }
+    }
 }
 
 // ===== 工具函数 =====

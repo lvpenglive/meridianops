@@ -147,8 +147,28 @@
         <el-form-item label="描述" prop="description">
           <el-input v-model="form.description" placeholder="简要描述凭据用途" maxlength="500" show-word-limit />
         </el-form-item>
+
+        <el-divider content-position="left">测试连接</el-divider>
+        <el-form-item label="目标主机" required>
+          <el-input
+            v-model="testHost"
+            placeholder="IP 或域名，例如 47.114.59.131（仅用于测试，不写入凭据）"
+          />
+        </el-form-item>
+        <el-form-item label="端口">
+          <el-input-number v-model="testPort" :min="1" :max="65535" controls-position="right" />
+        </el-form-item>
+        <el-alert
+          v-if="testResult"
+          :type="testResult.ok ? 'success' : 'error'"
+          :closable="false"
+          show-icon
+          class="test-result"
+          :title="testResult.message"
+        />
       </el-form>
       <template #footer>
+        <el-button :loading="testing" @click="handleTest">测试连接</el-button>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleSubmit">保存</el-button>
       </template>
@@ -161,7 +181,7 @@ import { computed, reactive, ref, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Search, Refresh, Plus, Edit, Delete, Key } from '@element-plus/icons-vue'
 import {
-  listCredentials, getCredential, createCredential, updateCredential, deleteCredential,
+  listCredentials, getCredential, createCredential, updateCredential, deleteCredential, testCredential,
   type SshCredential, type AuthType, type CreateCredentialPayload,
 } from '../../api/credential'
 import { useUserStore } from '../../stores/user'
@@ -205,6 +225,10 @@ const form = reactive({
   description: '',
 })
 const submitting = ref(false)
+const testing = ref(false)
+const testHost = ref('')
+const testPort = ref(22)
+const testResult = ref<{ ok: boolean; message: string } | null>(null)
 
 const formRules = computed<FormRules>(() => ({
   name: [
@@ -229,6 +253,9 @@ function openCreate() {
     password: '', privateKey: '', passphrase: '',
     hostKeyFingerprint: '', description: '',
   })
+  testHost.value = ''
+  testPort.value = 22
+  testResult.value = null
   dialogVisible.value = true
 }
 
@@ -247,9 +274,52 @@ async function openEdit(row: SshCredential) {
       hostKeyFingerprint: detail.hostKeyFingerprint || '',
       description: detail.description || '',
     })
+    testHost.value = ''
+    testPort.value = 22
+    testResult.value = null
     dialogVisible.value = true
   } catch (e: any) {
     ElMessage.error(e?.message || '加载凭据详情失败')
+  }
+}
+
+async function handleTest() {
+  if (!testHost.value.trim()) {
+    ElMessage.warning('请填写测试目标主机')
+    return
+  }
+  if (!form.username.trim()) {
+    ElMessage.warning('请填写 SSH 用户名')
+    return
+  }
+  if (form.authType === 'password' && !form.password && !(isEdit.value && editingId.value)) {
+    ElMessage.warning('请填写密码')
+    return
+  }
+  if (form.authType === 'key' && !form.privateKey && !(isEdit.value && editingId.value)) {
+    ElMessage.warning('请粘贴私钥')
+    return
+  }
+  testing.value = true
+  testResult.value = null
+  try {
+    const res = await testCredential({
+      host: testHost.value.trim(),
+      port: testPort.value || 22,
+      credentialId: isEdit.value && editingId.value ? editingId.value : undefined,
+      authType: form.authType,
+      username: form.username.trim(),
+      password: form.password || undefined,
+      privateKey: form.privateKey || undefined,
+      passphrase: form.passphrase || undefined,
+    })
+    testResult.value = { ok: true, message: res.message || `连接成功（${res.latencyMs} ms）` }
+    ElMessage.success(testResult.value.message)
+  } catch (e: any) {
+    const msg = e?.message || '连接失败'
+    testResult.value = { ok: false, message: msg }
+  } finally {
+    testing.value = false
   }
 }
 
@@ -352,5 +422,9 @@ onMounted(() => {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+}
+.test-result {
+  margin: 0 0 8px 120px;
+  width: calc(100% - 120px);
 }
 </style>

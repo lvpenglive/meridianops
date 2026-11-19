@@ -446,15 +446,16 @@ async fn execute_job(
         .collect::<Vec<_>>()
         .join(",");
     // 从 JSON attributes 中尽量推断 IP：key 名为 ip/mgmt_ip/bk_host_innerip 之一
+    // CAST AS CHAR：MySQL JSON_UNQUOTE 结果类型不稳定，sqlx 直接 decode String 会失败得到空 IP
     let sql_str = format!(
         "SELECT i.id, \
                 i.name, \
-                COALESCE(\
-                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.ip')),\
-                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.mgmt_ip')),\
-                    JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.bk_host_innerip')),\
+                CAST(COALESCE(\
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.ip')), 'null'),\
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.mgmt_ip')), 'null'),\
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.bk_host_innerip')), 'null'),\
                     ''\
-                ) AS primary_ip, \
+                ) AS CHAR) AS primary_ip, \
                 m.code AS model_code, \
                 m.name AS model_name \
          FROM ci_instances i \
@@ -479,11 +480,31 @@ async fn execute_job(
         asset_map.entry(aid.clone()).or_insert_with(|| (format!("Asset#{}", aid), String::new()));
     }
 
-    // 4. 创建 job_run
+    // 4. 可选：解析 Agent 包并准备 SCP 推送
+    let mut env = req.env;
+    let mut upload_payload: Option<(String, Vec<u8>)> = None;
+    if let Some(package_id) = env.get("ZBX_PACKAGE_ID").cloned() {
+        let package_id = package_id.trim().to_string();
+        if !package_id.is_empty() {
+            let (filename, stored_path, sha256) =
+                crate::monitor_agent_pkg::resolve_package_path(&state.db, &package_id).await?;
+            let bytes = tokio::fs::read(&stored_path)
+                .await
+                .map_err(|e| AppError::bad(&format!("读取 Agent 包失败: {e}")))?;
+            let remote = format!("/tmp/meridianops_zbx_{}_{}", id, filename);
+            env.insert("ZBX_PACKAGE_FILE".to_string(), remote.clone());
+            if let Some(sha) = sha256.filter(|s| !s.is_empty()) {
+                env.insert("ZBX_PACKAGE_SHA256".to_string(), sha);
+            }
+            upload_payload = Some((remote, bytes));
+        }
+    }
+
+    // 5. 创建 job_run
     let script_type = def["scriptType"].as_str().unwrap_or("shell").to_string();
     let mut script_content = def["scriptContent"].as_str().unwrap_or("").to_string();
-    if !req.env.is_empty() {
-        script_content = format!("{}\n{}", shell_exports(&req.env)?, script_content);
+    if !env.is_empty() {
+        script_content = format!("{}\n{}", shell_exports(&env)?, script_content);
     }
     let job_name = def["name"].as_str().unwrap_or("Unknown Job").to_string();
 
@@ -502,7 +523,7 @@ async fn execute_job(
     .await?;
     let run_id = run_res.last_insert_id() as i64;
 
-    // 5. 为每个资产创建 target 记录
+    // 6. 为每个资产创建 target 记录
     for aid in &asset_ids {
         let (aname, aip) = asset_map.get(aid).cloned().unwrap_or_default();
         sqlx::query(
@@ -517,7 +538,7 @@ async fn execute_job(
         .await?;
     }
 
-    // 6. 启动异步执行（根据 executor_type 分发：mock / ssh）
+    // 7. 启动异步执行（根据 executor_type 分发：mock / ssh）
     let db_for_exec = state.db.clone();
     let db_for_error = state.db.clone();
     let script_snap = script_content.clone();
@@ -527,6 +548,7 @@ async fn execute_job(
     let credential_id = def["credentialId"].as_i64();
     let timeout_snap = def["timeoutSecs"].as_i64().unwrap_or(300);
     let ssh_port = def["port"].as_i64().unwrap_or(22);
+    let upload_snap = upload_payload;
 
     tokio::spawn(async move {
         let result = if executor_type == "mock" {
@@ -575,6 +597,7 @@ async fn execute_job(
                 timeout_snap,
                 cred_id,
                 ssh_port,
+                upload_snap,
             )
             .await
         };

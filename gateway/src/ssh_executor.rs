@@ -144,6 +144,7 @@ impl SshExecutor {
         script_content: &str,
         script_type: &str,
         timeout_secs: i64,
+        upload: Option<(String, Vec<u8>)>,
     ) -> Vec<SshExecResult> {
         let mut handles = Vec::with_capacity(targets.len());
 
@@ -152,6 +153,7 @@ impl SshExecutor {
             let script = script_content.to_string();
             let stype = script_type.to_string();
             let timeout = timeout_secs;
+            let upload = upload.clone();
             let cred = SshCredentialSnap {
                 username: self.credential.username.clone(),
                 password: self.credential.password.clone(),
@@ -162,7 +164,10 @@ impl SshExecutor {
 
             let handle = tokio::spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore closed");
-                execute_on_host(&target, &cred, &script, &stype, timeout).await
+                let upload_ref = upload
+                    .as_ref()
+                    .map(|(path, data)| (path.as_str(), data.as_slice()));
+                execute_on_host(&target, &cred, &script, &stype, timeout, upload_ref).await
             });
             handles.push(handle);
         }
@@ -201,6 +206,7 @@ async fn execute_on_host(
     script: &str,
     script_type: &str,
     timeout_secs: i64,
+    upload: Option<(&str, &[u8])>,
 ) -> SshExecResult {
     let start = Instant::now();
     let addr = format!("{}:{}", target.ip, target.port);
@@ -213,7 +219,7 @@ async fn execute_on_host(
 
     let result = tokio::time::timeout(
         timeout_dur,
-        ssh_connect_and_exec(&addr, cred, script, script_type),
+        ssh_connect_and_exec(&addr, cred, script, script_type, upload),
     )
     .await;
 
@@ -245,7 +251,7 @@ async fn execute_on_host(
     }
 }
 
-/// 建立 SSH 连接并执行脚本
+/// 建立 SSH 连接；可选先推送文件，再执行脚本。
 ///
 /// 返回 (stdout, stderr, exit_code)
 async fn ssh_connect_and_exec(
@@ -253,6 +259,7 @@ async fn ssh_connect_and_exec(
     cred: &SshCredentialSnap,
     script: &str,
     script_type: &str,
+    upload: Option<(&str, &[u8])>,
 ) -> Result<(String, String, i32), String> {
     // 1. 连接（带连接超时）
     let config = Arc::new(client::Config::default());
@@ -300,6 +307,11 @@ async fn ssh_connect_and_exec(
 
     if !auth_ok {
         return Err(format!("SSH 认证失败: 用户 {}", cred.username));
+    }
+
+    // 2.5 可选：推送安装包
+    if let Some((remote_path, bytes)) = upload {
+        ssh_upload_bytes(&mut handle, remote_path, bytes).await?;
     }
 
     // 3. 构造执行命令（脚本通过 stdin 传入）
@@ -357,6 +369,77 @@ async fn ssh_connect_and_exec(
     Ok((stdout_str, stderr_str, exit_code))
 }
 
+/// 通过 `cat > remote` 管道推送二进制文件。
+async fn ssh_upload_bytes(
+    handle: &mut Handle<SshClientHandler>,
+    remote_path: &str,
+    data: &[u8],
+) -> Result<(), String> {
+    if remote_path.is_empty()
+        || remote_path.contains('\n')
+        || remote_path.contains('\'')
+        || !remote_path.starts_with('/')
+    {
+        return Err("远程路径无效".to_string());
+    }
+    let parent = std::path::Path::new(remote_path)
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("/tmp");
+    let prep = format!("mkdir -p '{parent}'");
+    let mut ch = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("打开上传 session 失败: {e}"))?;
+    ch.exec(true, prep.as_str())
+        .await
+        .map_err(|e| format!("创建远程目录失败: {e}"))?;
+    while let Some(msg) = ch.wait().await {
+        match msg {
+            ChannelMsg::ExitStatus { exit_status } if exit_status != 0 => {
+                return Err(format!("创建远程目录失败，exit={exit_status}"));
+            }
+            ChannelMsg::Eof | ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+
+    let cmd = format!("cat > '{remote_path}'");
+    let mut channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("打开上传 channel 失败: {e}"))?;
+    channel
+        .exec(true, cmd.as_str())
+        .await
+        .map_err(|e| format!("启动远程写入失败: {e}"))?;
+
+    const CHUNK: usize = 32 * 1024;
+    for chunk in data.chunks(CHUNK) {
+        channel
+            .data(chunk)
+            .await
+            .map_err(|e| format!("写入远程文件失败: {e}"))?;
+    }
+    channel
+        .eof()
+        .await
+        .map_err(|e| format!("上传 EOF 失败: {e}"))?;
+
+    let mut exit_code = 0i32;
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status as i32,
+            ChannelMsg::Eof | ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+    if exit_code != 0 {
+        return Err(format!("远程写入退出码 {exit_code}"));
+    }
+    Ok(())
+}
+
 /// 根据脚本类型构造执行命令和 stdin 数据
 fn build_command(script: &str, script_type: &str) -> (String, Vec<u8>) {
     let bytes = script.as_bytes().to_vec();
@@ -365,6 +448,57 @@ fn build_command(script: &str, script_type: &str) -> (String, Vec<u8>) {
         "powershell" => ("pwsh -Command -".to_string(), bytes),
         _ => ("bash -s".to_string(), bytes),
     }
+}
+
+/// 仅验证「连得上 + 认证成功」，执行一条轻量命令后断开。
+/// 返回耗时毫秒。
+pub async fn test_connection(
+    host: &str,
+    port: u16,
+    auth_type: &str,
+    username: &str,
+    password: &str,
+    private_key_pem: &str,
+    passphrase: &str,
+) -> Result<u64, String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("请填写测试目标主机".into());
+    }
+    if username.trim().is_empty() {
+        return Err("请填写 SSH 用户名".into());
+    }
+    let port = if port == 0 { 22 } else { port };
+    let snap = SshCredentialSnap {
+        username: username.trim().to_string(),
+        password: password.to_string(),
+        private_key_pem: private_key_pem.to_string(),
+        passphrase: passphrase.to_string(),
+        auth_type: auth_type.to_string(),
+    };
+    let started = Instant::now();
+    let (stdout, stderr, exit_code) = ssh_connect_and_exec(
+        &format!("{host}:{port}"),
+        &snap,
+        "echo meridianops-ssh-ok",
+        "shell",
+        None,
+    )
+    .await?;
+    let ms = started.elapsed().as_millis() as u64;
+    if exit_code != 0 {
+        return Err(format!(
+            "已连通并认证，但测试命令失败 exit={exit_code} stderr={}",
+            stderr.trim()
+        ));
+    }
+    if !stdout.contains("meridianops-ssh-ok") {
+        return Err(format!(
+            "已连通并认证，但未收到预期输出: {}",
+            stdout.trim()
+        ));
+    }
+    Ok(ms)
 }
 
 // ===== 从数据库加载凭据 =====
@@ -463,6 +597,7 @@ pub async fn run_job_ssh_executor(
     timeout_secs: i64,
     credential_id: i64,
     ssh_port: i64,
+    upload: Option<(String, Vec<u8>)>,
 ) -> Result<(), AppError> {
     // 1. 加载凭据
     let credential = load_credential(&pool, credential_id).await?;
@@ -483,11 +618,30 @@ pub async fn run_job_ssh_executor(
         })
         .collect();
 
-    // 3. 并发执行
-    let executor = SshExecutor::new(credential, DEFAULT_MAX_CONCURRENCY);
-    let results = executor
-        .execute_batch(targets, &script_content, &script_type, timeout_secs)
-        .await;
+    // 无管理 IP 时直接失败，避免连到本机空地址（Windows 上常见 10061）
+    let mut results: Vec<SshExecResult> = Vec::new();
+    let mut pending: Vec<SshTarget> = Vec::new();
+    for t in targets {
+        if t.ip.trim().is_empty() {
+            results.push(SshExecResult::error(
+                t.asset_id,
+                format!("配置项 {} 缺少管理 IP（attributes.ip / mgmt_ip）", t.asset_name),
+                0,
+            ));
+        } else {
+            pending.push(t);
+        }
+    }
+
+    // 3. 并发执行（可选先推送安装包）
+    if !pending.is_empty() {
+        let executor = SshExecutor::new(credential, DEFAULT_MAX_CONCURRENCY);
+        results.extend(
+            executor
+                .execute_batch(pending, &script_content, &script_type, timeout_secs, upload)
+                .await,
+        );
+    }
 
     // 4. 逐条写入结果
     let mut success = 0i64;

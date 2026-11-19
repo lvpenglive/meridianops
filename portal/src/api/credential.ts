@@ -80,3 +80,17 @@ export function deleteCredential(id: number) {
 export function listAllCredentials() {
   return request.get<SshCredentialSimple[]>('/credentials/list-all')
 }
+
+/** 测试 SSH 连通与认证（凭据不绑主机，需传目标 host/port） */
+export function testCredential(payload: {
+  host: string
+  port?: number
+  credentialId?: number
+  authType: AuthType
+  username: string
+  password?: string
+  privateKey?: string
+  passphrase?: string
+}): Promise<{ ok: boolean; latencyMs: number; message: string }> {
+  return request.post('/credentials/test', payload, { timeout: 30000 })
+}

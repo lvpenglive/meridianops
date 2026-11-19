@@ -26,29 +26,66 @@
               </el-select>
             </el-form-item>
           </el-form>
-          <div class="group-head">
-            <span>模板组</span>
-            <el-button v-permission="'monitor:template'" link type="primary" @click="openGroup('template')">新建</el-button>
-          </div>
-          <el-menu :default-active="groupId" @select="groupId = $event">
-            <el-menu-item index="">全部</el-menu-item>
-            <el-menu-item v-for="item in templateGroups" :key="item.groupId" :index="item.groupId">
-              <span>{{ item.name }}</span>
-              <el-button v-permission="'monitor:template'" link @click.stop="renameGroup('template', item)">改名</el-button>
-              <el-button v-permission="'monitor:template'" link type="danger" @click.stop="removeGroup('template', item)">删除</el-button>
-            </el-menu-item>
-          </el-menu>
-          <div class="group-head">
-            <span>主机组</span>
-            <el-button v-permission="'monitor:template'" link type="primary" @click="openGroup('host')">新建</el-button>
-          </div>
-          <div v-for="item in hostGroups" :key="item.groupId" class="host-group">
-            <span>{{ item.name }}</span>
-            <span>
-              <el-button v-permission="'monitor:template'" link @click="renameGroup('host', item)">改名</el-button>
-              <el-button v-permission="'monitor:template'" link type="danger" @click="removeGroup('host', item)">删除</el-button>
-            </span>
-          </div>
+          <el-collapse v-model="groupPanels" class="group-collapse">
+            <el-collapse-item name="template">
+              <template #title>
+                <div class="group-head" @click.stop>
+                  <span>模板组（{{ templateGroups.length }}）</span>
+                  <el-button v-permission="'monitor:template'" link type="primary" @click.stop="openGroup('template')">
+                    新建
+                  </el-button>
+                </div>
+              </template>
+              <div class="group-scroll">
+                <el-menu :default-active="groupId" @select="groupId = $event">
+                  <el-menu-item index="">全部</el-menu-item>
+                  <el-menu-item v-for="item in templateGroups" :key="item.groupId" :index="item.groupId">
+                    <span class="group-name">{{ item.name }}</span>
+                    <span class="group-actions">
+                      <el-button v-permission="'monitor:template'" link @click.stop="renameGroup('template', item)">
+                        改名
+                      </el-button>
+                      <el-button
+                        v-permission="'monitor:template'"
+                        link
+                        type="danger"
+                        @click.stop="removeGroup('template', item)"
+                      >
+                        删除
+                      </el-button>
+                    </span>
+                  </el-menu-item>
+                </el-menu>
+              </div>
+            </el-collapse-item>
+            <el-collapse-item name="host">
+              <template #title>
+                <div class="group-head" @click.stop>
+                  <span>主机组（{{ hostGroups.length }}）</span>
+                  <el-button v-permission="'monitor:template'" link type="primary" @click.stop="openGroup('host')">
+                    新建
+                  </el-button>
+                </div>
+              </template>
+              <div class="group-scroll">
+                <div v-for="item in hostGroups" :key="item.groupId" class="host-group">
+                  <span class="group-name">{{ item.name }}</span>
+                  <span class="group-actions">
+                    <el-button v-permission="'monitor:template'" link @click="renameGroup('host', item)">改名</el-button>
+                    <el-button
+                      v-permission="'monitor:template'"
+                      link
+                      type="danger"
+                      @click="removeGroup('host', item)"
+                    >
+                      删除
+                    </el-button>
+                  </span>
+                </div>
+                <el-empty v-if="!hostGroups.length" description="暂无主机组" :image-size="48" />
+              </div>
+            </el-collapse-item>
+          </el-collapse>
         </el-card>
       </el-col>
       <el-col :span="17">
@@ -176,6 +213,7 @@ const templateVisible = ref(false)
 const importVisible = ref(false)
 const importSource = ref('')
 const draft = ref({ host: '', name: '', groupIds: [] as string[], parentTemplateIds: [] as string[] })
+const groupPanels = ref(['template', 'host'])
 
 const current = computed(() => instances.value.find((item) => item.code === instanceCode.value))
 
@@ -343,8 +381,40 @@ async function apply(id: string) {
 .page-title { display: flex; align-items: baseline; gap: 8px; font-size: 18px; }
 .page-sub { color: var(--el-text-color-secondary); font-size: 13px; }
 .banner { margin-bottom: 16px; }
-.group-head, .host-group, .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.group-head { margin: 8px 0; font-weight: 600; }
+.group-collapse { border: none; }
+.group-collapse :deep(.el-collapse-item__header) {
+  height: auto;
+  line-height: 1.4;
+  padding: 4px 0;
+}
+.group-collapse :deep(.el-collapse-item__wrap) { border-bottom: none; }
+.group-collapse :deep(.el-collapse-item__content) { padding-bottom: 8px; }
+.group-head,
+.host-group,
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.group-head {
+  width: 100%;
+  font-weight: 600;
+  padding-right: 8px;
+}
+.group-scroll {
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-actions { flex-shrink: 0; }
 .host-group { padding: 6px 0; }
 .toolbar { margin-bottom: 12px; }
 .changes { margin-top: 16px; }

@@ -31,7 +31,11 @@ export interface MonitorHost {
   hostId: string
   hostname: string
   displayName: string
+  /** Zabbix status：0 启用 / 1 禁用 */
+  status?: string
   ip: string
+  /** Agent 接口端口（Zabbix host interface） */
+  port?: string | null
   agentAvailable: boolean | null
   agentVersion: string | null
   ciId?: string | null
@@ -95,6 +99,7 @@ export function listHosts(
     groupId?: string
     agent?: 'online' | 'offline' | 'unknown'
     cmdb?: 'linked' | 'unlinked'
+    status?: '0' | '1' | 'enabled' | 'disabled'
   } = {},
 ): Promise<HostRoster> {
   return request.get(`/monitor/instances/${code}/hosts`, {
@@ -105,6 +110,7 @@ export function listHosts(
       groupId: params.groupId || undefined,
       agent: params.agent,
       cmdb: params.cmdb,
+      status: params.status,
     },
   })
 }
@@ -164,9 +170,45 @@ export function syncHosts(code: string): Promise<{ synced: number }> {
 export interface GovernanceProxy {
   proxyId: string
   name: string
+  address?: string
   lastAccess: number
   ageSecs: number | null
   online: boolean
+}
+
+export interface MonitorProxy {
+  proxyId: string
+  name: string
+  address: string
+  lastAccess: number
+  ageSecs: number | null
+  online: boolean
+}
+
+export function listProxies(code: string): Promise<MonitorProxy[]> {
+  return request.get(`/monitor/instances/${code}/proxies`)
+}
+
+export interface MonitorProxyGroupMember {
+  proxyId: string
+  name: string
+  address: string
+  online: boolean
+}
+
+export interface MonitorProxyGroup {
+  proxyGroupId: string
+  name: string
+  state: number
+  online: boolean
+  proxies: MonitorProxyGroupMember[]
+  addresses: string[]
+  serverCsv: string
+  serverActiveSemicolon: string
+}
+
+export function listProxyGroups(code: string): Promise<MonitorProxyGroup[]> {
+  return request.get(`/monitor/instances/${code}/proxy-groups`)
 }
 
 export interface GovernanceDrift {
@@ -206,6 +248,7 @@ export function createTask(data: {
   action: MonitorAction
   hostIds: string[]
   targetVersion?: string
+  packageId?: string
   concurrency?: number
 }): Promise<{ id: string }> {
   return request.post('/monitor/tasks', data)
@@ -288,11 +331,120 @@ export function saveHostMacros(
   return request.put(`/monitor/instances/${code}/hosts/${hostId}/macros`, { macros })
 }
 
+export interface HostInterfaceInput {
+  interfaceId?: string
+  type: number // 1 Agent 2 SNMP 3 IPMI 4 JMX
+  main?: number | boolean
+  useip?: number | boolean
+  ip?: string
+  dns?: string
+  port?: string
+  details?: Record<string, unknown>
+  community?: string
+  snmpVersion?: number
+}
+
+export interface CreateMonitorHostInput {
+  hostname?: string
+  displayName?: string
+  status?: number | string
+  ip?: string
+  port?: string
+  groupIds: string[]
+  templateIds?: string[]
+  /** direct | proxy | proxyGroup */
+  channel?: 'direct' | 'proxy' | 'proxyGroup' | string
+  proxyId?: string
+  proxyGroupId?: string
+  ciId?: string
+  interfaces?: HostInterfaceInput[]
+  macros?: Array<{ macro: string; value: string; type?: number; description?: string }>
+  tags?: Array<{ tag: string; value?: string }>
+  inventoryMode?: number
+  inventory?: Record<string, string>
+}
+
 export function registerMonitorHost(
   code: string,
-  data: { ciId: string; groupIds: string[]; templateIds?: string[] },
-): Promise<{ hostId: string; created: boolean }> {
+  data: CreateMonitorHostInput | { ciId: string; groupIds: string[]; templateIds?: string[] },
+): Promise<{ hostId: string; created: boolean; ip?: string }> {
   return request.post(`/monitor/instances/${code}/hosts`, data)
+}
+
+export interface MonitorHostDetail {
+  hostId: string
+  hostname: string
+  displayName: string
+  status: string
+  description?: string
+  groupIds: string[]
+  groups?: MonitorGroupRef[]
+  templateIds: string[]
+  templates?: MonitorTemplateRef[]
+  channel: 'direct' | 'proxy' | 'proxyGroup' | string
+  proxyId?: string
+  proxyGroupId?: string
+  interfaces: Array<HostInterfaceInput & {
+    interfaceId?: string
+    main?: boolean | number
+    snmpVersion?: number
+    community?: string
+    contextName?: string
+    securityName?: string
+    securityLevel?: number
+    authPassphrase?: string
+    privPassphrase?: string
+  }>
+  tags: Array<{ tag: string; value?: string }>
+  inventoryMode: number
+  inventory: Record<string, string>
+  macros: HostMacro[]
+}
+
+export type UpdateMonitorHostInput = CreateMonitorHostInput & {
+  status?: number | string
+  description?: string
+}
+
+export function getMonitorHost(code: string, hostId: string): Promise<MonitorHostDetail> {
+  return request.get(`/monitor/instances/${code}/hosts/${hostId}`)
+}
+
+export function updateMonitorHost(
+  code: string,
+  hostId: string,
+  data: UpdateMonitorHostInput,
+): Promise<MonitorHostDetail> {
+  return request.put(`/monitor/instances/${code}/hosts/${hostId}`, data)
+}
+
+export function deleteMonitorHosts(
+  code: string,
+  hostIds: string[],
+): Promise<{ hostIds: string[]; deleted: number }> {
+  return request.post(`/monitor/instances/${code}/hosts/delete`, { hostIds })
+}
+
+export interface MassUpdateHostsInput {
+  hostIds: string[]
+  status?: number | string
+  groupIds?: string[]
+  templateIds?: string[]
+  /** replace | link | unlink */
+  templateAction?: 'replace' | 'link' | 'unlink'
+  tags?: Array<{ tag: string; value?: string }>
+  inventoryMode?: number
+  inventory?: Record<string, string>
+  channel?: 'direct' | 'proxy' | 'proxyGroup'
+  proxyId?: string
+  proxyGroupId?: string
+}
+
+export function massUpdateMonitorHosts(
+  code: string,
+  data: MassUpdateHostsInput,
+): Promise<{ hostIds: string[]; updated: number }> {
+  return request.post(`/monitor/instances/${code}/hosts/massupdate`, data)
 }
 
 export function installAgents(data: {
@@ -300,11 +452,78 @@ export function installAgents(data: {
   ciIds: string[]
   groupIds: string[]
   templateIds: string[]
-  server: string
+  server?: string
+  agentPort?: string
   serverActive?: string
+  proxyId?: string
+  proxyGroupId?: string
+  packageId: string
+  installPath?: string
+  confSuffix?: string
   concurrency?: number
 }): Promise<{ id: string }> {
   return request.post('/monitor/tasks', { ...data, action: 'install' })
+}
+
+export interface AgentPackage {
+  id: string
+  name: string
+  version: string
+  osArch?: string | null
+  agentKind?: string | null
+  filename: string
+  fileSize: number
+  sha256?: string | null
+  description?: string | null
+  enabled: boolean
+  createdBy?: string | null
+  createdAt?: string | null
+  defaultInstallPath?: string
+}
+
+export function listAgentPackages(): Promise<AgentPackage[]> {
+  return request.get('/monitor/agent-packages')
+}
+
+export function uploadAgentPackage(form: FormData): Promise<AgentPackage> {
+  return request.post('/monitor/agent-packages', form, { timeout: 300000 })
+}
+
+export function updateAgentPackage(
+  id: string,
+  data: Partial<Pick<AgentPackage, 'name' | 'version' | 'osArch' | 'agentKind' | 'description' | 'enabled'>>,
+): Promise<AgentPackage> {
+  return request.put(`/monitor/agent-packages/${id}`, data)
+}
+
+export function deleteAgentPackage(id: string): Promise<{ id: string }> {
+  return request.delete(`/monitor/agent-packages/${id}`)
+}
+
+export interface ProxyConfMap {
+  id: number
+  instanceCode: string
+  proxyGroupId: string
+  confSuffix: string
+  remark?: string | null
+  createdAt?: string | null
+}
+
+export function listProxyConfMaps(): Promise<ProxyConfMap[]> {
+  return request.get('/monitor/proxy-conf-maps')
+}
+
+export function upsertProxyConfMap(data: {
+  instanceCode: string
+  proxyGroupId: string
+  confSuffix: string
+  remark?: string
+}): Promise<ProxyConfMap[]> {
+  return request.post('/monitor/proxy-conf-maps', data)
+}
+
+export function deleteProxyConfMap(id: number): Promise<{ id: number }> {
+  return request.delete(`/monitor/proxy-conf-maps/${id}`)
 }
 
 export function ackMonitorEvent(
