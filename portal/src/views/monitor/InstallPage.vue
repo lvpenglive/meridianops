@@ -5,7 +5,10 @@
         <span>安装 Agent</span>
         <span class="page-sub">选包 SCP 下发 → 解压到可配目录 → Proxy Group 映射 conf → 启动</span>
       </div>
-      <el-button link type="primary" @click="$router.push('/monitor/agent-packages')">部署配置</el-button>
+      <div class="header-links">
+        <el-button link type="primary" @click="$router.push('/monitor/agents')">代理管理</el-button>
+        <el-button link type="primary" @click="$router.push('/monitor/agent-packages')">部署配置</el-button>
+      </div>
     </div>
 
     <el-card shadow="never">
@@ -407,6 +410,10 @@ async function refresh(id: string) {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
+}
+.header-links {
+  display: flex;
+  gap: 4px;
 }
 .page-title {
   display: flex;

@@ -449,6 +449,18 @@ async fn delete_credential(
             ref_count
         )));
     }
+    let ci_ref: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ci_instances WHERE ssh_credential_id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    if ci_ref > 0 {
+        return Err(AppError::bad(&format!(
+            "该凭据被 {} 个配置项引用，请先在资产详情解除关联后再删除",
+            ci_ref
+        )));
+    }
 
     sqlx::query("DELETE FROM ssh_credentials WHERE id=?")
         .bind(id)

@@ -418,7 +418,7 @@ const allMenuGroups: MenuGroup[] = [
   {
     type: 'sub', title: '主机监控', icon: 'Monitor', children: [
       { type: 'item', path: '/monitor', title: '主机名册', icon: 'Monitor', permission: 'monitor:read' },
-      { type: 'item', path: '/monitor/install', title: '安装 Agent', icon: 'Download', permission: 'monitor:agent' },
+      { type: 'item', path: '/monitor/agents', title: '代理管理', icon: 'Cpu', permission: 'monitor:read' },
       { type: 'item', path: '/monitor/templates', title: '模板库', icon: 'Files', permission: 'monitor:read' },
       { type: 'item', path: '/monitor/agent-packages', title: '部署配置', icon: 'Box', permission: 'monitor:agent' },
     ]

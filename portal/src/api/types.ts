@@ -428,6 +428,8 @@ export interface CiInstance {
   ownerIds?: string[]
   ownerNames?: string[]
   owners?: CiOwner[]
+  /** 配置项绑定的 SSH 凭据 */
+  sshCredentialId?: number | null
   attributes: Record<string, unknown>
   tags: string
   source?: string | null
@@ -464,6 +466,8 @@ export interface CiInstanceQuery {
   status?: string
   keyword?: string
   departmentId?: string
+  /** bound / unbound */
+  sshCredential?: 'bound' | 'unbound'
   page?: number
   pageSize?: number
 }
@@ -497,6 +501,8 @@ export interface UpdateCiInstanceRequest {
   ownerIds?: string[]
   attributes?: Record<string, unknown>
   tags?: string
+  /** 传 null 清空绑定 */
+  sshCredentialId?: number | null
 }
 
 /** 创建关系请求 */

@@ -1968,6 +1968,8 @@ pub struct CiInstance {
     pub status: String,
     pub department_id: Option<String>,
     pub owner_id: Option<String>,
+    /// 配置项级 SSH 凭据（作业执行优先使用）
+    pub ssh_credential_id: Option<i64>,
     #[serde(serialize_with = "serialize_json_str")]
     pub attributes: Option<String>,
     pub tags: String,
@@ -2066,6 +2068,7 @@ pub async fn query_ci_instances(
     status: Option<&str>,
     keyword: Option<&str>,
     department_id: Option<&str>,
+    ssh_credential: Option<&str>,
     page: u64,
     page_size: u64,
 ) -> anyhow::Result<(i64, Vec<CiInstance>)> {
@@ -2088,6 +2091,11 @@ pub async fn query_ci_instances(
         conditions.push("department_id = ?");
         args.push(v.to_string());
     }
+    match ssh_credential {
+        Some("bound") => conditions.push("ssh_credential_id IS NOT NULL"),
+        Some("unbound") => conditions.push("ssh_credential_id IS NULL"),
+        _ => {}
+    }
 
     let where_clause = if conditions.is_empty() {
         String::new()
@@ -2106,7 +2114,7 @@ pub async fn query_ci_instances(
     // data
     let offset = (page.saturating_sub(1)) * page_size;
     let data_sql = format!(
-        "SELECT id, model_id, name, status, department_id, owner_id, \
+        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, \
                 CAST(attributes AS CHAR) AS attributes, tags, \
                 source, external_id, last_synced_at, created_at, updated_at \
          FROM ci_instances {} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
@@ -2124,7 +2132,7 @@ pub async fn query_ci_instances(
 
 pub async fn find_ci_instance_by_id(pool: &DbPool, id: &str) -> anyhow::Result<Option<CiInstance>> {
     let row = sqlx::query_as::<_, CiInstance>(
-        "SELECT id, model_id, name, status, department_id, owner_id, \
+        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, \
                 CAST(attributes AS CHAR) AS attributes, tags, \
                 source, external_id, last_synced_at, created_at, updated_at \
          FROM ci_instances WHERE id = ?",
@@ -2177,10 +2185,12 @@ pub async fn update_ci_instance(
     owner_id: Option<&str>,
     attributes_json: &str,
     tags: &str,
+    ssh_credential_id: Option<i64>,
 ) -> anyhow::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let affected = sqlx::query(
-        "UPDATE ci_instances SET name = ?, status = ?, department_id = ?, owner_id = ?, attributes = ?, tags = ?, updated_at = ? WHERE id = ?",
+        "UPDATE ci_instances SET name = ?, status = ?, department_id = ?, owner_id = ?, \
+         attributes = ?, tags = ?, ssh_credential_id = ?, updated_at = ? WHERE id = ?",
     )
     .bind(name)
     .bind(status)
@@ -2188,6 +2198,7 @@ pub async fn update_ci_instance(
     .bind(owner_id)
     .bind(attributes_json)
     .bind(tags)
+    .bind(ssh_credential_id)
     .bind(&now)
     .bind(id)
     .execute(pool)
@@ -2197,6 +2208,36 @@ pub async fn update_ci_instance(
         anyhow::bail!("ci_instance not found: {}", id);
     }
     Ok(())
+}
+
+/// 批量查询配置项是否已绑定 SSH 凭据。
+pub async fn ci_ssh_credential_map(
+    pool: &DbPool,
+    ci_ids: &[String],
+) -> anyhow::Result<std::collections::HashMap<String, Option<i64>>> {
+    let mut map = std::collections::HashMap::new();
+    if ci_ids.is_empty() {
+        return Ok(map);
+    }
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT id, ssh_credential_id FROM ci_instances WHERE id IN (",
+    );
+    {
+        let mut sep = qb.separated(", ");
+        for id in ci_ids {
+            sep.push_bind(id);
+        }
+    }
+    qb.push(")");
+    let rows = qb.build().fetch_all(pool).await?;
+    for r in rows {
+        let id: String = r.try_get("id").unwrap_or_default();
+        let cred: Option<i64> = r.try_get("ssh_credential_id").ok().flatten();
+        if !id.is_empty() {
+            map.insert(id, cred);
+        }
+    }
+    Ok(map)
 }
 
 /// 删除 CI 实例。同时清理关联的关系（调用方事务保证）。
@@ -2962,7 +3003,7 @@ pub async fn find_ci_instance_by_external(
     external_id: &str,
 ) -> anyhow::Result<Option<CiInstance>> {
     let row = sqlx::query_as::<_, CiInstance>(
-        "SELECT id, model_id, name, status, department_id, owner_id, \
+        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, \
                 CAST(attributes AS CHAR) AS attributes, tags, \
                 source, external_id, last_synced_at, created_at, updated_at \
          FROM ci_instances WHERE source = ? AND external_id = ?",

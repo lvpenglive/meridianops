@@ -131,6 +131,12 @@ const routes = [
         redirect: '/monitor'
       },
       {
+        path: 'monitor/agents',
+        name: 'MonitorAgents',
+        component: () => import('../views/monitor/AgentManagePage.vue'),
+        meta: { title: '代理管理', icon: 'Cpu', permission: 'monitor:read' }
+      },
+      {
         path: 'monitor/install',
         name: 'MonitorInstall',
         component: () => import('../views/monitor/InstallPage.vue'),

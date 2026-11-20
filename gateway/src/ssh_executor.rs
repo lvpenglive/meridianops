@@ -586,7 +586,8 @@ pub async fn persist_target_result(
     .await;
 }
 
-/// V1.5 SSH 执行入口：替代 V1 的 run_job_mock_executor
+/// V1.5 SSH 执行入口：替代 V1 的 run_job_mock_executor。
+/// `fallback_credential_id` 为剧本默认凭据；优先使用配置项 `ssh_credential_id`。
 pub async fn run_job_ssh_executor(
     pool: MySqlPool,
     run_id: i64,
@@ -595,14 +596,14 @@ pub async fn run_job_ssh_executor(
     script_content: String,
     script_type: String,
     timeout_secs: i64,
-    credential_id: i64,
+    fallback_credential_id: Option<i64>,
     ssh_port: i64,
     upload: Option<(String, Vec<u8>)>,
 ) -> Result<(), AppError> {
-    // 1. 加载凭据
-    let credential = load_credential(&pool, credential_id).await?;
+    let ci_cred_map = crate::db::ci_ssh_credential_map(&pool, &asset_ids)
+        .await
+        .map_err(|e| AppError::internal(&format!("查询配置项凭据失败: {e}")))?;
 
-    // 2. 构造目标列表
     let targets: Vec<SshTarget> = asset_ids
         .iter()
         .map(|aid| {
@@ -618,9 +619,10 @@ pub async fn run_job_ssh_executor(
         })
         .collect();
 
-    // 无管理 IP 时直接失败，避免连到本机空地址（Windows 上常见 10061）
     let mut results: Vec<SshExecResult> = Vec::new();
-    let mut pending: Vec<SshTarget> = Vec::new();
+    // credential_id -> targets
+    let mut groups: HashMap<i64, Vec<SshTarget>> = HashMap::new();
+
     for t in targets {
         if t.ip.trim().is_empty() {
             results.push(SshExecResult::error(
@@ -628,22 +630,53 @@ pub async fn run_job_ssh_executor(
                 format!("配置项 {} 缺少管理 IP（attributes.ip / mgmt_ip）", t.asset_name),
                 0,
             ));
-        } else {
-            pending.push(t);
+            continue;
+        }
+        let ci_cred = ci_cred_map.get(&t.asset_id).copied().flatten();
+        let resolved = ci_cred.or(fallback_credential_id);
+        match resolved {
+            Some(cid) => groups.entry(cid).or_default().push(t),
+            None => results.push(SshExecResult::error(
+                t.asset_id.clone(),
+                format!(
+                    "配置项 {} 未绑定 SSH 凭据，且作业未配置默认凭据",
+                    t.asset_name
+                ),
+                0,
+            )),
         }
     }
 
-    // 3. 并发执行（可选先推送安装包）
-    if !pending.is_empty() {
-        let executor = SshExecutor::new(credential, DEFAULT_MAX_CONCURRENCY);
-        results.extend(
-            executor
-                .execute_batch(pending, &script_content, &script_type, timeout_secs, upload)
-                .await,
-        );
+    // 按凭据分组执行（同凭据仍可并发 batch；上传包对各组复用同一份字节）
+    for (cred_id, pending) in groups {
+        match load_credential(&pool, cred_id).await {
+            Ok(credential) => {
+                let executor = SshExecutor::new(credential, DEFAULT_MAX_CONCURRENCY);
+                results.extend(
+                    executor
+                        .execute_batch(
+                            pending,
+                            &script_content,
+                            &script_type,
+                            timeout_secs,
+                            upload.clone(),
+                        )
+                        .await,
+                );
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                for t in pending {
+                    results.push(SshExecResult::error(
+                        t.asset_id,
+                        format!("加载 SSH 凭据失败: {msg}"),
+                        0,
+                    ));
+                }
+            }
+        }
     }
 
-    // 4. 逐条写入结果
     let mut success = 0i64;
     let mut failed = 0i64;
 
@@ -656,7 +689,6 @@ pub async fn run_job_ssh_executor(
         persist_target_result(&pool, run_id, result).await;
     }
 
-    // 5. 汇总更新 job_run
     let overall = if failed == 0 {
         "success"
     } else if success == 0 {

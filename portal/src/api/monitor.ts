@@ -13,12 +13,23 @@ export interface MonitorGroupRef {
   hostCount?: number
 }
 
+/** 代理生命周期状态（一期） */
+export type AgentLifecycleStatus = 'running' | 'stopped' | 'absent' | 'unknown'
+
+export interface AgentStatusSummary {
+  running: number
+  stopped: number
+  absent: number
+  unknown: number
+}
+
 export interface HostRoster {
   total: number
   matched: number
   page: number
   pageSize: number
   groups: MonitorGroupRef[]
+  agentSummary?: AgentStatusSummary
   items: MonitorHost[]
 }
 
@@ -36,11 +47,41 @@ export interface MonitorHost {
   ip: string
   /** Agent 接口端口（Zabbix host interface） */
   port?: string | null
+  /** Agent 通断：以 agent.ping 为准 */
   agentAvailable: boolean | null
+  /**
+   * 代理生命周期：absent 无接口 / running 运行中 / stopped 未运行 / unknown 未知
+   * stopped 一期含停服与链路不可达，二期再拆
+   */
+  agentStatus?: AgentLifecycleStatus | null
+  /** Zabbix 接口可用性汇总（主接口） */
+  interfaceAvailable?: boolean | null
+  installPath?: string | null
+  packageId?: string | null
+  /**
+   * Zabbix 同款按类型可用性；null 表示无该类型接口。
+   * status：0 未知 / 1 可用 / 2 不可用；error / errorsFrom 用于悬停提示。
+   */
+  availability?: {
+    zbx?: HostInterfaceAvailability | null
+    snmp?: HostInterfaceAvailability | null
+    ipmi?: HostInterfaceAvailability | null
+    jmx?: HostInterfaceAvailability | null
+  } | null
   agentVersion: string | null
   ciId?: string | null
   cmdbLinked?: boolean
+  /** 关联配置项是否已绑定 SSH 凭据 */
+  sshCredentialBound?: boolean
+  sshCredentialId?: number | null
   groups?: MonitorGroupRef[]
+}
+
+export interface HostInterfaceAvailability {
+  status: number
+  error?: string
+  errorsFrom?: number
+  disableUntil?: number
 }
 
 export interface MonitorProblem {
@@ -98,6 +139,8 @@ export function listHosts(
     pageSize?: number
     groupId?: string
     agent?: 'online' | 'offline' | 'unknown'
+    agentStatus?: AgentLifecycleStatus
+    availability?: 'unavailable' | 'available' | 'unknown'
     cmdb?: 'linked' | 'unlinked'
     status?: '0' | '1' | 'enabled' | 'disabled'
   } = {},
@@ -109,6 +152,8 @@ export function listHosts(
       pageSize: params.pageSize,
       groupId: params.groupId || undefined,
       agent: params.agent,
+      agentStatus: params.agentStatus,
+      availability: params.availability,
       cmdb: params.cmdb,
       status: params.status,
     },

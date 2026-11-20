@@ -107,7 +107,7 @@ struct CreateDefinitionRequest {
     /// V1.5: 执行器类型 mock / ssh（默认 ssh）
     #[serde(default = "default_executor_type")]
     executor_type: String,
-    /// V1.5: SSH 凭据 ID（executor_type=ssh 时必填）
+    /// V1.5: SSH 默认/兜底凭据（可空；目标 CI 未绑凭据时使用）
     #[serde(default)]
     credential_id: Option<i64>,
 }
@@ -131,7 +131,7 @@ struct UpdateDefinitionRequest {
     enabled: bool,
     /// V1.5: 执行器类型 mock / ssh
     executor_type: String,
-    /// V1.5: SSH 凭据 ID
+    /// V1.5: SSH 默认/兜底凭据（可空）
     #[serde(default)]
     credential_id: Option<i64>,
 }
@@ -480,6 +480,12 @@ async fn execute_job(
         asset_map.entry(aid.clone()).or_insert_with(|| (format!("Asset#{}", aid), String::new()));
     }
 
+    let executor_type = def["executorType"].as_str().unwrap_or("ssh").to_string();
+    let fallback_credential_id = def["credentialId"].as_i64();
+    if executor_type == "ssh" {
+        ensure_targets_have_ssh_credential(&state.db, &asset_ids, fallback_credential_id).await?;
+    }
+
     // 4. 可选：解析 Agent 包并准备 SCP 推送
     let mut env = req.env;
     let mut upload_payload: Option<(String, Vec<u8>)> = None;
@@ -544,8 +550,6 @@ async fn execute_job(
     let script_snap = script_content.clone();
     let type_snap = script_type.clone();
     let asset_ids_clone = asset_ids.clone();
-    let executor_type = def["executorType"].as_str().unwrap_or("ssh").to_string();
-    let credential_id = def["credentialId"].as_i64();
     let timeout_snap = def["timeoutSecs"].as_i64().unwrap_or(300);
     let ssh_port = def["port"].as_i64().unwrap_or(22);
     let upload_snap = upload_payload;
@@ -563,30 +567,6 @@ async fn execute_job(
             )
             .await
         } else {
-            // V1.5 SSH 执行器
-            let cred_id = match credential_id {
-                Some(id) => id,
-                None => {
-                    tracing::error!(
-                        "job_run {} executor_type=ssh 但 credential_id 为空",
-                        run_id
-                    );
-                    let _ = sqlx::query(
-                        "UPDATE job_run_targets SET status='failed', stderr='SSH 凭据未配置', finished_at=NOW() WHERE job_run_id=?",
-                    )
-                    .bind(run_id)
-                    .execute(&db_for_error)
-                    .await;
-                    let _ = sqlx::query(
-                        "UPDATE job_runs SET overall_status='failed', finished_at=NOW() WHERE id=?",
-                    )
-                    .bind(run_id)
-                    .execute(&db_for_error)
-                    .await;
-                    return;
-                }
-            };
-
             crate::ssh_executor::run_job_ssh_executor(
                 db_for_exec,
                 run_id,
@@ -595,7 +575,7 @@ async fn execute_job(
                 script_snap,
                 type_snap,
                 timeout_snap,
-                cred_id,
+                fallback_credential_id,
                 ssh_port,
                 upload_snap,
             )
@@ -1118,4 +1098,37 @@ fn now_fmt() -> String {
 }
 fn now_fmt_short() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+/// SSH 作业提交前：每个目标须有 CI 凭据或剧本兜底凭据。
+async fn ensure_targets_have_ssh_credential(
+    pool: &MySqlPool,
+    asset_ids: &[String],
+    fallback_credential_id: Option<i64>,
+) -> Result<(), AppError> {
+    if fallback_credential_id.is_some() {
+        return Ok(());
+    }
+    let map = crate::db::ci_ssh_credential_map(pool, asset_ids)
+        .await
+        .map_err(|e| AppError::internal(format!("查询配置项凭据失败: {e}")))?;
+    let missing: Vec<&str> = asset_ids
+        .iter()
+        .filter(|id| map.get(*id).copied().flatten().is_none())
+        .map(|s| s.as_str())
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let sample: Vec<&str> = missing.iter().copied().take(5).collect();
+    let more = if missing.len() > 5 {
+        format!(" 等 {} 台", missing.len())
+    } else {
+        String::new()
+    };
+    Err(AppError::bad(&format!(
+        "以下配置项未绑定 SSH 凭据，且作业未配置默认凭据：{}{}",
+        sample.join(", "),
+        more
+    )))
 }

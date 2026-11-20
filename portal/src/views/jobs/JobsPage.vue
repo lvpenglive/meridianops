@@ -321,12 +321,13 @@
             </el-form-item>
           </el-col>
           <el-col :span="24" v-if="form.executorType === 'ssh'">
-            <el-form-item label="SSH 凭据" prop="credentialId">
+            <el-form-item label="默认凭据" prop="credentialId">
               <el-select
                 v-model="form.credentialId"
-                placeholder="选择已创建的 SSH 凭据"
+                placeholder="可选：未绑配置项凭据时的兜底"
                 style="width: 100%"
                 filterable
+                clearable
               >
                 <el-option
                   v-for="c in credentialOptions"
@@ -337,9 +338,9 @@
               </el-select>
               <div class="cred-hint">
                 <el-icon><InfoFilled /></el-icon>
-                未找到凭据？请先到
+                优先用配置项上的 SSH 凭据；此处为兜底。凭据在
                 <router-link to="/system/credentials" class="cred-link">SSH 凭据管理</router-link>
-                创建
+                维护，资产详情可绑定到配置项。
               </div>
             </el-form-item>
           </el-col>
@@ -672,18 +673,7 @@ const formRules: FormRules = {
   targetScope: [{ required: true, message: '请选择目标范围', trigger: 'change' }],
   runAs: [{ required: true, message: '请输入执行用户', trigger: 'blur' }],
   port: [{ required: true, message: '端口必填', trigger: 'blur' }],
-  credentialId: [
-    {
-      validator: (_rule: any, value: any, callback: any) => {
-        if (form.executorType === 'ssh' && (value === null || value === undefined)) {
-          callback(new Error('SSH 执行器必须选择凭据'))
-        } else {
-          callback()
-        }
-      },
-      trigger: 'change',
-    },
-  ],
+  // SSH 默认凭据可选：目标配置项已绑凭据时可不设
 }
 
 function openCreateDialog() {

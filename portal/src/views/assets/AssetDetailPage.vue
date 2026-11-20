@@ -57,6 +57,10 @@
                   <span v-if="ownerText">{{ ownerText }}</span>
                   <span v-else class="text-muted">—</span>
                 </el-descriptions-item>
+                <el-descriptions-item label="SSH 凭据">
+                  <span v-if="sshCredentialLabel">{{ sshCredentialLabel }}</span>
+                  <span v-else class="text-muted">未绑定（作业将用剧本默认凭据）</span>
+                </el-descriptions-item>
                 <el-descriptions-item label="数据来源">
                   <el-tag v-if="instance.source" size="small" type="warning" effect="plain">{{ sourceLabel(instance.source) }}</el-tag>
                   <el-tag v-else size="small" type="info" effect="plain">手工录入</el-tag>
@@ -245,65 +249,13 @@
       </el-tabs>
     </el-card>
 
-    <!-- 编辑对话框（复用基础信息编辑） -->
-    <el-dialog v-model="editDialogVisible" title="编辑资产" width="640px">
-      <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px">
-        <el-form-item label="资产名称" prop="name">
-          <el-input v-model="formData.name" />
-        </el-form-item>
-        <el-form-item label="状态" prop="status">
-          <el-select v-model="formData.status" style="width: 100%">
-            <el-option label="运行中" value="running" />
-            <el-option label="已停止" value="stopped" />
-            <el-option label="维护中" value="maintenance" />
-            <el-option label="未知" value="unknown" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="标签">
-          <el-input v-model="formData.tags" placeholder="多个标签用逗号分隔" />
-        </el-form-item>
-        <el-form-item label="负责人">
-          <el-select
-            v-model="formData.ownerIds"
-            multiple
-            filterable
-            clearable
-            collapse-tags
-            collapse-tags-tooltip
-            placeholder="可多选系统用户"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="u in userOptions"
-              :key="u.id"
-              :label="userOptionLabel(u)"
-              :value="u.id"
-            />
-          </el-select>
-        </el-form-item>
-        <div v-if="modelAttrs.length" class="form-section">
-          <div class="section-title">扩展属性</div>
-          <el-form-item
-            v-for="attr in modelAttrs"
-            :key="attr.code"
-            :label="attr.name"
-            :prop="'attributes.' + attr.code"
-            :rules="attr.isRequired ? [{ required: true, message: `${attr.name}不能为空`, trigger: 'blur' }] : []"
-          >
-            <el-select v-if="attr.valueType === 'enum'" v-model="formData.attributes[attr.code]" clearable style="width: 100%">
-              <el-option v-for="opt in attr.options || []" :key="opt" :label="opt" :value="opt" />
-            </el-select>
-            <el-input-number v-else-if="attr.valueType === 'number'" v-model="formData.attributes[attr.code]" :controls="false" style="width: 100%" />
-            <el-switch v-else-if="attr.valueType === 'boolean'" v-model="formData.attributes[attr.code]" />
-            <el-input v-else v-model="formData.attributes[attr.code]" />
-          </el-form-item>
-        </div>
-      </el-form>
-      <template #footer>
-        <el-button @click="editDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onSubmitEdit">保存</el-button>
-      </template>
-    </el-dialog>
+    <AssetFormDialog
+      v-model="editDialogVisible"
+      mode="edit"
+      :models="modelsForForm"
+      :instance="instance"
+      @saved="fetchInstance"
+    />
 
     <!-- 添加关系对话框 -->
     <el-dialog v-model="relationDialogVisible" title="添加关系" width="520px">
@@ -355,24 +307,24 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Edit, Plus, Refresh, Monitor, Cpu, Coin, Connection, Grid } from '@element-plus/icons-vue'
 import {
   getCiInstance,
   getCiModel,
-  updateCiInstance,
   listCiRelations,
   createCiRelation,
   deleteCiRelation,
   listCiInstances,
   listSyncLogs,
   listCiRelationTypes,
-  listCmdbUserOptions,
 } from '../../api/cmdb'
 import { listAuditLogs } from '../../api/audit'
-import type { CiInstance, CiModelAttr, CiRelation, CiRelationType, SyncLog, AuditLog, CmdbUserOption } from '../../api/types'
+import { listAllCredentials, type SshCredentialSimple } from '../../api/credential'
+import type { CiInstance, CiModel, CiModelAttr, CiRelation, CiRelationType, SyncLog, AuditLog } from '../../api/types'
 import { useUserStore } from '../../stores/user'
 import { useSystemDicts, labelOf } from '../../composables/useSystemDicts'
+import AssetFormDialog from './AssetFormDialog.vue'
 
 const dicts = useSystemDicts()
 const route = useRoute()
@@ -416,18 +368,37 @@ const ownerText = computed(() => {
   return ''
 })
 
-const userOptions = ref<CmdbUserOption[]>([])
-function userOptionLabel(u: CmdbUserOption): string {
-  const name = u.displayName?.trim()
-  return name && name !== u.username ? `${name}（${u.username}）` : u.username
-}
-async function fetchUserOptions() {
+const credentialOptions = ref<SshCredentialSimple[]>([])
+async function fetchCredentialOptions() {
   try {
-    userOptions.value = await listCmdbUserOptions()
+    credentialOptions.value = await listAllCredentials()
   } catch {
-    userOptions.value = []
+    credentialOptions.value = []
   }
 }
+const sshCredentialLabel = computed(() => {
+  const id = instance.value?.sshCredentialId
+  if (id == null) return ''
+  const c = credentialOptions.value.find((x) => x.id === id)
+  if (!c) return `凭据 #${id}`
+  return `${c.name}（${c.username}）`
+})
+const modelsForForm = computed<CiModel[]>(() => {
+  if (!instance.value) return []
+  return [
+    {
+      id: instance.value.modelId,
+      name: modelName.value || instance.value.modelId,
+      code: '',
+      icon: '',
+      description: '',
+      enabled: true,
+      sortOrder: 0,
+      createdAt: '',
+      updatedAt: '',
+    } as CiModel,
+  ]
+})
 
 async function fetchInstance() {
   loading.value = true
@@ -558,54 +529,10 @@ async function onTabChange(tab: string) {
 
 // ---- 编辑 ----
 const editDialogVisible = ref(false)
-const saving = ref(false)
-const formRef = ref<FormInstance>()
-const formData = reactive({
-  name: '',
-  status: 'running',
-  tags: '',
-  ownerIds: [] as string[],
-  attributes: {} as Record<string, any>,
-})
-const formRules: FormRules = {
-  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  status: [{ required: true, message: '请选择状态', trigger: 'change' }],
-}
 
 function openEdit() {
   if (!instance.value) return
-  formData.name = instance.value.name
-  formData.status = instance.value.status
-  formData.tags = instance.value.tags
-  formData.ownerIds = instance.value.ownerIds?.length
-    ? [...instance.value.ownerIds]
-    : (instance.value.ownerId ? [instance.value.ownerId] : [])
-  formData.attributes = { ...(instance.value.attributes || {}) }
   editDialogVisible.value = true
-}
-
-async function onSubmitEdit() {
-  if (!formRef.value) return
-  await formRef.value.validate(async (valid) => {
-    if (!valid) return
-    saving.value = true
-    try {
-      await updateCiInstance(instanceId.value, {
-        name: formData.name.trim(),
-        status: formData.status,
-        tags: formData.tags,
-        ownerIds: formData.ownerIds,
-        attributes: formData.attributes,
-      })
-      ElMessage.success('更新成功')
-      editDialogVisible.value = false
-      await fetchInstance()
-    } catch (e: any) {
-      ElMessage.error(e?.message || '更新失败')
-    } finally {
-      saving.value = false
-    }
-  })
 }
 
 // ---- 添加关系 ----
@@ -713,7 +640,7 @@ onMounted(async () => {
   fetchInstance()
   fetchRelationTypes()
   fetchRelations()
-  fetchUserOptions()
+  fetchCredentialOptions()
 })
 
 // 路由参数变化时（点击对端资产跳转）重新加载数据

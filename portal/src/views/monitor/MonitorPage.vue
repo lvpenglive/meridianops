@@ -7,6 +7,9 @@
         <span class="page-sub">通断与版本、启用禁用、编辑批量更新、启停升级</span>
       </div>
       <div class="header-actions">
+        <el-button v-permission="'monitor:read'" @click="router.push('/monitor/agents')">
+          代理管理
+        </el-button>
         <el-button v-permission="'monitor:agent'" type="primary" @click="router.push('/monitor/install')">
           安装 Agent
         </el-button>
@@ -126,41 +129,86 @@
           @keyup.enter="reloadHosts"
           @clear="reloadHosts"
         />
-        <el-select v-model="hostFilter" placeholder="筛选" clearable style="width: 140px" @change="reloadHosts">
+        <el-select v-model="hostFilter" placeholder="筛选" clearable style="width: 160px" @change="reloadHosts">
           <el-option label="已启用" value="enabled" />
           <el-option label="已禁用" value="disabled" />
           <el-option label="Agent 离线" value="offline" />
+          <el-option label="接口不可用" value="iface_offline" />
           <el-option label="未关联 CMDB" value="unlinked" />
           <el-option label="已关联 CMDB" value="linked" />
         </el-select>
         <el-button type="primary" @click="reloadHosts">查询</el-button>
-        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="setHostsStatus(0)">
-          启用
-        </el-button>
-        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="setHostsStatus(1)">
-          禁用
-        </el-button>
-        <el-button v-permission="'monitor:operate'" :disabled="selectedIds.length !== 1" @click="openEditHost">
-          编辑
-        </el-button>
-        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="openMassUpdate">
-          批量更新
-        </el-button>
-        <el-button v-permission="'monitor:operate'" type="danger" plain :disabled="!selectedIds.length" @click="deleteSelectedHosts">
-          删除
-        </el-button>
-        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="runAction('restart')">
-          重启 Agent
-        </el-button>
-        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="runAction('stop')">
-          停止
-        </el-button>
-        <el-button v-permission="'monitor:operate'" :disabled="!selectedIds.length" @click="runAction('start')">
-          启动
-        </el-button>
-        <el-button v-permission="'monitor:agent'" type="warning" :disabled="!selectedIds.length" @click="openUpgrade">
-          升级
-        </el-button>
+        <el-dropdown
+          v-if="canOperate"
+          trigger="click"
+          :disabled="!selectedIds.length"
+          @command="onHostCommand"
+        >
+          <el-button :disabled="!selectedIds.length">
+            主机
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="enable" :disabled="!selectedIds.length">启用监控</el-dropdown-item>
+              <el-dropdown-item command="disable" :disabled="!selectedIds.length">禁用监控</el-dropdown-item>
+              <el-dropdown-item command="edit" :disabled="selectedIds.length !== 1">编辑主机</el-dropdown-item>
+              <el-dropdown-item command="mass" :disabled="!selectedIds.length">批量更新</el-dropdown-item>
+              <el-dropdown-item
+                command="delete"
+                divided
+                :disabled="!selectedIds.length"
+                style="color: var(--el-color-danger)"
+              >
+                删除主机
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown
+          v-if="canOperate || canAgent"
+          trigger="click"
+          :disabled="!selectedIds.length"
+          @command="onAgentCommand"
+        >
+          <el-button :disabled="!selectedIds.length">
+            Agent
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-if="canOperate"
+                command="start"
+                :disabled="!selectedIds.length"
+              >
+                启动 Agent 服务
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="canOperate"
+                command="stop"
+                :disabled="!selectedIds.length"
+              >
+                停止 Agent 服务
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="canOperate"
+                command="restart"
+                :disabled="!selectedIds.length"
+              >
+                重启 Agent 服务
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="canAgent"
+                command="upgrade"
+                :divided="canOperate"
+                :disabled="!selectedIds.length"
+              >
+                升级 / 回滚
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
 
       <el-empty v-if="!instanceCode && !loading" description="未配置可用的 Zabbix 实例，请先启动 zabbix-ctl" />
@@ -188,11 +236,19 @@
         <el-table-column label="主机组" min-width="160">
           <template #default="{ row }">{{ (row.groups || []).map((g: { name: string }) => g.name).join('、') || '-' }}</template>
         </el-table-column>
+        <el-table-column label="可用性" width="168">
+          <template #default="{ row }">
+            <HostAvailabilityCell :host="row" />
+          </template>
+        </el-table-column>
         <el-table-column label="Agent" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.agentAvailable === true" type="success" size="small">通</el-tag>
-            <el-tag v-else-if="row.agentAvailable === false" type="danger" size="small">断</el-tag>
-            <el-tag v-else type="info" size="small">未知</el-tag>
+            <template v-if="hasAgentInterface(row)">
+              <el-tag v-if="row.agentAvailable === true" type="success" size="small">通</el-tag>
+              <el-tag v-else-if="row.agentAvailable === false" type="danger" size="small">断</el-tag>
+              <el-tag v-else type="info" size="small">未知</el-tag>
+            </template>
+            <span v-else class="zbx-avail-empty">—</span>
           </template>
         </el-table-column>
         <el-table-column prop="agentVersion" label="版本" width="120" />
@@ -238,10 +294,17 @@
 
       <div class="status-row">
         <div class="status-item">
+          <span class="status-label">可用性</span>
+          <HostAvailabilityCell :host="selected" />
+        </div>
+        <div class="status-item">
           <span class="status-label">Agent</span>
-          <el-tag v-if="selected.agentAvailable === true" type="success" size="small">通</el-tag>
-          <el-tag v-else-if="selected.agentAvailable === false" type="danger" size="small">断</el-tag>
-          <el-tag v-else type="info" size="small">未知</el-tag>
+          <template v-if="hasAgentInterface(selected)">
+            <el-tag v-if="selected.agentAvailable === true" type="success" size="small">通</el-tag>
+            <el-tag v-else-if="selected.agentAvailable === false" type="danger" size="small">断</el-tag>
+            <el-tag v-else type="info" size="small">未知</el-tag>
+          </template>
+          <span v-else class="zbx-avail-empty">—</span>
         </div>
         <div class="status-item">
           <span class="status-label">版本</span>
@@ -895,8 +958,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { Monitor, Refresh } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowDown, Monitor, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../../stores/user'
 import { getCiInstance, listCiInstances } from '../../api/cmdb'
@@ -945,11 +1008,89 @@ import {
   type MonitorTemplateRef,
   type UpdateMonitorHostInput,
 } from '../../api/monitor'
+import HostAvailabilityCell from './HostAvailabilityCell.vue'
 
 const router = useRouter()
+const route = useRoute()
 const user = useUserStore()
 const canOperate = computed(() => user.hasPermission('monitor:operate'))
+const canAgent = computed(() => user.hasPermission('monitor:agent'))
 const isAdmin = computed(() => user.role === 'admin')
+
+/** 无 ZBX 接口时 Agent 列显示 —，不显示「未知」 */
+function hasAgentInterface(row: MonitorHost | null | undefined) {
+  const zbx = row?.availability?.zbx
+  if (zbx === null || zbx === undefined) return false
+  if (typeof zbx === 'number') return true
+  return typeof zbx.status === 'number'
+}
+
+function isCmdbLinked(row: MonitorHost) {
+  return !!(row.cmdbLinked && row.ciId)
+}
+
+const AGENT_ACTION_LABEL: Record<string, string> = {
+  start: '启动 Agent 服务',
+  stop: '停止 Agent 服务',
+  restart: '重启 Agent 服务',
+  upgrade: '升级 Agent',
+  rollback: '回滚 Agent',
+}
+
+/** 启停/升级前：必须有 ZBX 接口且已关联 CMDB */
+function resolveAgentTargets(): MonitorHost[] | null {
+  const rows = selectedHosts.value
+  if (!rows.length) {
+    ElMessage.warning('请先勾选主机')
+    return null
+  }
+  const noAgent = rows.filter((h) => !hasAgentInterface(h))
+  if (noAgent.length) {
+    const sample = noAgent
+      .slice(0, 3)
+      .map((h) => h.displayName || h.hostname || h.hostId)
+      .join('、')
+    const more = noAgent.length > 3 ? ` 等 ${noAgent.length} 台` : ''
+    ElMessage.warning(`以下主机无 Agent 接口，不能执行 Agent 操作：${sample}${more}`)
+    return null
+  }
+  const unlinked = rows.filter((h) => !isCmdbLinked(h))
+  if (unlinked.length) {
+    const sample = unlinked
+      .slice(0, 3)
+      .map((h) => h.displayName || h.hostname || h.hostId)
+      .join('、')
+    const more = unlinked.length > 3 ? ` 等 ${unlinked.length} 台` : ''
+    ElMessage.warning(`以下主机未关联配置项，请先点「关联资源」：${sample}${more}`)
+    return null
+  }
+  const noCred = rows.filter((h) => !h.sshCredentialBound)
+  if (noCred.length) {
+    const sample = noCred
+      .slice(0, 3)
+      .map((h) => h.displayName || h.hostname || h.hostId)
+      .join('、')
+    const more = noCred.length > 3 ? ` 等 ${noCred.length} 台` : ''
+    ElMessage.warning(
+      `以下主机关联的配置项未绑定 SSH 凭据：${sample}${more}。请到资产详情绑定，或确保作业剧本已配置默认凭据后重试（提交时仍会校验）`,
+    )
+    // 不硬拦：作业可能有默认凭据；最终由 Gateway 校验
+  }
+  return rows
+}
+
+function onHostCommand(cmd: string) {
+  if (cmd === 'enable') setHostsStatus(0)
+  else if (cmd === 'disable') setHostsStatus(1)
+  else if (cmd === 'edit') openEditHost()
+  else if (cmd === 'mass') openMassUpdate()
+  else if (cmd === 'delete') deleteSelectedHosts()
+}
+
+function onAgentCommand(cmd: string) {
+  if (cmd === 'start' || cmd === 'stop' || cmd === 'restart') runAction(cmd)
+  else if (cmd === 'upgrade') openUpgrade()
+}
 const canEditScheme = computed(() => {
   if (!selected.value || !canOperate.value) return false
   return isAdmin.value || !!selected.value.cmdbLinked
@@ -977,6 +1118,7 @@ const govLoading = ref(false)
 const governance = ref<GovernanceData | null>(null)
 const selected = ref<MonitorHost | null>(null)
 const selectedIds = ref<string[]>([])
+const selectedHosts = ref<MonitorHost[]>([])
 const problems = ref<MonitorProblem[]>([])
 const problemLoading = ref(false)
 const detailTab = ref('overview')
@@ -1119,6 +1261,8 @@ function severityLabel(value: string) {
 
 onMounted(async () => {
   try {
+    const qSearch = typeof route.query.search === 'string' ? route.query.search.trim() : ''
+    if (qSearch) search.value = qSearch
     instances.value = await listInstances()
     instanceCode.value = instances.value[0]?.code || ''
     if (instanceCode.value) {
@@ -1139,6 +1283,7 @@ function rosterFilter(): {
   status?: '0' | '1'
 } {
   if (hostFilter.value === 'offline') return { agent: 'offline' }
+  if (hostFilter.value === 'iface_offline') return { availability: 'unavailable' }
   if (hostFilter.value === 'linked') return { cmdb: 'linked' }
   if (hostFilter.value === 'unlinked') return { cmdb: 'unlinked' }
   if (hostFilter.value === 'enabled') return { status: '0' }
@@ -1183,6 +1328,7 @@ async function loadHosts(keepSelection?: boolean) {
     } else {
       selected.value = null
       selectedIds.value = []
+      selectedHosts.value = []
       problems.value = []
       linkage.value = { groups: [], templates: [] }
       macros.value = []
@@ -1266,6 +1412,7 @@ async function doSync() {
 }
 
 function onSelection(rows: MonitorHost[]) {
+  selectedHosts.value = rows
   selectedIds.value = rows.map((r) => r.hostId)
 }
 
@@ -1541,6 +1688,7 @@ async function deleteSelectedHosts() {
   ElMessage.success('已删除')
   selected.value = null
   selectedIds.value = []
+  selectedHosts.value = []
   await loadHosts()
 }
 
@@ -1791,16 +1939,27 @@ async function onCreateCiChange(ciId: string | null | undefined) {
 }
 
 async function runAction(action: MonitorAction) {
-  if (!selectedIds.value.length) return
-  await ElMessageBox.confirm(
-    `将对 ${selectedIds.value.length} 台主机执行 ${action}。操作前会创建 Zabbix 维护期。`,
-    '确认操作',
-    { type: 'warning' },
+  const targets = resolveAgentTargets()
+  if (!targets) return
+  const label = AGENT_ACTION_LABEL[action] || action
+  try {
+    await ElMessageBox.confirm(
+      `将对 ${targets.length} 台主机执行「${label}」。操作前会创建 Zabbix 维护期。`,
+      '确认操作',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  await submitTask(
+    action,
+    targets.map((h) => h.hostId),
   )
-  await submitTask(action)
 }
 
 async function openUpgrade() {
+  const targets = resolveAgentTargets()
+  if (!targets) return
   upgradeAction.value = 'upgrade'
   upgradePackageId.value = ''
   try {
@@ -1811,6 +1970,7 @@ async function openUpgrade() {
   }
   if (!agentPackages.value.length) {
     ElMessage.warning('无可用 Agent 包，请先到部署配置上传')
+    return
   }
   upgradeVisible.value = true
 }
@@ -1820,17 +1980,44 @@ async function confirmUpgrade() {
     ElMessage.warning('请选择 Agent 包')
     return
   }
-  upgradeVisible.value = false
-  await submitTask(upgradeAction.value, undefined, upgradePackageId.value)
+  const targets = resolveAgentTargets()
+  if (!targets) return
+  const label = AGENT_ACTION_LABEL[upgradeAction.value] || upgradeAction.value
+  try {
+    await ElMessageBox.confirm(
+      `将对 ${targets.length} 台主机执行「${label}」。操作前会创建 Zabbix 维护期。`,
+      '确认操作',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  const ok = await submitTask(
+    upgradeAction.value,
+    targets.map((h) => h.hostId),
+    undefined,
+    upgradePackageId.value,
+  )
+  if (ok) upgradeVisible.value = false
 }
 
-async function submitTask(action: MonitorAction, version?: string, packageId?: string) {
+/** @returns 是否创建成功 */
+async function submitTask(
+  action: MonitorAction,
+  hostIds: string[],
+  version?: string,
+  packageId?: string,
+): Promise<boolean> {
+  if (!hostIds.length) {
+    ElMessage.warning('主机列表为空')
+    return false
+  }
   taskSubmitting.value = true
   try {
     const res = await createTask({
       instanceCode: instanceCode.value,
       action,
-      hostIds: selectedIds.value,
+      hostIds,
       targetVersion: version,
       packageId,
     })
@@ -1838,6 +2025,10 @@ async function submitTask(action: MonitorAction, version?: string, packageId?: s
     await refreshTask(res.id)
     if (pollTimer) window.clearInterval(pollTimer)
     pollTimer = window.setInterval(() => refreshTask(res.id), 3000)
+    return true
+  } catch {
+    // request 拦截器已提示错误
+    return false
   } finally {
     taskSubmitting.value = false
   }
@@ -1961,6 +2152,10 @@ async function refreshTask(id: string) {
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 12px;
+}
+.zbx-avail-empty {
+  color: var(--el-text-color-placeholder);
+  font-size: 13px;
 }
 .pager {
   display: flex;

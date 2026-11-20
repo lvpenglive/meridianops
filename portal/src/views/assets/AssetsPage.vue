@@ -45,6 +45,16 @@
               <el-option label="维护中" value="maintenance" />
               <el-option label="未知" value="unknown" />
             </el-select>
+            <el-select
+              v-model="sshCredentialFilter"
+              placeholder="SSH 凭据"
+              clearable
+              style="width: 130px"
+              @change="fetchList"
+            >
+              <el-option label="已绑凭据" value="bound" />
+              <el-option label="未绑凭据" value="unbound" />
+            </el-select>
             <el-input
               v-model="keyword"
               placeholder="搜索资产名称..."
@@ -111,6 +121,12 @@
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
+        <el-table-column label="SSH 凭据" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.sshCredentialId" type="success" size="small">已绑</el-tag>
+            <el-tag v-else type="info" size="small">未绑</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="关键属性" min-width="280">
           <template #default="{ row }">
             <span v-for="(val, key) in keyAttrs(row)" :key="key" class="attr-chip">
@@ -159,104 +175,14 @@
       </div>
     </el-card>
 
-    <!-- 新增/编辑对话框 -->
-    <el-dialog
+    <AssetFormDialog
       v-model="dialogVisible"
-      :title="isEdit ? '编辑资产' : '新增资产'"
-      width="640px"
-      @closed="onDialogClosed"
-    >
-      <el-form ref="formRef" :model="formData" :rules="formRules" label-width="100px">
-        <div class="form-section">
-          <div class="section-title">基本信息</div>
-          <el-form-item v-if="!isEdit" label="资产类型" prop="modelId">
-            <el-select v-model="formData.modelId" placeholder="选择 CI 模型" style="width: 100%" @change="onModelChange">
-              <el-option v-for="m in models" :key="m.id" :label="m.name" :value="m.id">
-                <el-icon style="vertical-align: middle"><component :is="iconComp(m.icon)" /></el-icon>
-                <span style="margin-left: 6px">{{ m.name }}</span>
-              </el-option>
-            </el-select>
-          </el-form-item>
-          <el-form-item v-else label="资产类型">
-            <el-tag>{{ modelName(formData.modelId) }}</el-tag>
-          </el-form-item>
-          <el-form-item label="名称" prop="name">
-            <el-input v-model="formData.name" placeholder="资产名称" clearable />
-          </el-form-item>
-          <el-form-item label="状态" prop="status">
-            <el-select v-model="formData.status" style="width: 100%">
-              <el-option label="运行中" value="running" />
-              <el-option label="已停止" value="stopped" />
-              <el-option label="维护中" value="maintenance" />
-              <el-option label="未知" value="unknown" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="标签">
-            <el-input v-model="formData.tags" placeholder="多个标签用逗号分隔" clearable />
-          </el-form-item>
-          <el-form-item label="负责人">
-            <el-select
-              v-model="formData.ownerIds"
-              multiple
-              filterable
-              clearable
-              collapse-tags
-              collapse-tags-tooltip
-              placeholder="可多选系统用户"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="u in userOptions"
-                :key="u.id"
-                :label="userOptionLabel(u)"
-                :value="u.id"
-              />
-            </el-select>
-          </el-form-item>
-        </div>
-
-        <div v-if="currentAttrs.length" class="form-section">
-          <div class="section-title">扩展属性</div>
-          <el-form-item
-            v-for="attr in currentAttrs"
-            :key="attr.code"
-            :label="attr.name"
-            :prop="'attributes.' + attr.code"
-            :rules="attr.isRequired ? [{ required: true, message: `${attr.name}不能为空`, trigger: 'blur' }] : []"
-          >
-            <el-select
-              v-if="attr.valueType === 'enum'"
-              v-model="formData.attributes[attr.code]"
-              :placeholder="`选择${attr.name}`"
-              clearable
-              style="width: 100%"
-            >
-              <el-option v-for="opt in attr.options || []" :key="opt" :label="opt" :value="opt" />
-            </el-select>
-            <el-input-number
-              v-else-if="attr.valueType === 'number'"
-              v-model="formData.attributes[attr.code]"
-              :controls="false"
-              style="width: 100%"
-            />
-            <el-switch
-              v-else-if="attr.valueType === 'boolean'"
-              v-model="formData.attributes[attr.code]"
-            />
-            <el-input
-              v-else
-              v-model="formData.attributes[attr.code]"
-              :placeholder="`输入${attr.name}`"
-              clearable
-            />
-          </el-form-item>
-        </div>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onSubmit">确定</el-button>
-      </template>
-    </el-dialog>
+      :mode="formMode"
+      :models="models"
+      :instance="editingInstance"
+      :default-model-id="selectedModelId"
+      @saved="onFormSaved"
+    />
 
     <!-- 批量导入对话框 -->
     <el-dialog
@@ -394,22 +320,20 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadFile, type UploadFiles, type UploadInstance } from 'element-plus'
+import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles, type UploadInstance } from 'element-plus'
 import { Plus, Search, Refresh, Grid, Monitor, Cpu, Coin, Connection, Upload, UploadFilled, View, Download } from '@element-plus/icons-vue'
 import { exportSheetsToExcel, exportToCsv, parseSpreadsheet } from '../../utils/export'
 import {
   listCiModels,
   getCiModel,
   listCiInstances,
-  createCiInstance,
-  updateCiInstance,
   deleteCiInstance,
   batchCreateInstances,
   getCmdbStats,
-  listCmdbUserOptions,
 } from '../../api/cmdb'
-import type { CiModel, CiModelAttr, CiInstance, CmdbStats, BatchInstanceItem, BatchImportResult, CmdbUserOption } from '../../api/types'
+import type { CiModel, CiModelAttr, CiInstance, CmdbStats, BatchInstanceItem, BatchImportResult } from '../../api/types'
 import { useUserStore } from '../../stores/user'
+import AssetFormDialog from './AssetFormDialog.vue'
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -462,6 +386,7 @@ const loading = ref(false)
 const list = reactive({ items: [] as CiInstance[], total: 0 })
 const selectedModelId = ref('')
 const statusFilter = ref('')
+const sshCredentialFilter = ref('')
 const keyword = ref('')
 const page = ref(1)
 const pageSize = ref(20)
@@ -472,6 +397,7 @@ async function fetchList() {
     const res = await listCiInstances({
       modelId: selectedModelId.value || undefined,
       status: statusFilter.value || undefined,
+      sshCredential: (sshCredentialFilter.value as 'bound' | 'unbound') || undefined,
       keyword: keyword.value || undefined,
       page: page.value,
       pageSize: pageSize.value,
@@ -553,19 +479,6 @@ function ownerText(row: CiInstance): string {
   return ''
 }
 
-function userOptionLabel(u: CmdbUserOption): string {
-  const name = u.displayName?.trim()
-  return name && name !== u.username ? `${name}（${u.username}）` : u.username
-}
-
-async function fetchUserOptions() {
-  try {
-    userOptions.value = await listCmdbUserOptions()
-  } catch {
-    userOptions.value = []
-  }
-}
-
 // ---- 图标 ----
 const iconMap: Record<string, any> = {
   Grid, Monitor, Cpu, Coin, Connection,
@@ -586,119 +499,24 @@ function iconStyle(code: string): Record<string, string> {
 
 // ---- 新增/编辑对话框 ----
 const dialogVisible = ref(false)
-const isEdit = ref(false)
-const saving = ref(false)
-const formRef = ref<FormInstance>()
-const currentAttrs = ref<CiModelAttr[]>([])
+const formMode = ref<'create' | 'edit'>('create')
+const editingInstance = ref<CiInstance | null>(null)
 
-const userOptions = ref<CmdbUserOption[]>([])
-
-const formData = reactive({
-  id: '',
-  modelId: '',
-  name: '',
-  status: 'running',
-  tags: '',
-  ownerIds: [] as string[],
-  attributes: {} as Record<string, any>,
-})
-
-const formRules: FormRules = {
-  modelId: [{ required: true, message: '请选择资产类型', trigger: 'change' }],
-  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  status: [{ required: true, message: '请选择状态', trigger: 'change' }],
-}
-
-async function openCreate() {
-  isEdit.value = false
-  resetForm()
-  if (selectedModelId.value) {
-    formData.modelId = selectedModelId.value
-    await onModelChange(selectedModelId.value)
-  }
+function openCreate() {
+  formMode.value = 'create'
+  editingInstance.value = null
   dialogVisible.value = true
 }
 
-async function openEdit(row: CiInstance) {
-  isEdit.value = true
-  resetForm()
-  formData.id = row.id
-  formData.modelId = row.modelId
-  formData.name = row.name
-  formData.status = row.status
-  formData.tags = row.tags
-  formData.ownerIds = row.ownerIds?.length ? [...row.ownerIds] : (row.ownerId ? [row.ownerId] : [])
-  formData.attributes = { ...(row.attributes || {}) }
-  await onModelChange(row.modelId)
+function openEdit(row: CiInstance) {
+  formMode.value = 'edit'
+  editingInstance.value = row
   dialogVisible.value = true
 }
 
-function resetForm() {
-  formData.id = ''
-  formData.modelId = ''
-  formData.name = ''
-  formData.status = 'running'
-  formData.tags = ''
-  formData.ownerIds = []
-  formData.attributes = {}
-  currentAttrs.value = []
-}
-
-async function onModelChange(modelId: string) {
-  if (!modelId) {
-    currentAttrs.value = []
-    return
-  }
-  currentAttrs.value = await getModelAttrs(modelId)
-  // 填充默认值
-  for (const attr of currentAttrs.value) {
-    if (formData.attributes[attr.code] === undefined) {
-      if (attr.defaultValue) {
-        formData.attributes[attr.code] = attr.valueType === 'number' ? Number(attr.defaultValue) : attr.defaultValue
-      } else {
-        formData.attributes[attr.code] = attr.valueType === 'number' ? undefined : ''
-      }
-    }
-  }
-}
-
-function onDialogClosed() {
-  resetForm()
-  formRef.value?.resetFields()
-}
-
-async function onSubmit() {
-  if (!formRef.value) return
-  await formRef.value.validate(async (valid) => {
-    if (!valid) return
-    saving.value = true
-    try {
-      const payload = {
-        name: formData.name.trim(),
-        status: formData.status,
-        tags: formData.tags,
-        ownerIds: formData.ownerIds,
-        attributes: formData.attributes,
-      }
-      if (isEdit.value) {
-        await updateCiInstance(formData.id, payload)
-        ElMessage.success('更新成功')
-      } else {
-        await createCiInstance({
-          modelId: formData.modelId,
-          ...payload,
-        })
-        ElMessage.success('创建成功')
-      }
-      dialogVisible.value = false
-      fetchList()
-      fetchStats()
-    } catch (e: any) {
-      ElMessage.error(e?.message || '操作失败')
-    } finally {
-      saving.value = false
-    }
-  })
+function onFormSaved() {
+  fetchList()
+  fetchStats()
 }
 
 async function onDelete(row: CiInstance) {
@@ -1007,7 +825,7 @@ async function exportData(format: 'xlsx' | 'csv') {
 // ---- 初始化 ----
 onMounted(async () => {
   // 三个请求无依赖关系，并行加载减少等待时间
-  await Promise.all([fetchModels(), fetchList(), fetchStats(), fetchUserOptions()])
+  await Promise.all([fetchModels(), fetchList(), fetchStats()])
 })
 </script>
 

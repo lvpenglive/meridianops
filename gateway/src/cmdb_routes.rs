@@ -486,6 +486,9 @@ struct InstanceQuery {
     keyword: Option<String>,
     #[serde(rename = "departmentId")]
     department_id: Option<String>,
+    /// bound / unbound：是否已绑 SSH 凭据
+    #[serde(rename = "sshCredential")]
+    ssh_credential: Option<String>,
     page: Option<u64>,
     #[serde(rename = "pageSize")]
     page_size: Option<u64>,
@@ -516,6 +519,9 @@ struct UpdateInstanceRequest {
     owner_ids: Option<Vec<String>>,
     attributes: Option<serde_json::Value>,
     tags: Option<String>,
+    /// 不传则保留原值；显式 null 清空
+    #[serde(default)]
+    ssh_credential_id: Option<Option<i64>>,
 }
 
 async fn list_instances(
@@ -532,9 +538,20 @@ async fn list_instances(
     let status = q.status.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
     let keyword = q.keyword.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
     let department_id = q.department_id.as_deref().and_then(|s| if s.is_empty() { None } else { Some(s) });
+    let ssh_credential = q
+        .ssh_credential
+        .as_deref()
+        .and_then(|s| if s.is_empty() { None } else { Some(s) });
 
     let (total, items) = db::query_ci_instances(
-        &state.db, model_id, status, keyword, department_id, page, page_size,
+        &state.db,
+        model_id,
+        status,
+        keyword,
+        department_id,
+        ssh_credential,
+        page,
+        page_size,
     )
     .await?;
     let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
@@ -676,9 +693,30 @@ async fn update_instance(
         .map(|v| v.to_string())
         .unwrap_or_else(|| existing.attributes.unwrap_or_else(|| "{}".to_string()));
     let tags = req.tags.unwrap_or(existing.tags);
+    let ssh_credential_id = match req.ssh_credential_id {
+        Some(v) => v,
+        None => existing.ssh_credential_id,
+    };
+    if let Some(cid) = ssh_credential_id {
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ssh_credentials WHERE id = ?")
+            .bind(cid)
+            .fetch_one(&state.db)
+            .await?;
+        if exists == 0 {
+            return Err(AppError::bad("SSH 凭据不存在"));
+        }
+    }
 
     db::update_ci_instance(
-        &state.db, &id, &name, &status, dept, owner, &attrs_json, &tags,
+        &state.db,
+        &id,
+        &name,
+        &status,
+        dept,
+        owner,
+        &attrs_json,
+        &tags,
+        ssh_credential_id,
     )
     .await?;
     if owners_in_req {

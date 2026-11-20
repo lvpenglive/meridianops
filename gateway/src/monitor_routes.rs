@@ -227,8 +227,6 @@ async fn create_task(
     if body.host_ids.is_empty() {
         return Err(AppError::bad("主机列表为空"));
     }
-    ensure_agent_job_credential(&state.db, &body.action).await?;
-
     // 只允许已同步且关联了配置项的主机执行作业类动作
     let placeholders = body
         .host_ids
@@ -251,12 +249,15 @@ async fn create_task(
     use sqlx::Row;
     let mut linked = std::collections::HashSet::new();
     let mut missing_ci = Vec::new();
+    let mut ci_ids = Vec::new();
     for r in &rows {
         let hid: String = r.try_get("host_id").unwrap_or_default();
         let ci: Option<String> = r.try_get("ci_id").ok().flatten();
         linked.insert(hid.clone());
         if ci.as_deref().unwrap_or("").is_empty() {
             missing_ci.push(hid);
+        } else if let Some(cid) = ci {
+            ci_ids.push(cid);
         }
     }
     let not_synced: Vec<_> = body
@@ -279,6 +280,7 @@ async fn create_task(
         );
         return Err(AppError::bad(&msg));
     }
+    ensure_agent_job_credential(&state.db, &body.action, &ci_ids).await?;
 
     let mut target_version = body.target_version.clone();
     let package_id = body.package_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
@@ -458,10 +460,11 @@ fn ctl_endpoint(state: &AppState) -> Result<(String, String), AppError> {
     Ok((base, token))
 }
 
-/// 作业剧本若为 SSH 执行，必须已绑定凭据，否则任务会整批失败。
+/// 作业剧本若为 SSH 执行：剧本有默认凭据，或本批所有配置项均已绑定凭据。
 pub(crate) async fn ensure_agent_job_credential(
     pool: &sqlx::MySqlPool,
     action: &str,
+    ci_ids: &[String],
 ) -> Result<(), AppError> {
     let name = match action {
         "install" => "Zabbix Agent 安装",
@@ -491,13 +494,35 @@ pub(crate) async fn ensure_agent_job_credential(
         .ok()
         .flatten()
         .unwrap_or_else(|| "ssh".into());
-    let cred: Option<i64> = row.try_get("credential_id").ok().flatten();
-    if executor == "ssh" && cred.is_none() {
-        return Err(AppError::bad(&format!(
-            "作业「{name}」未绑定 SSH 凭据，请先在作业中心配置后再执行"
-        )));
+    if executor != "ssh" {
+        return Ok(());
     }
-    Ok(())
+    let cred: Option<i64> = row.try_get("credential_id").ok().flatten();
+    if cred.is_some() {
+        return Ok(());
+    }
+    let map = crate::db::ci_ssh_credential_map(pool, ci_ids)
+        .await
+        .map_err(|e| AppError::internal(format!("查询配置项凭据失败: {e}")))?;
+    let missing: Vec<&str> = ci_ids
+        .iter()
+        .filter(|id| map.get(*id).copied().flatten().is_none())
+        .map(|s| s.as_str())
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let sample: Vec<&str> = missing.iter().copied().take(5).collect();
+    let more = if missing.len() > 5 {
+        format!(" 等 {} 台", missing.len())
+    } else {
+        String::new()
+    };
+    Err(AppError::bad(&format!(
+        "作业「{name}」未配置默认凭据，且以下配置项未绑定 SSH 凭据：{}{}。请到资产详情绑定，或在作业中心为该剧本配置默认凭据",
+        sample.join(", "),
+        more
+    )))
 }
 
 async fn forward(response: reqwest::Response) -> Result<impl IntoResponse, AppError> {

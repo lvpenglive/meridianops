@@ -877,7 +877,7 @@ pub(crate) async fn start_install(
     if group_ids.is_empty() || template_ids.is_empty() {
         return Err(AppError::bad("请选择主机组和模板"));
     }
-    crate::monitor_routes::ensure_agent_job_credential(&state.db, "install").await?;
+    crate::monitor_routes::ensure_agent_job_credential(&state.db, "install", ci_ids).await?;
     let package_id = package_id.trim();
     if package_id.is_empty() {
         return Err(AppError::bad("请选择 Agent 安装包"));
