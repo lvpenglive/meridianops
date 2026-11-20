@@ -1279,6 +1279,7 @@ onBeforeUnmount(() => {
 
 function rosterFilter(): {
   agent?: 'online' | 'offline' | 'unknown'
+  availability?: 'unavailable' | 'available' | 'unknown'
   cmdb?: 'linked' | 'unlinked'
   status?: '0' | '1'
 } {
