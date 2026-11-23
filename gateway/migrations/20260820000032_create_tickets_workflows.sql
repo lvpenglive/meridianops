@@ -138,28 +138,30 @@ CREATE TABLE workflow_templates (
 
 -- ============================================================
 -- 种子权限 (ticket:*, workflow:*)
+-- id 用 CHAR(36) 固定 UUID（与 permissions 表一致；勿用 UUID_TO_BIN）
 -- ============================================================
-INSERT IGNORE INTO permissions (id, code, name, module, description) VALUES
-(UUID_TO_BIN(UUID(),1), 'ticket:read',   '工单查看',   'ticket',   '查看工单列表、详情、KPI、评论'),
-(UUID_TO_BIN(UUID(),1), 'ticket:create', '工单创建',   'ticket',   '创建工单并启动流程'),
-(UUID_TO_BIN(UUID(),1), 'ticket:update', '工单更新',   'ticket',   '编辑工单、指派处理人、流程动作、关闭/取消'),
-(UUID_TO_BIN(UUID(),1), 'ticket:delete', '工单删除',   'ticket',   '软删除工单'),
-(UUID_TO_BIN(UUID(),1), 'workflow:read',  '流程模板查看', 'workflow', '查看模板列表、详情、预览编译'),
-(UUID_TO_BIN(UUID(),1), 'workflow:admin', '流程模板管理', 'workflow', '创建/编辑/启停/删除流程模板');
+INSERT IGNORE INTO permissions (id, code, name, module, description, created_at) VALUES
+('00000000-0000-0000-0000-000000000210', 'ticket:read',    '工单查看',     'ticket',   '查看工单列表、详情、KPI、评论', UTC_TIMESTAMP()),
+('00000000-0000-0000-0000-000000000211', 'ticket:create',  '工单创建',     'ticket',   '创建工单并启动流程', UTC_TIMESTAMP()),
+('00000000-0000-0000-0000-000000000212', 'ticket:update',  '工单更新',     'ticket',   '编辑工单、指派处理人、流程动作、关闭/取消', UTC_TIMESTAMP()),
+('00000000-0000-0000-0000-000000000213', 'ticket:delete',  '工单删除',     'ticket',   '软删除工单', UTC_TIMESTAMP()),
+('00000000-0000-0000-0000-000000000214', 'workflow:read',  '流程模板查看', 'workflow', '查看模板列表、详情、预览编译', UTC_TIMESTAMP()),
+('00000000-0000-0000-0000-000000000215', 'workflow:admin', '流程模板管理', 'workflow', '创建/编辑/启停/删除流程模板', UTC_TIMESTAMP());
 
--- admin & operator 角色都给工单权限；viewer 只给只读权限
-SET @admin_id = (SELECT id FROM roles WHERE name='admin' LIMIT 1);
-SET @op_id    = (SELECT id FROM roles WHERE name='operator' LIMIT 1);
-SET @viewer_id= (SELECT id FROM roles WHERE name='viewer' LIMIT 1);
-
-INSERT IGNORE INTO role_permissions (role_id, permission_id)
-SELECT @admin_id, id FROM permissions WHERE code IN ('ticket:read','ticket:create','ticket:update','ticket:delete','workflow:read','workflow:admin') AND @admin_id IS NOT NULL;
-
-INSERT IGNORE INTO role_permissions (role_id, permission_id)
-SELECT @op_id, id FROM permissions WHERE code IN ('ticket:read','ticket:create','ticket:update','workflow:read') AND @op_id IS NOT NULL;
-
-INSERT IGNORE INTO role_permissions (role_id, permission_id)
-SELECT @viewer_id, id FROM permissions WHERE code IN ('ticket:read','workflow:read') AND @viewer_id IS NOT NULL;
+-- admin / operator / viewer（固定角色 UUID，见 000006 seed）
+INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES
+('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000210'),
+('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000211'),
+('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000212'),
+('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000213'),
+('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000214'),
+('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000215'),
+('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000210'),
+('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000211'),
+('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000212'),
+('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000214'),
+('00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000210'),
+('00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000214');
 
 -- ============================================================
 -- 5 个种子模板（Definition 是 LogicFlow 结构）
