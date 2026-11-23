@@ -61,6 +61,9 @@
                   <span v-if="sshCredentialLabel">{{ sshCredentialLabel }}</span>
                   <span v-else class="text-muted">未绑定（作业将用剧本默认凭据）</span>
                 </el-descriptions-item>
+                <el-descriptions-item label="SSH 通道">
+                  {{ instance.sshExecMode === 'direct' ? '强制直连' : '自动（按监控 Proxy 解析跳板）' }}
+                </el-descriptions-item>
                 <el-descriptions-item label="数据来源">
                   <el-tag v-if="instance.source" size="small" type="warning" effect="plain">{{ sourceLabel(instance.source) }}</el-tag>
                   <el-tag v-else size="small" type="info" effect="plain">手工录入</el-tag>

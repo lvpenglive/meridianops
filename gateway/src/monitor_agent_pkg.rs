@@ -35,6 +35,11 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/monitor/proxy-conf-maps/:id",
             delete(delete_conf_map),
         )
+        .route(
+            "/api/monitor/ssh-jumps",
+            get(list_ssh_jumps).post(upsert_ssh_jump),
+        )
+        .route("/api/monitor/ssh-jumps/:id", delete(delete_ssh_jump))
         .layer(DefaultBodyLimit::max(MAX_PACKAGE_BYTES + 16 * 1024 * 1024))
 }
 
@@ -269,7 +274,7 @@ async fn list_conf_maps(
 ) -> Result<Json<Value>, AppError> {
     auth::require_permission(&auth, "monitor:read")?;
     let rows = sqlx::query(
-        "SELECT id, instance_code, proxy_group_id, conf_suffix, remark, created_at, updated_at \
+        "SELECT id, instance_code, proxy_group_id, conf_suffix, jump_proxy_id, remark, created_at, updated_at \
          FROM monitor_proxy_conf_maps ORDER BY instance_code, conf_suffix",
     )
     .fetch_all(&state.db)
@@ -282,6 +287,7 @@ async fn list_conf_maps(
                 "instanceCode": r.try_get::<String, _>("instance_code").unwrap_or_default(),
                 "proxyGroupId": r.try_get::<String, _>("proxy_group_id").unwrap_or_default(),
                 "confSuffix": r.try_get::<String, _>("conf_suffix").unwrap_or_default(),
+                "jumpProxyId": r.try_get::<Option<String>, _>("jump_proxy_id").unwrap_or(None),
                 "remark": r.try_get::<Option<String>, _>("remark").unwrap_or(None),
                 "createdAt": r.try_get::<Option<chrono::NaiveDateTime>, _>("created_at")
                     .ok()
@@ -299,6 +305,7 @@ struct UpsertConfMapBody {
     instance_code: String,
     proxy_group_id: String,
     conf_suffix: String,
+    jump_proxy_id: Option<String>,
     remark: Option<String>,
 }
 
@@ -311,24 +318,37 @@ async fn upsert_conf_map(
     let instance = body.instance_code.trim();
     let group = body.proxy_group_id.trim();
     let suffix = body.conf_suffix.trim();
+    let jump_proxy = body
+        .jump_proxy_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     if instance.is_empty() || group.is_empty() || suffix.is_empty() {
         return Err(AppError::bad("实例、Proxy Group、conf 后缀均不能为空"));
     }
     if !group.chars().all(|c| c.is_ascii_digit()) {
         return Err(AppError::bad("Proxy Group ID 无效"));
     }
+    if let Some(jp) = jump_proxy {
+        if !jp.chars().all(|c| c.is_ascii_digit()) {
+            return Err(AppError::bad("跳板 Proxy ID 无效"));
+        }
+    }
     if suffix.contains('/') || suffix.contains('\\') || suffix.contains("..") {
         return Err(AppError::bad("conf 后缀无效"));
     }
     sqlx::query(
-        "INSERT INTO monitor_proxy_conf_maps (instance_code, proxy_group_id, conf_suffix, remark, created_at) \
-         VALUES (?, ?, ?, ?, UTC_TIMESTAMP()) \
-         ON DUPLICATE KEY UPDATE conf_suffix = VALUES(conf_suffix), remark = VALUES(remark), \
+        "INSERT INTO monitor_proxy_conf_maps \
+         (instance_code, proxy_group_id, conf_suffix, jump_proxy_id, remark, created_at) \
+         VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
+         ON DUPLICATE KEY UPDATE conf_suffix = VALUES(conf_suffix), \
+         jump_proxy_id = VALUES(jump_proxy_id), remark = VALUES(remark), \
          updated_at = UTC_TIMESTAMP()",
     )
     .bind(instance)
     .bind(group)
     .bind(suffix)
+    .bind(jump_proxy)
     .bind(body.remark.as_deref())
     .execute(&state.db)
     .await?;
@@ -347,6 +367,121 @@ async fn delete_conf_map(
         .await?;
     if res.rows_affected() == 0 {
         return Err(AppError::not_found("映射不存在"));
+    }
+    Ok(Json(json!({ "code": 0, "data": { "id": id } })))
+}
+
+async fn list_ssh_jumps(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<Value>, AppError> {
+    auth::require_permission(&auth, "monitor:read")?;
+    let rows = sqlx::query(
+        "SELECT j.id, j.instance_code, j.proxy_id, j.proxy_name, j.jump_host, j.jump_port, \
+                j.credential_id, j.enabled, j.remark, j.created_at, c.name AS credential_name \
+         FROM monitor_ssh_jumps j \
+         LEFT JOIN ssh_credentials c ON c.id = j.credential_id \
+         ORDER BY j.instance_code, j.proxy_id",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<i64, _>("id").unwrap_or(0),
+                "instanceCode": r.try_get::<String, _>("instance_code").unwrap_or_default(),
+                "proxyId": r.try_get::<String, _>("proxy_id").unwrap_or_default(),
+                "proxyName": r.try_get::<Option<String>, _>("proxy_name").unwrap_or(None),
+                "jumpHost": r.try_get::<String, _>("jump_host").unwrap_or_default(),
+                "jumpPort": r.try_get::<i32, _>("jump_port").unwrap_or(22),
+                "credentialId": r.try_get::<i64, _>("credential_id").unwrap_or(0),
+                "credentialName": r.try_get::<Option<String>, _>("credential_name").unwrap_or(None),
+                "enabled": r.try_get::<i8, _>("enabled").unwrap_or(1) == 1,
+                "remark": r.try_get::<Option<String>, _>("remark").unwrap_or(None),
+                "createdAt": r.try_get::<Option<chrono::NaiveDateTime>, _>("created_at")
+                    .ok()
+                    .flatten()
+                    .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "code": 0, "data": items })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertSshJumpBody {
+    instance_code: String,
+    proxy_id: String,
+    proxy_name: Option<String>,
+    jump_host: String,
+    jump_port: Option<i32>,
+    credential_id: i64,
+    enabled: Option<bool>,
+    remark: Option<String>,
+}
+
+async fn upsert_ssh_jump(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Json(body): Json<UpsertSshJumpBody>,
+) -> Result<Json<Value>, AppError> {
+    auth::require_permission(&auth, "monitor:agent")?;
+    let instance = body.instance_code.trim();
+    let proxy_id = body.proxy_id.trim();
+    let host = body.jump_host.trim();
+    if instance.is_empty() || proxy_id.is_empty() || host.is_empty() {
+        return Err(AppError::bad("实例、Proxy ID、跳板地址均不能为空"));
+    }
+    if !proxy_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(AppError::bad("Proxy ID 无效"));
+    }
+    if body.credential_id <= 0 {
+        return Err(AppError::bad("请选择跳板 SSH 凭据"));
+    }
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ssh_credentials WHERE id = ?")
+        .bind(body.credential_id)
+        .fetch_one(&state.db)
+        .await?;
+    if exists == 0 {
+        return Err(AppError::bad("SSH 凭据不存在"));
+    }
+    let port = body.jump_port.unwrap_or(22).max(1);
+    let enabled = if body.enabled.unwrap_or(true) { 1 } else { 0 };
+    sqlx::query(
+        "INSERT INTO monitor_ssh_jumps \
+         (instance_code, proxy_id, proxy_name, jump_host, jump_port, credential_id, enabled, remark, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
+         ON DUPLICATE KEY UPDATE proxy_name = VALUES(proxy_name), jump_host = VALUES(jump_host), \
+         jump_port = VALUES(jump_port), credential_id = VALUES(credential_id), enabled = VALUES(enabled), \
+         remark = VALUES(remark), updated_at = UTC_TIMESTAMP()",
+    )
+    .bind(instance)
+    .bind(proxy_id)
+    .bind(body.proxy_name.as_deref())
+    .bind(host)
+    .bind(port)
+    .bind(body.credential_id)
+    .bind(enabled)
+    .bind(body.remark.as_deref())
+    .execute(&state.db)
+    .await?;
+    list_ssh_jumps(State(state), auth).await
+}
+
+async fn delete_ssh_jump(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, AppError> {
+    auth::require_permission(&auth, "monitor:agent")?;
+    let res = sqlx::query("DELETE FROM monitor_ssh_jumps WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    if res.rows_affected() == 0 {
+        return Err(AppError::not_found("跳板配置不存在"));
     }
     Ok(Json(json!({ "code": 0, "data": { "id": id } })))
 }

@@ -41,12 +41,23 @@ pub struct SshCredential {
     pub passphrase: String,
 }
 
+/// SSH 跳板端点（解析后；含已解密凭据快照则在内部 PreparedJump 携带）
+#[derive(Clone, Debug)]
+pub struct SshJumpRef {
+    pub id: i64,
+    pub host: String,
+    pub port: u16,
+    pub credential_id: i64,
+}
+
 /// 单台主机的执行目标
 pub struct SshTarget {
     pub asset_id: String,
     pub asset_name: String,
     pub ip: String,
     pub port: i64,
+    /// 可选：经 Proxy 跳板再连目标
+    pub jump: Option<SshJumpRef>,
 }
 
 /// 单台主机执行结果
@@ -137,7 +148,8 @@ impl SshExecutor {
         }
     }
 
-    /// 批量并发执行：对所有目标主机并发执行脚本
+    /// 批量并发执行：对所有目标主机并发执行脚本。
+    /// `jump_creds`：跳板 credential_id → 已解密凭据。
     pub async fn execute_batch(
         &self,
         targets: Vec<SshTarget>,
@@ -145,6 +157,7 @@ impl SshExecutor {
         script_type: &str,
         timeout_secs: i64,
         upload: Option<(String, Vec<u8>)>,
+        jump_creds: &HashMap<i64, SshCredentialSnap>,
     ) -> Vec<SshExecResult> {
         let mut handles = Vec::with_capacity(targets.len());
 
@@ -154,12 +167,28 @@ impl SshExecutor {
             let stype = script_type.to_string();
             let timeout = timeout_secs;
             let upload = upload.clone();
-            let cred = SshCredentialSnap {
-                username: self.credential.username.clone(),
-                password: self.credential.password.clone(),
-                private_key_pem: self.credential.private_key_pem.clone(),
-                passphrase: self.credential.passphrase.clone(),
-                auth_type: self.credential.auth_type.clone(),
+            let cred = snap_from_credential(&self.credential);
+            let jump_snap = match &target.jump {
+                Some(j) => match jump_creds.get(&j.credential_id) {
+                    Some(c) => Some(PreparedJump {
+                        host: j.host.clone(),
+                        port: j.port,
+                        cred: c.clone(),
+                    }),
+                    None => {
+                        let asset_id = target.asset_id.clone();
+                        let cid = j.credential_id;
+                        handles.push(tokio::spawn(async move {
+                            SshExecResult::error(
+                                asset_id,
+                                format!("跳板凭据 id={cid} 未加载（ProxyJump 配置不完整）"),
+                                0,
+                            )
+                        }));
+                        continue;
+                    }
+                },
+                None => None,
             };
 
             let handle = tokio::spawn(async move {
@@ -167,7 +196,16 @@ impl SshExecutor {
                 let upload_ref = upload
                     .as_ref()
                     .map(|(path, data)| (path.as_str(), data.as_slice()));
-                execute_on_host(&target, &cred, &script, &stype, timeout, upload_ref).await
+                execute_on_host(
+                    &target,
+                    &cred,
+                    jump_snap.as_ref(),
+                    &script,
+                    &stype,
+                    timeout,
+                    upload_ref,
+                )
+                .await
             });
             handles.push(handle);
         }
@@ -190,7 +228,8 @@ impl SshExecutor {
 }
 
 /// 凭据快照（用于跨 task 传递，避免生命周期问题）
-struct SshCredentialSnap {
+#[derive(Clone)]
+pub struct SshCredentialSnap {
     username: String,
     password: String,
     private_key_pem: String,
@@ -198,11 +237,28 @@ struct SshCredentialSnap {
     auth_type: String,
 }
 
+fn snap_from_credential(c: &SshCredential) -> SshCredentialSnap {
+    SshCredentialSnap {
+        username: c.username.clone(),
+        password: c.password.clone(),
+        private_key_pem: c.private_key_pem.clone(),
+        passphrase: c.passphrase.clone(),
+        auth_type: c.auth_type.clone(),
+    }
+}
+
+struct PreparedJump {
+    host: String,
+    port: u16,
+    cred: SshCredentialSnap,
+}
+
 // ===== 单台主机执行 =====
 
 async fn execute_on_host(
     target: &SshTarget,
     cred: &SshCredentialSnap,
+    jump: Option<&PreparedJump>,
     script: &str,
     script_type: &str,
     timeout_secs: i64,
@@ -219,7 +275,7 @@ async fn execute_on_host(
 
     let result = tokio::time::timeout(
         timeout_dur,
-        ssh_connect_and_exec(&addr, cred, script, script_type, upload),
+        ssh_connect_and_exec(&addr, cred, jump, script, script_type, upload),
     )
     .await;
 
@@ -251,35 +307,10 @@ async fn execute_on_host(
     }
 }
 
-/// 建立 SSH 连接；可选先推送文件，再执行脚本。
-///
-/// 返回 (stdout, stderr, exit_code)
-async fn ssh_connect_and_exec(
-    addr: &str,
+async fn authenticate_handle(
+    handle: &mut Handle<SshClientHandler>,
     cred: &SshCredentialSnap,
-    script: &str,
-    script_type: &str,
-    upload: Option<(&str, &[u8])>,
-) -> Result<(String, String, i32), String> {
-    // 1. 连接（带连接超时）
-    let config = Arc::new(client::Config::default());
-    let addr_parts: Vec<&str> = addr.split(':').collect();
-    let host = addr_parts[0];
-    let port: u16 = addr_parts
-        .get(1)
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(22);
-
-    let connect_fut = client::connect(config, (host, port), SshClientHandler);
-    let mut handle: Handle<SshClientHandler> = tokio::time::timeout(
-        Duration::from_secs(SSH_CONNECT_TIMEOUT_SECS),
-        connect_fut,
-    )
-    .await
-    .map_err(|_| format!("SSH 连接超时（{}秒）", SSH_CONNECT_TIMEOUT_SECS))?
-    .map_err(|e| format!("SSH 连接失败: {}", e))?;
-
-    // 2. 认证
+) -> Result<(), String> {
     let auth_ok = match cred.auth_type.as_str() {
         "key" => {
             if cred.private_key_pem.is_empty() {
@@ -297,24 +328,94 @@ async fn ssh_connect_and_exec(
                 .await
                 .map_err(|e| format!("私钥认证请求失败: {}", e))?
         }
-        _ => {
-            handle
-                .authenticate_password(&cred.username, &cred.password)
-                .await
-                .map_err(|e| format!("密码认证请求失败: {}", e))?
-        }
+        _ => handle
+            .authenticate_password(&cred.username, &cred.password)
+            .await
+            .map_err(|e| format!("密码认证请求失败: {}", e))?,
     };
-
     if !auth_ok {
         return Err(format!("SSH 认证失败: 用户 {}", cred.username));
     }
+    Ok(())
+}
 
-    // 2.5 可选：推送安装包
+/// 建立 SSH 连接（可选经跳板）；可选先推送文件，再执行脚本。
+///
+/// 返回 (stdout, stderr, exit_code)
+async fn ssh_connect_and_exec(
+    addr: &str,
+    cred: &SshCredentialSnap,
+    jump: Option<&PreparedJump>,
+    script: &str,
+    script_type: &str,
+    upload: Option<(&str, &[u8])>,
+) -> Result<(String, String, i32), String> {
+    let config = Arc::new(client::Config::default());
+    let addr_parts: Vec<&str> = addr.split(':').collect();
+    let host = addr_parts[0];
+    let port: u16 = addr_parts
+        .get(1)
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(22);
+
+    // 持有跳板会话至目标会话结束
+    let mut jump_handle: Option<Handle<SshClientHandler>> = None;
+
+    let mut handle: Handle<SshClientHandler> = if let Some(j) = jump {
+        let jump_addr = (j.host.as_str(), j.port);
+        let connect_fut = client::connect(config.clone(), jump_addr, SshClientHandler);
+        let mut jh: Handle<SshClientHandler> = tokio::time::timeout(
+            Duration::from_secs(SSH_CONNECT_TIMEOUT_SECS),
+            connect_fut,
+        )
+        .await
+        .map_err(|_| format!("跳板 SSH 连接超时（{}秒）: {}:{}", SSH_CONNECT_TIMEOUT_SECS, j.host, j.port))?
+        .map_err(|e| format!("跳板 SSH 连接失败 {}:{}: {}", j.host, j.port, e))?;
+        authenticate_handle(&mut jh, &j.cred)
+            .await
+            .map_err(|e| format!("跳板认证失败 ({}@{}): {}", j.cred.username, j.host, e))?;
+
+        let channel = tokio::time::timeout(
+            Duration::from_secs(SSH_CONNECT_TIMEOUT_SECS),
+            jh.channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "经跳板 {} 打开到 {}:{} 的通道超时（{}秒）",
+                j.host, host, port, SSH_CONNECT_TIMEOUT_SECS
+            )
+        })?
+        .map_err(|e| {
+            format!(
+                "经跳板 {} 无法连通目标 {}:{}: {}（请确认 Proxy 能 SSH 到业务机）",
+                j.host, host, port, e
+            )
+        })?;
+        let stream = channel.into_stream();
+        let target_fut = client::connect_stream(config, stream, SshClientHandler);
+        let th = tokio::time::timeout(Duration::from_secs(SSH_CONNECT_TIMEOUT_SECS), target_fut)
+            .await
+            .map_err(|_| format!("目标 SSH 握手超时（经跳板 {}）", j.host))?
+            .map_err(|e| format!("目标 SSH 握手失败（经跳板 {}）: {}", j.host, e))?;
+        jump_handle = Some(jh);
+        th
+    } else {
+        let connect_fut = client::connect(config, (host, port), SshClientHandler);
+        tokio::time::timeout(Duration::from_secs(SSH_CONNECT_TIMEOUT_SECS), connect_fut)
+            .await
+            .map_err(|_| format!("SSH 连接超时（{}秒）", SSH_CONNECT_TIMEOUT_SECS))?
+            .map_err(|e| format!("SSH 连接失败: {}", e))?
+    };
+
+    authenticate_handle(&mut handle, cred).await?;
+
+    // 可选：推送安装包
     if let Some((remote_path, bytes)) = upload {
         ssh_upload_bytes(&mut handle, remote_path, bytes).await?;
     }
 
-    // 3. 构造执行命令（脚本通过 stdin 传入）
+    // 构造执行命令（脚本通过 stdin 传入）
     let (command, script_bytes) = build_command(script, script_type);
 
     // 4. 开 channel 执行
@@ -358,10 +459,13 @@ async fn ssh_connect_and_exec(
         }
     }
 
-    // 6. 关闭连接
+    // 6. 关闭连接（先目标，再跳板）
     let _ = handle
         .disconnect(Disconnect::ByApplication, "", "en")
         .await;
+    if let Some(mut jh) = jump_handle {
+        let _ = jh.disconnect(Disconnect::ByApplication, "", "en").await;
+    }
 
     let stdout_str = String::from_utf8_lossy(&stdout).to_string();
     let stderr_str = String::from_utf8_lossy(&stderr).to_string();
@@ -480,6 +584,7 @@ pub async fn test_connection(
     let (stdout, stderr, exit_code) = ssh_connect_and_exec(
         &format!("{host}:{port}"),
         &snap,
+        None,
         "echo meridianops-ssh-ok",
         "shell",
         None,
@@ -586,8 +691,17 @@ pub async fn persist_target_result(
     .await;
 }
 
+/// 作业环境里带来的跳板提示（安装/启停由 zabbix-ctl 注入）
+#[derive(Clone, Default)]
+pub struct JumpHint {
+    pub instance_code: String,
+    pub proxy_id: String,
+    pub proxy_group_id: String,
+}
+
 /// V1.5 SSH 执行入口：替代 V1 的 run_job_mock_executor。
 /// `fallback_credential_id` 为剧本默认凭据；优先使用配置项 `ssh_credential_id`。
+/// 跳板：CI `ssh_exec_mode=direct` 强制直连；否则按对照表/环境中的 Proxy 解析 `monitor_ssh_jumps`。
 pub async fn run_job_ssh_executor(
     pool: MySqlPool,
     run_id: i64,
@@ -599,55 +713,115 @@ pub async fn run_job_ssh_executor(
     fallback_credential_id: Option<i64>,
     ssh_port: i64,
     upload: Option<(String, Vec<u8>)>,
+    jump_hint: JumpHint,
 ) -> Result<(), AppError> {
     let ci_cred_map = crate::db::ci_ssh_credential_map(&pool, &asset_ids)
         .await
         .map_err(|e| AppError::internal(&format!("查询配置项凭据失败: {e}")))?;
-
-    let targets: Vec<SshTarget> = asset_ids
-        .iter()
-        .map(|aid| {
-            let (name, ip) = asset_map.get(aid).cloned().unwrap_or_else(|| {
-                (format!("Asset#{}", aid), String::new())
-            });
-            SshTarget {
-                asset_id: aid.clone(),
-                asset_name: name,
-                ip,
-                port: ssh_port,
-            }
-        })
-        .collect();
+    let exec_mode_map = crate::db::ci_ssh_exec_mode_map(&pool, &asset_ids)
+        .await
+        .map_err(|e| AppError::internal(&format!("查询配置项执行方式失败: {e}")))?;
+    let link_proxy_map = crate::db::ci_zbx_proxy_map(&pool, &asset_ids)
+        .await
+        .unwrap_or_default();
 
     let mut results: Vec<SshExecResult> = Vec::new();
-    // credential_id -> targets
+    // (target_cred_id) -> targets（跳板已写在 SshTarget.jump）
     let mut groups: HashMap<i64, Vec<SshTarget>> = HashMap::new();
+    let mut jump_cred_ids: Vec<i64> = Vec::new();
 
-    for t in targets {
-        if t.ip.trim().is_empty() {
+    for aid in &asset_ids {
+        let (name, ip) = asset_map
+            .get(aid)
+            .cloned()
+            .unwrap_or_else(|| (format!("Asset#{}", aid), String::new()));
+        if ip.trim().is_empty() {
             results.push(SshExecResult::error(
-                t.asset_id,
-                format!("配置项 {} 缺少管理 IP（attributes.ip / mgmt_ip）", t.asset_name),
+                aid.clone(),
+                format!("配置项 {} 缺少管理 IP（attributes.ip / mgmt_ip）", name),
                 0,
             ));
             continue;
         }
-        let ci_cred = ci_cred_map.get(&t.asset_id).copied().flatten();
+        let ci_cred = ci_cred_map.get(aid).copied().flatten();
         let resolved = ci_cred.or(fallback_credential_id);
-        match resolved {
-            Some(cid) => groups.entry(cid).or_default().push(t),
-            None => results.push(SshExecResult::error(
-                t.asset_id.clone(),
-                format!(
-                    "配置项 {} 未绑定 SSH 凭据，且作业未配置默认凭据",
-                    t.asset_name
-                ),
+        let Some(cid) = resolved else {
+            results.push(SshExecResult::error(
+                aid.clone(),
+                format!("配置项 {} 未绑定 SSH 凭据，且作业未配置默认凭据", name),
                 0,
-            )),
+            ));
+            continue;
+        };
+
+        let mode = exec_mode_map
+            .get(aid)
+            .map(|s| s.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let jump = if mode == "direct" {
+            None
+        } else {
+            let (mut proxy_id, mut group_id) = link_proxy_map
+                .get(aid)
+                .cloned()
+                .unwrap_or_default();
+            if proxy_id.trim().is_empty() {
+                proxy_id = jump_hint.proxy_id.clone();
+            }
+            if group_id.trim().is_empty() {
+                group_id = jump_hint.proxy_group_id.clone();
+            }
+            match resolve_ssh_jump(
+                &pool,
+                &jump_hint.instance_code,
+                proxy_id.trim(),
+                group_id.trim(),
+            )
+            .await
+            {
+                Ok(j) => j,
+                Err(e) => {
+                    results.push(SshExecResult::error(
+                        aid.clone(),
+                        format!("解析 SSH 跳板失败: {e}"),
+                        0,
+                    ));
+                    continue;
+                }
+            }
+        };
+        if let Some(ref j) = jump {
+            jump_cred_ids.push(j.credential_id);
+        }
+
+        groups.entry(cid).or_default().push(SshTarget {
+            asset_id: aid.clone(),
+            asset_name: name,
+            ip,
+            port: ssh_port,
+            jump,
+        });
+    }
+
+    jump_cred_ids.sort_unstable();
+    jump_cred_ids.dedup();
+    let mut jump_creds: HashMap<i64, SshCredentialSnap> = HashMap::new();
+    for jid in jump_cred_ids {
+        match load_credential(&pool, jid).await {
+            Ok(c) => {
+                jump_creds.insert(jid, snap_from_credential(&c));
+            }
+            Err(e) => {
+                return Err(AppError::bad(&format!(
+                    "加载跳板 SSH 凭据 id={jid} 失败: {e}"
+                )));
+            }
         }
     }
 
-    // 按凭据分组执行（同凭据仍可并发 batch；上传包对各组复用同一份字节）
+    // 按目标凭据分组执行
     for (cred_id, pending) in groups {
         match load_credential(&pool, cred_id).await {
             Ok(credential) => {
@@ -660,6 +834,7 @@ pub async fn run_job_ssh_executor(
                             &script_type,
                             timeout_secs,
                             upload.clone(),
+                            &jump_creds,
                         )
                         .await,
                 );
@@ -710,4 +885,78 @@ pub async fn run_job_ssh_executor(
     .await;
 
     Ok(())
+}
+
+/// 按 Proxy / Proxy Group 解析跳板；未配置则返回 None（直连）。
+pub async fn resolve_ssh_jump(
+    pool: &MySqlPool,
+    instance_code: &str,
+    proxy_id: &str,
+    proxy_group_id: &str,
+) -> Result<Option<SshJumpRef>, String> {
+    let mut pid = proxy_id.trim().to_string();
+    let code = instance_code.trim();
+    if pid.is_empty() {
+        let gid = proxy_group_id.trim();
+        if gid.is_empty() {
+            return Ok(None);
+        }
+        if code.is_empty() {
+            return Ok(None);
+        }
+        // Group：用 conf 映射上的 jump_proxy_id
+        let row = sqlx::query(
+            "SELECT jump_proxy_id FROM monitor_proxy_conf_maps \
+             WHERE instance_code = ? AND proxy_group_id = ? LIMIT 1",
+        )
+        .bind(code)
+        .bind(gid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        pid = row
+            .and_then(|r| r.try_get::<Option<String>, _>("jump_proxy_id").ok().flatten())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if pid.is_empty() {
+            return Ok(None);
+        }
+    }
+    let row = if code.is_empty() {
+        sqlx::query(
+            "SELECT id, jump_host, jump_port, credential_id FROM monitor_ssh_jumps \
+             WHERE proxy_id = ? AND enabled = 1 ORDER BY id DESC LIMIT 1",
+        )
+        .bind(&pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+    } else {
+        sqlx::query(
+            "SELECT id, jump_host, jump_port, credential_id FROM monitor_ssh_jumps \
+             WHERE instance_code = ? AND proxy_id = ? AND enabled = 1 LIMIT 1",
+        )
+        .bind(code)
+        .bind(&pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    let Some(r) = row else {
+        return Ok(None);
+    };
+    let id: i64 = r.try_get("id").map_err(|e| e.to_string())?;
+    let host: String = r.try_get("jump_host").map_err(|e| e.to_string())?;
+    if host.trim().is_empty() {
+        return Ok(None);
+    }
+    let port: i64 = r.try_get("jump_port").unwrap_or(22);
+    let credential_id: i64 = r.try_get("credential_id").map_err(|e| e.to_string())?;
+    Ok(Some(SshJumpRef {
+        id,
+        host: host.trim().to_string(),
+        port: if port <= 0 { 22 } else { port as u16 },
+        credential_id,
+    }))
 }

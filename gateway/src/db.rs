@@ -1970,6 +1970,8 @@ pub struct CiInstance {
     pub owner_id: Option<String>,
     /// 配置项级 SSH 凭据（作业执行优先使用）
     pub ssh_credential_id: Option<i64>,
+    /// auto|direct；空=auto（按监控通道解析跳板）
+    pub ssh_exec_mode: Option<String>,
     #[serde(serialize_with = "serialize_json_str")]
     pub attributes: Option<String>,
     pub tags: String,
@@ -2114,7 +2116,7 @@ pub async fn query_ci_instances(
     // data
     let offset = (page.saturating_sub(1)) * page_size;
     let data_sql = format!(
-        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, \
+        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, ssh_exec_mode, \
                 CAST(attributes AS CHAR) AS attributes, tags, \
                 source, external_id, last_synced_at, created_at, updated_at \
          FROM ci_instances {} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
@@ -2132,7 +2134,7 @@ pub async fn query_ci_instances(
 
 pub async fn find_ci_instance_by_id(pool: &DbPool, id: &str) -> anyhow::Result<Option<CiInstance>> {
     let row = sqlx::query_as::<_, CiInstance>(
-        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, \
+        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, ssh_exec_mode, \
                 CAST(attributes AS CHAR) AS attributes, tags, \
                 source, external_id, last_synced_at, created_at, updated_at \
          FROM ci_instances WHERE id = ?",
@@ -2186,11 +2188,12 @@ pub async fn update_ci_instance(
     attributes_json: &str,
     tags: &str,
     ssh_credential_id: Option<i64>,
+    ssh_exec_mode: Option<&str>,
 ) -> anyhow::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let affected = sqlx::query(
         "UPDATE ci_instances SET name = ?, status = ?, department_id = ?, owner_id = ?, \
-         attributes = ?, tags = ?, ssh_credential_id = ?, updated_at = ? WHERE id = ?",
+         attributes = ?, tags = ?, ssh_credential_id = ?, ssh_exec_mode = ?, updated_at = ? WHERE id = ?",
     )
     .bind(name)
     .bind(status)
@@ -2199,6 +2202,7 @@ pub async fn update_ci_instance(
     .bind(attributes_json)
     .bind(tags)
     .bind(ssh_credential_id)
+    .bind(ssh_exec_mode)
     .bind(&now)
     .bind(id)
     .execute(pool)
@@ -2236,6 +2240,77 @@ pub async fn ci_ssh_credential_map(
         if !id.is_empty() {
             map.insert(id, cred);
         }
+    }
+    Ok(map)
+}
+
+/// 批量查询配置项 SSH 执行方式（auto|direct）。
+pub async fn ci_ssh_exec_mode_map(
+    pool: &DbPool,
+    ci_ids: &[String],
+) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let mut map = std::collections::HashMap::new();
+    if ci_ids.is_empty() {
+        return Ok(map);
+    }
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT id, ssh_exec_mode FROM ci_instances WHERE id IN (",
+    );
+    {
+        let mut sep = qb.separated(", ");
+        for id in ci_ids {
+            sep.push_bind(id);
+        }
+    }
+    qb.push(")");
+    let rows = qb.build().fetch_all(pool).await?;
+    for r in rows {
+        let id: String = r.try_get("id").unwrap_or_default();
+        let mode: Option<String> = r.try_get("ssh_exec_mode").ok().flatten();
+        if !id.is_empty() {
+            map.insert(id, mode.unwrap_or_default());
+        }
+    }
+    Ok(map)
+}
+
+/// 从 zbx_host_links 取 CI 对应的 proxy / proxy_group（可能多实例，取最近一条）。
+pub async fn ci_zbx_proxy_map(
+    pool: &DbPool,
+    ci_ids: &[String],
+) -> anyhow::Result<std::collections::HashMap<String, (String, String)>> {
+    let mut map = std::collections::HashMap::new();
+    if ci_ids.is_empty() {
+        return Ok(map);
+    }
+    let mut qb = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT ci_id, proxy_id, proxy_group_id FROM zbx_host_links WHERE ci_id IN (",
+    );
+    {
+        let mut sep = qb.separated(", ");
+        for id in ci_ids {
+            sep.push_bind(id);
+        }
+    }
+    qb.push(") ORDER BY synced_at DESC");
+    let rows = match qb.build().fetch_all(pool).await {
+        Ok(r) => r,
+        Err(_) => return Ok(map), // 表/列尚未迁移时降级为空
+    };
+    for r in rows {
+        let ci: String = r.try_get("ci_id").unwrap_or_default();
+        if ci.is_empty() || map.contains_key(&ci) {
+            continue;
+        }
+        let proxy_id: Option<String> = r.try_get("proxy_id").ok().flatten();
+        let group_id: Option<String> = r.try_get("proxy_group_id").ok().flatten();
+        map.insert(
+            ci,
+            (
+                proxy_id.unwrap_or_default(),
+                group_id.unwrap_or_default(),
+            ),
+        );
     }
     Ok(map)
 }
@@ -3003,7 +3078,7 @@ pub async fn find_ci_instance_by_external(
     external_id: &str,
 ) -> anyhow::Result<Option<CiInstance>> {
     let row = sqlx::query_as::<_, CiInstance>(
-        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, \
+        "SELECT id, model_id, name, status, department_id, owner_id, ssh_credential_id, ssh_exec_mode, \
                 CAST(attributes AS CHAR) AS attributes, tags, \
                 source, external_id, last_synced_at, created_at, updated_at \
          FROM ci_instances WHERE source = ? AND external_id = ?",

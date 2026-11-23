@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="page-title">
         <span>部署配置</span>
-        <span class="page-sub">Agent 安装包与 Proxy Group → conf 映射，供安装/升级使用</span>
+        <span class="page-sub">安装包、Proxy Group 映射与 SSH 跳板（Gateway 无法直连业务机时）</span>
       </div>
     </div>
 
@@ -38,6 +38,7 @@
           </el-table-column>
         </el-table>
       </el-tab-pane>
+
       <el-tab-pane label="conf 映射" name="maps">
         <div class="tab-toolbar">
           <el-button v-permission="'monitor:agent'" type="primary" @click="openMapDialog()">新增映射</el-button>
@@ -46,10 +47,48 @@
           <el-table-column prop="instanceCode" label="实例" width="140" />
           <el-table-column prop="proxyGroupId" label="Proxy Group ID" width="140" />
           <el-table-column prop="confSuffix" label="conf 后缀" width="140" />
-          <el-table-column prop="remark" label="备注" min-width="180" />
+          <el-table-column label="跳板 Proxy" width="140">
+            <template #default="{ row }">{{ row.jumpProxyId || '—' }}</template>
+          </el-table-column>
+          <el-table-column prop="remark" label="备注" min-width="160" />
           <el-table-column label="操作" width="90">
             <template #default="{ row }">
               <el-button v-permission="'monitor:agent'" link type="danger" @click="removeMap(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="SSH 跳板" name="jumps">
+        <div class="tab-toolbar">
+          <el-button v-permission="'monitor:agent'" type="primary" @click="openJumpDialog()">新增跳板</el-button>
+        </div>
+        <el-table :data="jumps" v-loading="jumpLoading" size="small">
+          <el-table-column prop="instanceCode" label="实例" width="120" />
+          <el-table-column label="Proxy" min-width="160">
+            <template #default="{ row }">
+              {{ row.proxyName || row.proxyId }}
+              <span v-if="row.proxyName" class="muted">（{{ row.proxyId }}）</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="跳板地址" min-width="160">
+            <template #default="{ row }">{{ row.jumpHost }}:{{ row.jumpPort }}</template>
+          </el-table-column>
+          <el-table-column prop="credentialName" label="SSH 凭据" width="140">
+            <template #default="{ row }">{{ row.credentialName || row.credentialId }}</template>
+          </el-table-column>
+          <el-table-column label="启用" width="80">
+            <template #default="{ row }">
+              <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
+                {{ row.enabled ? '是' : '否' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="remark" label="备注" min-width="140" />
+          <el-table-column label="操作" width="140" fixed="right">
+            <template #default="{ row }">
+              <el-button v-permission="'monitor:agent'" link type="primary" @click="openJumpDialog(row)">编辑</el-button>
+              <el-button v-permission="'monitor:agent'" link type="danger" @click="removeJump(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -86,7 +125,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showMap" title="Proxy Group 映射" width="480px">
+    <el-dialog v-model="showMap" title="Proxy Group 映射" width="520px">
       <el-form label-width="120px">
         <el-form-item label="Zabbix 实例" required>
           <el-select v-model="mapForm.instanceCode" style="width: 100%" @change="loadGroupsForMap">
@@ -94,7 +133,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="Proxy Group" required>
-          <el-select v-model="mapForm.proxyGroupId" filterable style="width: 100%">
+          <el-select v-model="mapForm.proxyGroupId" filterable style="width: 100%" @change="onMapGroupChange">
             <el-option
               v-for="g in mapGroups"
               :key="g.proxyGroupId"
@@ -106,6 +145,22 @@
         <el-form-item label="conf 后缀" required>
           <el-input v-model="mapForm.confSuffix" placeholder="如 227_9 → zabbix_agentd.conf_227_9" />
         </el-form-item>
+        <el-form-item label="跳板 Proxy">
+          <el-select
+            v-model="mapForm.jumpProxyId"
+            filterable
+            clearable
+            placeholder="可选：组内哪台 Proxy 作 SSH 跳板"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="p in mapGroupProxies"
+              :key="p.proxyId"
+              :label="`${p.name} (${p.proxyId})`"
+              :value="p.proxyId"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="mapForm.remark" />
         </el-form-item>
@@ -115,40 +170,101 @@
         <el-button type="primary" :loading="mapSaving" @click="saveMap">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showJump" :title="jumpEditId ? '编辑 SSH 跳板' : '新增 SSH 跳板'" width="520px">
+      <el-form label-width="120px">
+        <el-form-item label="Zabbix 实例" required>
+          <el-select v-model="jumpForm.instanceCode" style="width: 100%" @change="loadProxiesForJump">
+            <el-option v-for="i in instances" :key="i.code" :label="i.name" :value="i.code" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Proxy" required>
+          <el-select v-model="jumpForm.proxyId" filterable style="width: 100%" @change="onJumpProxyChange">
+            <el-option
+              v-for="p in jumpProxies"
+              :key="p.proxyId"
+              :label="`${p.name} (${p.proxyId})`"
+              :value="p.proxyId"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="跳板地址" required>
+          <el-input v-model="jumpForm.jumpHost" placeholder="Proxy 管理 IP / 主机名" />
+        </el-form-item>
+        <el-form-item label="SSH 端口">
+          <el-input-number v-model="jumpForm.jumpPort" :min="1" :max="65535" controls-position="right" />
+        </el-form-item>
+        <el-form-item label="SSH 凭据" required>
+          <el-select v-model="jumpForm.credentialId" filterable style="width: 100%">
+            <el-option
+              v-for="c in credentials"
+              :key="c.id"
+              :label="`${c.name}（${c.username}）`"
+              :value="c.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="jumpForm.enabled" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="jumpForm.remark" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showJump = false">取消</el-button>
+        <el-button type="primary" :loading="jumpSaving" @click="saveJump">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { listAllCredentials, type SshCredentialSimple } from '../../api/credential'
 import {
   deleteAgentPackage,
   deleteProxyConfMap,
+  deleteSshJump,
   listAgentPackages,
   listInstances,
+  listProxies,
   listProxyConfMaps,
   listProxyGroups,
+  listSshJumps,
   updateAgentPackage,
   uploadAgentPackage,
   upsertProxyConfMap,
+  upsertSshJump,
   type AgentPackage,
   type MonitorInstance,
+  type MonitorProxy,
   type MonitorProxyGroup,
+  type MonitorProxyGroupMember,
+  type MonitorSshJump,
   type ProxyConfMap,
 } from '../../api/monitor'
 
 const activeTab = ref('packages')
 const packages = ref<AgentPackage[]>([])
 const maps = ref<ProxyConfMap[]>([])
+const jumps = ref<MonitorSshJump[]>([])
 const loading = ref(false)
 const mapLoading = ref(false)
+const jumpLoading = ref(false)
 const showUpload = ref(false)
 const showMap = ref(false)
+const showJump = ref(false)
 const uploading = ref(false)
 const mapSaving = ref(false)
+const jumpSaving = ref(false)
+const jumpEditId = ref<number | null>(null)
 const file = ref<File | null>(null)
 const instances = ref<MonitorInstance[]>([])
 const mapGroups = ref<MonitorProxyGroup[]>([])
+const jumpProxies = ref<MonitorProxy[]>([])
+const credentials = ref<SshCredentialSimple[]>([])
 
 const uploadForm = reactive({
   name: '',
@@ -162,12 +278,30 @@ const mapForm = reactive({
   instanceCode: '',
   proxyGroupId: '',
   confSuffix: '',
+  jumpProxyId: '' as string,
   remark: '',
 })
 
+const jumpForm = reactive({
+  instanceCode: '',
+  proxyId: '',
+  proxyName: '',
+  jumpHost: '',
+  jumpPort: 22,
+  credentialId: null as number | null,
+  enabled: true,
+  remark: '',
+})
+
+const mapGroupProxies = computed<MonitorProxyGroupMember[]>(() => {
+  const g = mapGroups.value.find((x) => x.proxyGroupId === mapForm.proxyGroupId)
+  return g?.proxies || []
+})
+
 onMounted(async () => {
-  await Promise.all([loadPackages(), loadMaps()])
+  await Promise.all([loadPackages(), loadMaps(), loadJumps()])
   instances.value = await listInstances().catch(() => [])
+  credentials.value = await listAllCredentials().catch(() => [])
 })
 
 async function loadPackages() {
@@ -185,6 +319,15 @@ async function loadMaps() {
     maps.value = await listProxyConfMaps()
   } finally {
     mapLoading.value = false
+  }
+}
+
+async function loadJumps() {
+  jumpLoading.value = true
+  try {
+    jumps.value = await listSshJumps()
+  } finally {
+    jumpLoading.value = false
   }
 }
 
@@ -249,16 +392,23 @@ async function openMapDialog() {
   mapForm.instanceCode = instances.value[0]?.code || ''
   mapForm.proxyGroupId = ''
   mapForm.confSuffix = ''
+  mapForm.jumpProxyId = ''
   mapForm.remark = ''
   if (mapForm.instanceCode) await loadGroupsForMap()
 }
 
 async function loadGroupsForMap() {
+  mapForm.proxyGroupId = ''
+  mapForm.jumpProxyId = ''
   if (!mapForm.instanceCode) {
     mapGroups.value = []
     return
   }
   mapGroups.value = await listProxyGroups(mapForm.instanceCode).catch(() => [])
+}
+
+function onMapGroupChange() {
+  mapForm.jumpProxyId = ''
 }
 
 async function saveMap() {
@@ -272,6 +422,7 @@ async function saveMap() {
       instanceCode: mapForm.instanceCode,
       proxyGroupId: mapForm.proxyGroupId,
       confSuffix: mapForm.confSuffix.trim(),
+      jumpProxyId: mapForm.jumpProxyId || undefined,
       remark: mapForm.remark.trim() || undefined,
     })
     ElMessage.success('已保存')
@@ -286,6 +437,74 @@ async function removeMap(row: ProxyConfMap) {
   await deleteProxyConfMap(row.id)
   ElMessage.success('已删除')
   await loadMaps()
+}
+
+async function openJumpDialog(row?: MonitorSshJump) {
+  showJump.value = true
+  jumpEditId.value = row?.id ?? null
+  jumpForm.instanceCode = row?.instanceCode || instances.value[0]?.code || ''
+  jumpForm.proxyId = row?.proxyId || ''
+  jumpForm.proxyName = row?.proxyName || ''
+  jumpForm.jumpHost = row?.jumpHost || ''
+  jumpForm.jumpPort = row?.jumpPort || 22
+  jumpForm.credentialId = row?.credentialId ?? null
+  jumpForm.enabled = row?.enabled ?? true
+  jumpForm.remark = row?.remark || ''
+  if (jumpForm.instanceCode) await loadProxiesForJump(false)
+  if (!jumpForm.jumpHost && jumpForm.proxyId) onJumpProxyChange()
+}
+
+async function loadProxiesForJump(resetProxy = true) {
+  if (resetProxy) {
+    jumpForm.proxyId = ''
+    jumpForm.proxyName = ''
+    jumpForm.jumpHost = ''
+  }
+  if (!jumpForm.instanceCode) {
+    jumpProxies.value = []
+    return
+  }
+  jumpProxies.value = await listProxies(jumpForm.instanceCode).catch(() => [])
+}
+
+function onJumpProxyChange() {
+  const p = jumpProxies.value.find((x) => x.proxyId === jumpForm.proxyId)
+  if (!p) return
+  jumpForm.proxyName = p.name
+  if (!jumpForm.jumpHost.trim() && p.address) {
+    jumpForm.jumpHost = p.address
+  }
+}
+
+async function saveJump() {
+  if (!jumpForm.instanceCode || !jumpForm.proxyId || !jumpForm.jumpHost.trim() || !jumpForm.credentialId) {
+    ElMessage.warning('请填完整跳板配置')
+    return
+  }
+  jumpSaving.value = true
+  try {
+    jumps.value = await upsertSshJump({
+      instanceCode: jumpForm.instanceCode,
+      proxyId: jumpForm.proxyId,
+      proxyName: jumpForm.proxyName || undefined,
+      jumpHost: jumpForm.jumpHost.trim(),
+      jumpPort: jumpForm.jumpPort || 22,
+      credentialId: jumpForm.credentialId,
+      enabled: jumpForm.enabled,
+      remark: jumpForm.remark.trim() || undefined,
+    })
+    ElMessage.success('已保存')
+    showJump.value = false
+  } finally {
+    jumpSaving.value = false
+  }
+}
+
+async function removeJump(row: MonitorSshJump) {
+  await ElMessageBox.confirm(`删除跳板 ${row.proxyName || row.proxyId}？`, '确认')
+  await deleteSshJump(row.id)
+  ElMessage.success('已删除')
+  await loadJumps()
 }
 </script>
 
@@ -310,5 +529,9 @@ async function removeMap(row: ProxyConfMap) {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 12px;
+}
+.muted {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>

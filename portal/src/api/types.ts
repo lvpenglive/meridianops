@@ -430,6 +430,8 @@ export interface CiInstance {
   owners?: CiOwner[]
   /** 配置项绑定的 SSH 凭据 */
   sshCredentialId?: number | null
+  /** auto|direct；空/缺省=auto（按监控通道解析跳板） */
+  sshExecMode?: string | null
   attributes: Record<string, unknown>
   tags: string
   source?: string | null
@@ -503,6 +505,8 @@ export interface UpdateCiInstanceRequest {
   tags?: string
   /** 传 null 清空绑定 */
   sshCredentialId?: number | null
+  /** auto|direct；传 null/空串=auto */
+  sshExecMode?: string | null
 }
 
 /** 创建关系请求 */

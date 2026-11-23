@@ -522,6 +522,9 @@ struct UpdateInstanceRequest {
     /// 不传则保留原值；显式 null 清空
     #[serde(default)]
     ssh_credential_id: Option<Option<i64>>,
+    /// auto|direct；不传保留；空串/null → 存 NULL（auto）
+    #[serde(default)]
+    ssh_exec_mode: Option<Option<String>>,
 }
 
 async fn list_instances(
@@ -706,6 +709,20 @@ async fn update_instance(
             return Err(AppError::bad("SSH 凭据不存在"));
         }
     }
+    let ssh_exec_mode = match req.ssh_exec_mode {
+        Some(Some(m)) => {
+            let t = m.trim().to_ascii_lowercase();
+            if t.is_empty() || t == "auto" {
+                None
+            } else if t == "direct" {
+                Some("direct".to_string())
+            } else {
+                return Err(AppError::bad("sshExecMode 仅支持 auto 或 direct"));
+            }
+        }
+        Some(None) => None,
+        None => existing.ssh_exec_mode.clone(),
+    };
 
     db::update_ci_instance(
         &state.db,
@@ -717,6 +734,7 @@ async fn update_instance(
         &attrs_json,
         &tags,
         ssh_credential_id,
+        ssh_exec_mode.as_deref(),
     )
     .await?;
     if owners_in_req {

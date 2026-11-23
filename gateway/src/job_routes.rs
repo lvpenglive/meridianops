@@ -553,6 +553,26 @@ async fn execute_job(
     let timeout_snap = def["timeoutSecs"].as_i64().unwrap_or(300);
     let ssh_port = def["port"].as_i64().unwrap_or(22);
     let upload_snap = upload_payload;
+    let jump_hint = crate::ssh_executor::JumpHint {
+        instance_code: env
+            .get("ZBX_INSTANCE_CODE")
+            .cloned()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        proxy_id: env
+            .get("ZBX_PROXY_ID")
+            .cloned()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        proxy_group_id: env
+            .get("ZBX_PROXY_GROUP_ID")
+            .cloned()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    };
 
     tokio::spawn(async move {
         let result = if executor_type == "mock" {
@@ -578,6 +598,7 @@ async fn execute_job(
                 fallback_credential_id,
                 ssh_port,
                 upload_snap,
+                jump_hint,
             )
             .await
         };

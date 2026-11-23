@@ -67,6 +67,12 @@
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="SSH 通道">
+          <el-select v-model="form.sshExecMode" style="width: 100%">
+            <el-option label="自动（按监控 Proxy 解析跳板）" value="auto" />
+            <el-option label="强制直连" value="direct" />
+          </el-select>
+        </el-form-item>
       </div>
 
       <div v-if="attrs.length" class="form-section">
@@ -163,6 +169,7 @@ const form = reactive({
   tags: '',
   ownerIds: [] as string[],
   sshCredentialId: null as number | null,
+  sshExecMode: 'auto' as 'auto' | 'direct',
   attributes: {} as Record<string, any>,
 })
 
@@ -190,6 +197,7 @@ function resetForm() {
   form.tags = ''
   form.ownerIds = []
   form.sshCredentialId = null
+  form.sshExecMode = 'auto'
   form.attributes = {}
   attrs.value = []
 }
@@ -242,6 +250,7 @@ async function hydrate() {
         ? [row.ownerId]
         : []
     form.sshCredentialId = row.sshCredentialId ?? null
+    form.sshExecMode = row.sshExecMode === 'direct' ? 'direct' : 'auto'
     form.attributes = { ...(row.attributes || {}) }
     await onModelChange(row.modelId)
   } else {
@@ -270,6 +279,7 @@ async function onSubmit() {
         ownerIds: form.ownerIds,
         attributes: form.attributes,
         sshCredentialId: form.sshCredentialId,
+        sshExecMode: form.sshExecMode === 'direct' ? 'direct' : null,
       }
       if (props.mode === 'edit') {
         await updateCiInstance(form.id, payload)
@@ -283,7 +293,7 @@ async function onSubmit() {
           ownerIds: payload.ownerIds,
           attributes: payload.attributes,
         })
-        if (form.sshCredentialId != null && created?.id) {
+        if ((form.sshCredentialId != null || form.sshExecMode === 'direct') && created?.id) {
           await updateCiInstance(created.id, {
             name: payload.name,
             status: payload.status,
@@ -291,6 +301,7 @@ async function onSubmit() {
             ownerIds: payload.ownerIds,
             attributes: payload.attributes,
             sshCredentialId: form.sshCredentialId,
+            sshExecMode: payload.sshExecMode,
           })
         }
         ElMessage.success('创建成功')

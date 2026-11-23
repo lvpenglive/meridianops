@@ -550,6 +550,8 @@ export interface ProxyConfMap {
   instanceCode: string
   proxyGroupId: string
   confSuffix: string
+  /** 组内用作 SSH 跳板的 Proxy ID */
+  jumpProxyId?: string | null
   remark?: string | null
   createdAt?: string | null
 }
@@ -562,6 +564,7 @@ export function upsertProxyConfMap(data: {
   instanceCode: string
   proxyGroupId: string
   confSuffix: string
+  jumpProxyId?: string
   remark?: string
 }): Promise<ProxyConfMap[]> {
   return request.post('/monitor/proxy-conf-maps', data)
@@ -569,6 +572,42 @@ export function upsertProxyConfMap(data: {
 
 export function deleteProxyConfMap(id: number): Promise<{ id: number }> {
   return request.delete(`/monitor/proxy-conf-maps/${id}`)
+}
+
+/** Proxy SSH 跳板：Gateway 经该主机再 SSH 到业务机 */
+export interface MonitorSshJump {
+  id: number
+  instanceCode: string
+  proxyId: string
+  proxyName?: string | null
+  jumpHost: string
+  jumpPort: number
+  credentialId: number
+  credentialName?: string | null
+  enabled: boolean
+  remark?: string | null
+  createdAt?: string | null
+}
+
+export function listSshJumps(): Promise<MonitorSshJump[]> {
+  return request.get('/monitor/ssh-jumps')
+}
+
+export function upsertSshJump(data: {
+  instanceCode: string
+  proxyId: string
+  proxyName?: string
+  jumpHost: string
+  jumpPort?: number
+  credentialId: number
+  enabled?: boolean
+  remark?: string
+}): Promise<MonitorSshJump[]> {
+  return request.post('/monitor/ssh-jumps', data)
+}
+
+export function deleteSshJump(id: number): Promise<{ id: number }> {
+  return request.delete(`/monitor/ssh-jumps/${id}`)
 }
 
 export function ackMonitorEvent(
