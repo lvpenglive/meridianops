@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+/// Agent 安装默认目录的内置兜底值；`[zabbix_ctl].default_install_path` 留空时使用。
+pub const DEFAULT_AGENT_INSTALL_PATH: &str = "/opt/ITM/IIM/zabbix_agentd";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
     pub server: ServerConfig,
@@ -58,6 +61,8 @@ pub struct ZabbixCtlConfig {
     pub base_url: String,
     /// 与 zabbix-ctl `[server].service_token` 相同。环境变量 MERIDIANOPS_ZABBIX_CTL_TOKEN 可覆盖。
     pub service_token: String,
+    /// Agent 安装页默认安装目录（全局唯一）。留空回退内置默认，存量部署不受影响。
+    pub default_install_path: String,
 }
 
 impl Default for ZabbixCtlConfig {
@@ -65,6 +70,7 @@ impl Default for ZabbixCtlConfig {
         Self {
             base_url: "http://127.0.0.1:8090".to_string(),
             service_token: String::new(),
+            default_install_path: DEFAULT_AGENT_INSTALL_PATH.to_string(),
         }
     }
 }
@@ -75,6 +81,16 @@ impl ZabbixCtlConfig {
             .ok()
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| self.service_token.clone())
+    }
+
+    /// 空白视为未配置，回退内置默认。
+    pub fn resolved_default_install_path(&self) -> &str {
+        let p = self.default_install_path.trim();
+        if p.is_empty() {
+            DEFAULT_AGENT_INSTALL_PATH
+        } else {
+            p
+        }
     }
 }
 
@@ -603,6 +619,11 @@ impl GatewayConfig {
         if let Ok(v) = std::env::var("MERIDIANOPS_ZABBIX_CTL_URL") {
             self.zabbix_ctl.base_url = v;
         }
+        if let Ok(v) = std::env::var("MERIDIANOPS_ZABBIX_CTL_DEFAULT_INSTALL_PATH") {
+            if !v.is_empty() {
+                self.zabbix_ctl.default_install_path = v;
+            }
+        }
     }
 
     pub fn is_loopback_bind(&self) -> bool {
@@ -651,4 +672,27 @@ pub fn is_loopback_bind(bind: &str) -> bool {
         .map(|(h, _)| h.trim_matches(['[', ']']))
         .unwrap_or(bind);
     host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_install_path_falls_back_when_missing_or_blank() {
+        let cfg: ZabbixCtlConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.default_install_path, DEFAULT_AGENT_INSTALL_PATH);
+        assert_eq!(cfg.resolved_default_install_path(), DEFAULT_AGENT_INSTALL_PATH);
+
+        let cfg: ZabbixCtlConfig =
+            toml::from_str("default_install_path = '   '").unwrap();
+        assert_eq!(cfg.resolved_default_install_path(), DEFAULT_AGENT_INSTALL_PATH);
+    }
+
+    #[test]
+    fn default_install_path_honors_config_value() {
+        let cfg: ZabbixCtlConfig =
+            toml::from_str("default_install_path = '/data/zabbix_agentd'").unwrap();
+        assert_eq!(cfg.resolved_default_install_path(), "/data/zabbix_agentd");
+    }
 }

@@ -40,7 +40,10 @@
           </div>
         </el-form-item>
         <el-form-item label="安装目录">
-          <el-input v-model="installPath" style="width: 560px" placeholder="/opt/ITM/IIM/zabbix_agentd" />
+          <el-input v-model="installPath" style="width: 560px" :placeholder="installPathPlaceholder" />
+          <div v-if="installPathPlaceholder" class="field-hint">
+            留空则安装到默认目录 {{ installPathPlaceholder }}，可在 Gateway 配置 [zabbix_ctl].default_install_path 修改。
+          </div>
         </el-form-item>
         <el-form-item label="配置项">
           <el-select
@@ -178,6 +181,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listCiInstances } from '../../api/cmdb'
 import {
+  getAgentInstallDefaults,
   getTask,
   installAgents,
   listAgentPackages,
@@ -201,7 +205,9 @@ const instances = ref<MonitorInstance[]>([])
 const instanceCode = ref('')
 const packages = ref<AgentPackage[]>([])
 const packageId = ref('')
-const installPath = ref('/opt/ITM/IIM/zabbix_agentd')
+const installPath = ref('')
+/** 占位与初始值同源，都来自 Gateway 配置的 defaultInstallPath，不在前端写死。 */
+const installPathPlaceholder = ref('')
 const confSuffix = ref('')
 const confMaps = ref<ProxyConfMap[]>([])
 const hostGroups = ref<MonitorGroupRef[]>([])
@@ -227,17 +233,23 @@ const task = ref<MonitorTask | null>(null)
 let pollTimer: number | undefined
 
 onMounted(async () => {
-  const [inst, pkgs, maps] = await Promise.all([
+  const [inst, pkgs, maps, defaults] = await Promise.all([
     listInstances(),
     listAgentPackages().catch(() => [] as AgentPackage[]),
     listProxyConfMaps().catch(() => [] as ProxyConfMap[]),
+    // 失败不阻塞页面：留空提交时后端仍会回退内置默认。
+    getAgentInstallDefaults().catch(() => null),
   ])
   instances.value = inst
   packages.value = pkgs.filter((p) => p.enabled)
   confMaps.value = maps
   packageId.value = packages.value[0]?.id || ''
-  if (packages.value[0]?.defaultInstallPath) {
-    installPath.value = packages.value[0].defaultInstallPath
+  const defaultPath =
+    defaults?.defaultInstallPath || packages.value[0]?.defaultInstallPath || ''
+  if (defaultPath) {
+    installPathPlaceholder.value = defaultPath
+    // 不覆盖用户已输入的路径
+    if (!installPath.value.trim()) installPath.value = defaultPath
   }
   instanceCode.value = instances.value[0]?.code || ''
   if (instanceCode.value) await loadOptions()
@@ -356,7 +368,8 @@ async function submit() {
     ElMessage.warning('请填实例、安装包、配置项、主机组和模板')
     return
   }
-  if (!installPath.value.trim().startsWith('/')) {
+  const path = installPath.value.trim()
+  if (path && !path.startsWith('/')) {
     ElMessage.warning('安装目录需为绝对路径')
     return
   }
@@ -388,7 +401,7 @@ async function submit() {
       groupIds: groupIds.value,
       templateIds: templateIds.value,
       packageId: packageId.value,
-      installPath: installPath.value.trim(),
+      installPath: path || undefined,
       confSuffix: confSuffix.value.trim() || undefined,
       server: server.value.trim() || undefined,
       agentPort: portRaw || undefined,

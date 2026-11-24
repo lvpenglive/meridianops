@@ -547,6 +547,15 @@ export function listAgentPackages(): Promise<AgentPackage[]> {
   return request.get('/monitor/agent-packages')
 }
 
+/** 安装页默认目录，来自 Gateway toml `[zabbix_ctl].default_install_path`，与具体包无关。 */
+export interface AgentInstallDefaults {
+  defaultInstallPath: string
+}
+
+export function getAgentInstallDefaults(): Promise<AgentInstallDefaults> {
+  return request.get('/monitor/agent-install-defaults')
+}
+
 export function uploadAgentPackage(form: FormData): Promise<AgentPackage> {
   return request.post('/monitor/agent-packages', form, { timeout: 300000 })
 }

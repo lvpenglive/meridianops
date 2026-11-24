@@ -17,12 +17,15 @@ use crate::error::AppError;
 use crate::routes::AppState;
 
 const MAX_PACKAGE_BYTES: usize = 512 * 1024 * 1024; // 512MB
-const DEFAULT_INSTALL_PATH: &str = "/opt/ITM/IIM/zabbix_agentd";
 
 pub fn routes() -> Router<Arc<AppState>> {
     // Axum 默认 body 仅 2MB；Agent 压缩包远大于此，需单独放宽，否则 multer 报 multipart 解析失败。
     Router::new()
         .route("/api/monitor/agent-packages", get(list_packages).post(upload_package))
+        .route(
+            "/api/monitor/agent-install-defaults",
+            get(get_install_defaults),
+        )
         .route(
             "/api/monitor/agent-packages/:id",
             get(get_package).put(update_package).delete(delete_package),
@@ -55,7 +58,11 @@ async fn list_packages(
     )
     .fetch_all(&state.db)
     .await?;
-    let items: Vec<Value> = rows.iter().map(package_json).collect();
+    let default_install_path = state.config.zabbix_ctl.resolved_default_install_path();
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| package_json(r, default_install_path))
+        .collect();
     Ok(Json(json!({ "code": 0, "data": items })))
 }
 
@@ -74,7 +81,13 @@ async fn get_package(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::not_found("Agent 包不存在"))?;
-    Ok(Json(json!({ "code": 0, "data": package_json(&row) })))
+    Ok(Json(json!({
+        "code": 0,
+        "data": package_json(
+            &row,
+            state.config.zabbix_ctl.resolved_default_install_path(),
+        )
+    })))
 }
 
 async fn upload_package(
@@ -194,7 +207,26 @@ async fn upload_package(
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(json!({ "code": 0, "data": package_json(&row) })))
+    Ok(Json(json!({
+        "code": 0,
+        "data": package_json(
+            &row,
+            state.config.zabbix_ctl.resolved_default_install_path(),
+        )
+    })))
+}
+
+/// 安装页默认目录来自 toml `[zabbix_ctl].default_install_path`，与包无关，
+/// 没上传任何包时前端也能拿到默认值。
+async fn get_install_defaults(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+) -> Result<Json<Value>, AppError> {
+    auth::require_permission(&auth, "monitor:read")?;
+    Ok(Json(json!({
+        "code": 0,
+        "data": { "defaultInstallPath": state.config.zabbix_ctl.resolved_default_install_path() }
+    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,11 +571,7 @@ pub async fn lookup_conf_suffix(
     Ok(row.and_then(|r| r.try_get::<String, _>("conf_suffix").ok()))
 }
 
-pub fn default_install_path() -> &'static str {
-    DEFAULT_INSTALL_PATH
-}
-
-fn package_json(r: &sqlx::mysql::MySqlRow) -> Value {
+fn package_json(r: &sqlx::mysql::MySqlRow, default_install_path: &str) -> Value {
     json!({
         "id": r.try_get::<String, _>("id").unwrap_or_default(),
         "name": r.try_get::<String, _>("name").unwrap_or_default(),
@@ -560,7 +588,7 @@ fn package_json(r: &sqlx::mysql::MySqlRow) -> Value {
             .ok()
             .flatten()
             .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
-        "defaultInstallPath": DEFAULT_INSTALL_PATH,
+        "defaultInstallPath": default_install_path,
     })
 }
 

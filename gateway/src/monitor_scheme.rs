@@ -978,7 +978,11 @@ pub(crate) async fn start_install(
     let install_path = {
         let p = install_path.trim();
         if p.is_empty() {
-            crate::monitor_agent_pkg::default_install_path().to_string()
+            state
+                .config
+                .zabbix_ctl
+                .resolved_default_install_path()
+                .to_string()
         } else {
             p.to_string()
         }
