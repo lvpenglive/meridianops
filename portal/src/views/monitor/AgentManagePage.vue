@@ -320,6 +320,15 @@ function channelLabel(row: MonitorHost) {
 
 async function doSync() {
   if (!instanceCode.value || syncing.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将同步本实例全部启用主机对照（含 Proxy 通道），主机量大时可能较慢。是否继续？',
+      '同步对照',
+      { type: 'warning', confirmButtonText: '继续', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
   syncing.value = true
   try {
     const res = await syncHosts(instanceCode.value)

@@ -218,8 +218,13 @@ export function hostTriggers(code: string, hostId: string): Promise<HostTrigger[
   return request.get(`/monitor/instances/${code}/hosts/${hostId}/triggers`)
 }
 
-export function syncHosts(code: string): Promise<{ synced: number }> {
-  return request.post(`/monitor/instances/${code}/sync`)
+export function syncHosts(code: string, hostIds?: string[]): Promise<{ synced: number }> {
+  // 全量对照可能较慢；传 hostIds 时只同步勾选主机
+  return request.post(
+    `/monitor/instances/${code}/sync`,
+    hostIds?.length ? { hostIds } : {},
+    { timeout: 300000 },
+  )
 }
 
 export interface GovernanceProxy {

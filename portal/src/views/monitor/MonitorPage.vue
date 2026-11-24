@@ -15,7 +15,9 @@
         </el-button>
         <el-button v-permission="'monitor:operate'" type="success" @click="openCreateHost">添加主机</el-button>
         <el-button :loading="govLoading" @click="loadGovernance">健康检查</el-button>
-        <el-button :loading="syncing" @click="doSync">关联资源</el-button>
+        <el-button :loading="syncing" @click="doSync">
+          {{ selectedIds.length ? `关联资源（${selectedIds.length}）` : '关联资源' }}
+        </el-button>
         <el-button :icon="Refresh" @click="loadHosts">刷新名册</el-button>
       </div>
     </div>
@@ -1403,10 +1405,27 @@ function goAsset(ciId: string) {
 
 async function doSync() {
   if (!instanceCode.value) return
+  const ids = selectedIds.value.filter(Boolean)
+  if (!ids.length) {
+    try {
+      await ElMessageBox.confirm(
+        '未勾选主机时将同步本实例全部启用主机并按 IP 关联配置项，主机量大时可能较慢。建议先勾选需要关联的主机。是否继续全量同步？',
+        '全量关联资源',
+        { type: 'warning', confirmButtonText: '继续全量', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
   syncing.value = true
   try {
-    const res = await syncHosts(instanceCode.value)
-    ElMessage.success(`已按 IP 关联 ${res.synced} 台主机与配置项`)
+    const res = await syncHosts(instanceCode.value, ids.length ? ids : undefined)
+    ElMessage.success(
+      ids.length
+        ? `已按 IP 关联勾选的 ${res.synced} 台主机与配置项`
+        : `已按 IP 关联 ${res.synced} 台主机与配置项（全量）`,
+    )
+    await loadHosts()
   } finally {
     syncing.value = false
   }

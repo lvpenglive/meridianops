@@ -127,13 +127,34 @@ async fn host_triggers(
     .await
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncHostsBody {
+    #[serde(default)]
+    host_ids: Vec<String>,
+}
+
 async fn sync_hosts(
     State(state): State<Arc<AppState>>,
     auth: auth::AuthUser,
     Path(code): Path<String>,
+    Json(body): Json<SyncHostsBody>,
 ) -> Result<impl IntoResponse, AppError> {
     permit_read(&state, &auth).await?;
-    proxy_post(&state, &format!("/api/instances/{code}/sync"), &json!({})).await
+    // 全量对照可能超过默认 30s HTTP 超时；指定 hostIds 时很快
+    let (base, token) = ctl_endpoint(&state)?;
+    let url = format!("{base}/api/instances/{code}/sync");
+    let payload = json!({ "hostIds": body.host_ids });
+    let response = state
+        .client
+        .post(url)
+        .timeout(std::time::Duration::from_secs(300))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("调用 zabbix-ctl 失败: {e}")))?;
+    forward(response).await
 }
 
 async fn governance(
