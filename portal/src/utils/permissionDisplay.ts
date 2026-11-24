@@ -12,6 +12,14 @@ export interface MenuPermGroup<T> {
   children: { title: string; items: T[] }[]
 }
 
+/** 精确 code → 菜单（优先于前缀映射） */
+const CODE_MENU: Record<string, PermMenuNode> = {
+  'monitor:read': { parent: '主机监控', child: '主机名册' },
+  'monitor:operate': { parent: '主机监控', child: '代理管理' },
+  'monitor:agent': { parent: '主机监控', child: '部署配置' },
+  'monitor:template': { parent: '主机监控', child: '模板库' },
+}
+
 const PREFIX_MENU: Record<string, PermMenuNode> = {
   audit: { parent: '运营分析', child: '审计中心' },
   asset: { parent: '资产管理', child: '资产清单' },
@@ -21,6 +29,7 @@ const PREFIX_MENU: Record<string, PermMenuNode> = {
   alert_group: { parent: '监控告警', child: '告警组维护' },
   notification_log: { parent: '监控告警', child: '通知发送日志' },
   log: { parent: '监控告警', child: '日志中心' },
+  monitor: { parent: '主机监控', child: '主机监控' },
   job: { parent: '运维流程', child: '作业中心' },
   credential: { parent: '运维流程', child: 'SSH 凭据' },
   ticket: { parent: '运维流程', child: '工单系统' },
@@ -34,12 +43,13 @@ const PREFIX_MENU: Record<string, PermMenuNode> = {
   dict: { parent: '后台管理', child: '字典管理' },
 }
 
-const PARENT_ORDER = ['运营分析', '资产管理', '监控告警', '运维流程', '后台管理']
+const PARENT_ORDER = ['运营分析', '资产管理', '监控告警', '主机监控', '运维流程', '后台管理']
 
 const CHILD_ORDER = [
   '态势中心', '报表中心', '审计中心', '费用中心',
   '资产清单', 'CI 模型', '关系类型', '拓扑视图', '数据源同步', '容器管理', 'DB数据库', '配置中心',
   '告警中心', '告警大屏', '通知通道', '通知策略', '告警组维护', '通知发送日志', '日志中心', 'AIOps运维',
+  '主机名册', '代理管理', '模板库', '部署配置', '主机监控',
   '作业中心', '运维工具', 'SSH 凭据', '工单系统', '工单统计', '流程模板', '知识库',
   '用户管理', '角色管理', '部门管理', '系统设置', '组件状态', 'API 令牌', '字典管理', '授权管理',
 ]
@@ -102,6 +112,10 @@ const PERM_LABELS: Record<string, string> = {
   'workflow:admin': '管理流程模板',
   'ops_tool:read': '查看运维工具',
   'ops_tool:manage': '管理运维工具',
+  'monitor:read': '查看主机监控',
+  'monitor:operate': '启停代理',
+  'monitor:agent': '安装/升级代理',
+  'monitor:template': '设计监控模板',
 }
 
 /** 二级菜单下的动作文案（不再重复菜单名） */
@@ -163,6 +177,10 @@ const PERM_ACTION_LABELS: Record<string, string> = {
   'workflow:admin': '管理',
   'ops_tool:read': '查看',
   'ops_tool:manage': '管理',
+  'monitor:read': '查看',
+  'monitor:operate': '启停',
+  'monitor:agent': '安装升级',
+  'monitor:template': '模板设计',
 }
 
 export function permissionPrefix(code: string): string {
@@ -171,6 +189,7 @@ export function permissionPrefix(code: string): string {
 }
 
 export function resolvePermissionMenu(code: string, fallbackModule?: string): PermMenuNode {
+  if (CODE_MENU[code]) return CODE_MENU[code]
   const prefix = permissionPrefix(code)
   return PREFIX_MENU[prefix]
     ?? (fallbackModule ? PREFIX_MENU[fallbackModule] : undefined)

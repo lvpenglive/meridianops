@@ -461,6 +461,18 @@ async fn delete_credential(
             ci_ref
         )));
     }
+    let jump_ref: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM monitor_ssh_jumps WHERE credential_id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    if jump_ref > 0 {
+        return Err(AppError::bad(&format!(
+            "该凭据被 {} 条 SSH 跳板配置引用，请先在「部署配置 → SSH 跳板」中更换或删除后再删凭据",
+            jump_ref
+        )));
+    }
 
     sqlx::query("DELETE FROM ssh_credentials WHERE id=?")
         .bind(id)

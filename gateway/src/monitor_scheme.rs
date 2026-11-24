@@ -393,33 +393,51 @@ async fn register_host(
     let link_hostname = body["hostname"].as_str().unwrap_or(&hostname).to_string();
 
     if !host_id.is_empty() {
+        let link_proxy_id = body["proxyId"]
+            .as_str()
+            .or_else(|| body["proxy_id"].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let link_proxy_group_id = body["proxyGroupId"]
+            .as_str()
+            .or_else(|| body["proxy_group_id"].as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         if let Some(ref cid) = linked_ci_id {
             sqlx::query(
-                "INSERT INTO zbx_host_links (instance_code, host_id, hostname, ip, ci_id, synced_at) \
-                 VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
+                "INSERT INTO zbx_host_links \
+                 (instance_code, host_id, hostname, ip, ci_id, proxy_id, proxy_group_id, synced_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
                  ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip = VALUES(ip), \
-                 ci_id = VALUES(ci_id), synced_at = UTC_TIMESTAMP()",
+                 ci_id = VALUES(ci_id), proxy_id = VALUES(proxy_id), \
+                 proxy_group_id = VALUES(proxy_group_id), synced_at = UTC_TIMESTAMP()",
             )
             .bind(&code)
             .bind(&host_id)
             .bind(&link_hostname)
             .bind(&link_ip)
             .bind(cid)
+            .bind(link_proxy_id)
+            .bind(link_proxy_group_id)
             .execute(&state.db)
             .await
             .map_err(|e| AppError::internal(format!("写入主机对照失败: {e}")))?;
         } else {
             // 无 CI 也写入对照，方便名册展示；ci_id 留空
             sqlx::query(
-                "INSERT INTO zbx_host_links (instance_code, host_id, hostname, ip, synced_at) \
-                 VALUES (?, ?, ?, ?, UTC_TIMESTAMP()) \
+                "INSERT INTO zbx_host_links \
+                 (instance_code, host_id, hostname, ip, proxy_id, proxy_group_id, synced_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
                  ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip = VALUES(ip), \
+                 proxy_id = VALUES(proxy_id), proxy_group_id = VALUES(proxy_group_id), \
                  synced_at = UTC_TIMESTAMP()",
             )
             .bind(&code)
             .bind(&host_id)
             .bind(&link_hostname)
             .bind(&link_ip)
+            .bind(link_proxy_id)
+            .bind(link_proxy_group_id)
             .execute(&state.db)
             .await
             .map_err(|e| AppError::internal(format!("写入主机对照失败: {e}")))?;
@@ -477,23 +495,65 @@ async fn update_host(
         Some(&body),
     )
     .await?;
-    if let Some(hostname) = body["hostname"].as_str() {
+    {
+        let hostname = body["hostname"].as_str().map(str::trim).filter(|s| !s.is_empty());
         let ip = body["interfaces"]
             .as_array()
             .and_then(|a| a.first())
             .and_then(|i| i["ip"].as_str())
             .or_else(|| body["ip"].as_str())
-            .unwrap_or("");
-        let _ = sqlx::query(
-            "UPDATE zbx_host_links SET hostname = ?, ip = COALESCE(NULLIF(?, ''), ip), synced_at = UTC_TIMESTAMP() \
-             WHERE instance_code = ? AND host_id = ?",
-        )
-        .bind(hostname)
-        .bind(ip)
-        .bind(&code)
-        .bind(&host_id)
-        .execute(&state.db)
-        .await;
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let has_proxy_field = body.get("proxyId").is_some()
+            || body.get("proxy_id").is_some()
+            || body.get("proxyGroupId").is_some()
+            || body.get("proxy_group_id").is_some();
+        if hostname.is_some() || ip.is_some() || has_proxy_field {
+            let mut proxy_id: Option<Option<&str>> = None;
+            let mut proxy_group_id: Option<Option<&str>> = None;
+            if has_proxy_field {
+                let pid = body["proxyId"]
+                    .as_str()
+                    .or_else(|| body["proxy_id"].as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let gid = body["proxyGroupId"]
+                    .as_str()
+                    .or_else(|| body["proxy_group_id"].as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                if let Some(g) = gid {
+                    proxy_group_id = Some(Some(g));
+                    proxy_id = Some(None);
+                } else if let Some(p) = pid {
+                    proxy_id = Some(Some(p));
+                    proxy_group_id = Some(None);
+                } else {
+                    // 显式清空通道
+                    proxy_id = Some(None);
+                    proxy_group_id = Some(None);
+                }
+            }
+            let _ = sqlx::query(
+                "UPDATE zbx_host_links SET \
+                 hostname = COALESCE(?, hostname), \
+                 ip = COALESCE(?, ip), \
+                 proxy_id = CASE WHEN ? THEN ? ELSE proxy_id END, \
+                 proxy_group_id = CASE WHEN ? THEN ? ELSE proxy_group_id END, \
+                 synced_at = UTC_TIMESTAMP() \
+                 WHERE instance_code = ? AND host_id = ?",
+            )
+            .bind(hostname)
+            .bind(ip)
+            .bind(proxy_id.is_some())
+            .bind(proxy_id.flatten())
+            .bind(proxy_group_id.is_some())
+            .bind(proxy_group_id.flatten())
+            .bind(&code)
+            .bind(&host_id)
+            .execute(&state.db)
+            .await;
+        }
     }
     audit_ok(
         &state,

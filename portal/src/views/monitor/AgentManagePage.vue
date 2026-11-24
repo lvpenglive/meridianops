@@ -13,6 +13,13 @@
         <el-button v-permission="'monitor:agent'" @click="router.push('/monitor/agent-packages')">
           部署配置
         </el-button>
+        <el-button
+          v-permission="'monitor:agent'"
+          :loading="syncing"
+          @click="doSync"
+        >
+          同步对照
+        </el-button>
         <el-button :icon="Refresh" :loading="loading" @click="loadHosts">刷新</el-button>
       </div>
     </div>
@@ -150,6 +157,20 @@
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
+      <el-table-column label="监控通道" width="120">
+        <template #default="{ row }">{{ channelLabel(row) }}</template>
+      </el-table-column>
+      <el-table-column label="SSH 路径" width="110">
+        <template #default="{ row }">
+          <el-tag
+            v-if="row.sshPath === 'jump'"
+            type="warning"
+            size="small"
+            effect="plain"
+          >跳板</el-tag>
+          <el-tag v-else type="info" size="small" effect="plain">直连</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <template v-if="canAgent">
@@ -226,6 +247,7 @@ import {
   getTask,
   listHosts,
   listInstances,
+  syncHosts,
   type AgentLifecycleStatus,
   type AgentStatusSummary,
   type MonitorAction,
@@ -250,6 +272,7 @@ const matched = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+const syncing = ref(false)
 const summary = ref<AgentStatusSummary>({ running: 0, stopped: 0, absent: 0, unknown: 0 })
 const task = ref<MonitorTask | null>(null)
 const taskSubmitting = ref(false)
@@ -282,6 +305,30 @@ function statusTagType(st?: AgentLifecycleStatus | null) {
       return 'info'
     default:
       return 'warning'
+  }
+}
+
+function channelLabel(row: MonitorHost) {
+  if (row.channel === 'proxyGroup') {
+    return row.proxyGroupId ? `组 ${row.proxyGroupId}` : 'Proxy Group'
+  }
+  if (row.channel === 'proxy' || row.proxyId) {
+    return row.proxyId ? `Proxy ${row.proxyId}` : 'Proxy'
+  }
+  return '直连 Server'
+}
+
+async function doSync() {
+  if (!instanceCode.value || syncing.value) return
+  syncing.value = true
+  try {
+    const res = await syncHosts(instanceCode.value)
+    ElMessage.success(`已同步 ${res.synced} 台主机对照（含 Proxy 通道）`)
+    await loadHosts()
+  } catch {
+    /* request 已提示 */
+  } finally {
+    syncing.value = false
   }
 }
 

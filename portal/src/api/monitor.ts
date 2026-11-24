@@ -74,6 +74,16 @@ export interface MonitorHost {
   /** 关联配置项是否已绑定 SSH 凭据 */
   sshCredentialBound?: boolean
   sshCredentialId?: number | null
+  /** 资产 SSH 通道：auto|direct */
+  sshExecMode?: string | null
+  /** Zabbix 监控通道：direct|proxy|proxyGroup */
+  channel?: string | null
+  proxyId?: string | null
+  proxyGroupId?: string | null
+  /** SSH 运维路径：direct 直连 / jump 经 ProxyJump */
+  sshPath?: 'direct' | 'jump' | string | null
+  /** 是否已配置可用 SSH 跳板 */
+  sshJumpConfigured?: boolean
   groups?: MonitorGroupRef[]
 }
 
