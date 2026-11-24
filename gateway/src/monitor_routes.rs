@@ -186,6 +186,8 @@ struct CreateTaskBody {
     package_id: Option<String>,
     install_path: Option<String>,
     conf_suffix: Option<String>,
+    /// 验证通过后禁用主机，避免立刻告警
+    disable_after_install: Option<bool>,
 }
 
 async fn create_task(
@@ -209,6 +211,7 @@ async fn create_task(
             body.package_id.as_deref().unwrap_or(""),
             body.install_path.as_deref().unwrap_or(""),
             body.conf_suffix.as_deref().unwrap_or(""),
+            body.disable_after_install.unwrap_or(false),
             body.concurrency.unwrap_or(10),
         )
         .await?;

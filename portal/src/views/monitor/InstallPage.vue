@@ -139,6 +139,14 @@
             placeholder="可选；Proxy Group 主动检查用分号分隔"
           />
         </el-form-item>
+        <el-form-item label="登记状态">
+          <el-checkbox v-model="disableAfterInstall">
+            验证通过后禁用监控
+          </el-checkbox>
+          <div class="field-hint">
+            安装后仍会先启用主机并等 agent.ping 通，通过后再禁用，避免立刻告警。就绪后可在名册里启用。
+          </div>
+        </el-form-item>
         <el-form-item>
           <el-button
             v-permission="'monitor:agent'"
@@ -212,6 +220,8 @@ const templateIds = ref<string[]>([])
 const server = ref('')
 const agentPort = ref('')
 const serverActive = ref('')
+/** 默认勾选：装完验证后禁用，减少误告警 */
+const disableAfterInstall = ref(true)
 const submitting = ref(false)
 const task = ref<MonitorTask | null>(null)
 let pollTimer: number | undefined
@@ -385,6 +395,7 @@ async function submit() {
       serverActive: serverActive.value.trim() || undefined,
       proxyId: channel.value === 'proxy' ? proxyId.value : undefined,
       proxyGroupId: channel.value === 'proxyGroup' ? proxyGroupId.value : undefined,
+      disableAfterInstall: disableAfterInstall.value,
     })
     ElMessage.success('安装任务已创建')
     await refresh(res.id)

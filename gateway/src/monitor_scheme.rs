@@ -926,6 +926,7 @@ pub(crate) async fn start_install(
     package_id: &str,
     install_path: &str,
     conf_suffix: &str,
+    disable_after_install: bool,
     concurrency: i32,
 ) -> Result<Json<Value>, AppError> {
     auth::require_permission(auth, "monitor:agent")?;
@@ -1004,6 +1005,7 @@ pub(crate) async fn start_install(
         "packageId": package_id,
         "installPath": install_path,
         "confSuffix": conf_suffix,
+        "disableAfterInstall": disable_after_install,
         "concurrency": concurrency,
         "requestedBy": auth.username(),
     });
@@ -1029,6 +1031,7 @@ pub(crate) async fn start_install(
             "packageId": package_id,
             "installPath": install_path,
             "confSuffix": conf_suffix,
+            "disableAfterInstall": disable_after_install,
         }),
     )
     .await;

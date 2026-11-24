@@ -515,6 +515,8 @@ export function installAgents(data: {
   packageId: string
   installPath?: string
   confSuffix?: string
+  /** 验证 agent.ping 通过后禁用主机，避免立刻告警 */
+  disableAfterInstall?: boolean
   concurrency?: number
 }): Promise<{ id: string }> {
   return request.post('/monitor/tasks', { ...data, action: 'install' })
