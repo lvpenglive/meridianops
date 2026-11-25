@@ -355,6 +355,15 @@ export function hostLinkage(code: string, hostId: string): Promise<HostLinkage> 
   return request.get(`/monitor/instances/${code}/hosts/${hostId}/linkage`)
 }
 
+/** 更新对照表安装路径；空字符串清空后启停回退全局默认目录。 */
+export function updateHostInstallPath(
+  code: string,
+  hostId: string,
+  data: { installPath: string; hostname?: string; ip?: string },
+): Promise<{ hostId: string; installPath?: string | null; hostname?: string; ip?: string; ciId?: string | null }> {
+  return request.put(`/monitor/instances/${code}/hosts/${hostId}/install-path`, data)
+}
+
 export function linkHostTemplates(
   code: string,
   hostId: string,

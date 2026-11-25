@@ -330,6 +330,17 @@
           <el-tag v-else type="info" size="small">未关联</el-tag>
         </div>
         <div class="status-item">
+          <span class="status-label">安装目录</span>
+          <span class="install-path-text">{{ selected.installPath || '（默认）' }}</span>
+          <el-button
+            v-if="canEditInstallPath"
+            link
+            type="primary"
+            size="small"
+            @click="openInstallPathEditor(selected)"
+          >编辑</el-button>
+        </div>
+        <div class="status-item">
           <span class="status-label">当前问题</span>
           <span :class="{ danger: problems.length > 0 }">{{ problems.length }}</span>
         </div>
@@ -996,6 +1007,8 @@ import {
   updateMonitorHost,
   saveHostMacros,
   syncHosts,
+  getAgentInstallDefaults,
+  updateHostInstallPath,
   type AgentPackage,
   type CreateMonitorHostInput,
   type GovernanceData,
@@ -1022,7 +1035,54 @@ const route = useRoute()
 const user = useUserStore()
 const canOperate = computed(() => user.hasPermission('monitor:operate'))
 const canAgent = computed(() => user.hasPermission('monitor:agent'))
+const canEditInstallPath = computed(() => canAgent.value || canOperate.value)
 const isAdmin = computed(() => user.role === 'admin')
+
+const defaultInstallPath = ref('')
+async function loadDefaultInstallPath() {
+  try {
+    const d = await getAgentInstallDefaults()
+    defaultInstallPath.value = d.defaultInstallPath || ''
+  } catch {
+    defaultInstallPath.value = ''
+  }
+}
+
+async function openInstallPathEditor(row: MonitorHost) {
+  if (!instanceCode.value || !row?.hostId) return
+  const { value } = await ElMessageBox.prompt(
+    `主机 ${row.displayName || row.hostname} 的 Agent 安装目录。留空则启停时用全局默认${defaultInstallPath.value ? `（${defaultInstallPath.value}）` : ''}。非平台安装的机器也可在此补录。`,
+    '编辑安装目录',
+    {
+      inputValue: row.installPath || '',
+      inputPlaceholder: defaultInstallPath.value || '/opt/.../zabbix_agentd',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (v) => {
+        const p = (v ?? '').trim()
+        if (!p) return true
+        if (!p.startsWith('/') || p.includes('..') || p.length > 512) {
+          return '须为绝对路径，且不含 ..'
+        }
+        return true
+      },
+    },
+  )
+  try {
+    const res = await updateHostInstallPath(instanceCode.value, row.hostId, {
+      installPath: (value ?? '').trim(),
+      hostname: row.hostname,
+      ip: row.ip,
+    })
+    row.installPath = res.installPath ?? null
+    if (selected.value?.hostId === row.hostId) {
+      selected.value = { ...selected.value, installPath: res.installPath ?? null }
+    }
+    ElMessage.success(res.installPath ? '安装目录已更新' : '已清空，启停将使用全局默认目录')
+  } catch {
+    // 拦截器已提示
+  }
+}
 
 /** 无 ZBX 接口时 Agent 列显示 —，不显示「未知」 */
 function hasAgentInterface(row: MonitorHost | null | undefined) {
@@ -1267,6 +1327,7 @@ function severityLabel(value: string) {
 }
 
 onMounted(async () => {
+  void loadDefaultInstallPath()
   try {
     const qSearch = typeof route.query.search === 'string' ? route.query.search.trim() : ''
     if (qSearch) search.value = qSearch
@@ -2254,6 +2315,14 @@ async function refreshTask(id: string) {
 .status-item .danger {
   color: var(--el-color-danger);
   font-weight: 600;
+}
+.install-path-text {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 .detail-tabs {
   margin-top: 8px;

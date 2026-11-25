@@ -171,7 +171,12 @@
           <el-tag v-else type="info" size="small" effect="plain">直连</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="220" fixed="right">
+      <el-table-column label="安装目录" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span>{{ row.installPath || '（默认）' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
           <template v-if="canAgent">
             <el-button
@@ -201,6 +206,7 @@
               </el-button>
               <el-button link type="primary" @click="runOne('restart', row)">重启</el-button>
             </template>
+            <el-button link type="primary" @click="openInstallPath(row)">安装目录</el-button>
           </template>
           <el-button link @click="goRoster(row)">名册</el-button>
         </template>
@@ -244,10 +250,12 @@ import { ArrowDown, Cpu, Refresh } from '@element-plus/icons-vue'
 import { useUserStore } from '../../stores/user'
 import {
   createTask,
+  getAgentInstallDefaults,
   getTask,
   listHosts,
   listInstances,
   syncHosts,
+  updateHostInstallPath,
   type AgentLifecycleStatus,
   type AgentStatusSummary,
   type MonitorAction,
@@ -316,6 +324,49 @@ function channelLabel(row: MonitorHost) {
     return row.proxyId ? `Proxy ${row.proxyId}` : 'Proxy'
   }
   return '直连 Server'
+}
+
+const defaultInstallPath = ref('')
+async function loadDefaultInstallPath() {
+  try {
+    const d = await getAgentInstallDefaults()
+    defaultInstallPath.value = d.defaultInstallPath || ''
+  } catch {
+    defaultInstallPath.value = ''
+  }
+}
+
+async function openInstallPath(row: MonitorHost) {
+  if (!instanceCode.value) return
+  const { value } = await ElMessageBox.prompt(
+    `主机 ${row.displayName || row.hostname} 的 Agent 安装目录。留空则启停时用全局默认${defaultInstallPath.value ? `（${defaultInstallPath.value}）` : ''}。`,
+    '编辑安装目录',
+    {
+      inputValue: row.installPath || '',
+      inputPlaceholder: defaultInstallPath.value || '/opt/.../zabbix_agentd',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (v) => {
+        const p = (v ?? '').trim()
+        if (!p) return true
+        if (!p.startsWith('/') || p.includes('..') || p.length > 512) {
+          return '须为绝对路径，且不含 ..'
+        }
+        return true
+      },
+    },
+  )
+  try {
+    const res = await updateHostInstallPath(instanceCode.value, row.hostId, {
+      installPath: (value ?? '').trim(),
+      hostname: row.hostname,
+      ip: row.ip,
+    })
+    row.installPath = res.installPath ?? null
+    ElMessage.success(res.installPath ? '安装目录已更新' : '已清空，启停将使用全局默认目录')
+  } catch {
+    // 拦截器已提示
+  }
 }
 
 async function doSync() {
@@ -468,6 +519,7 @@ async function refreshTask(id: string) {
 }
 
 onMounted(async () => {
+  void loadDefaultInstallPath()
   try {
     instances.value = await listInstances()
     if (instances.value.length) {

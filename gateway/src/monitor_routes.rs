@@ -5,10 +5,11 @@ use std::sync::Arc;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::Row;
 
 use crate::audit;
 use crate::auth;
@@ -36,6 +37,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/monitor/instances/:code/hosts/:host_id/triggers",
             get(host_triggers),
         )
+        .route(
+            "/api/monitor/instances/:code/hosts/:host_id/install-path",
+            put(update_install_path),
+        )
         .route("/api/monitor/instances/:code/sync", post(sync_hosts))
         .route("/api/monitor/instances/:code/governance", get(governance))
         .route("/api/monitor/instances/:code/proxies", get(proxies))
@@ -44,6 +49,120 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/monitor/tasks/:id", get(get_task))
         .merge(crate::monitor_scheme::routes())
         .merge(crate::monitor_designer::routes())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInstallPathBody {
+    /// 绝对路径；空字符串表示清空，启停时回退全局默认目录
+    install_path: String,
+    #[serde(default)]
+    hostname: Option<String>,
+    #[serde(default)]
+    ip: Option<String>,
+}
+
+fn validate_install_path(raw: &str) -> Result<Option<String>, AppError> {
+    let p = raw.trim();
+    if p.is_empty() {
+        return Ok(None);
+    }
+    if !p.starts_with('/') || p.contains("..") || p.len() > 512 {
+        return Err(AppError::bad("安装目录无效：须为绝对路径，且不含 .."));
+    }
+    Ok(Some(p.to_string()))
+}
+
+/// 更新对照表安装路径。非平台安装机也可在关联/同步后手工填写。
+async fn update_install_path(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path((code, host_id)): Path<(String, String)>,
+    Json(body): Json<UpdateInstallPathBody>,
+) -> Result<Json<Value>, AppError> {
+    if !auth.has_permission("monitor:agent") && !auth.has_permission("monitor:operate") {
+        return Err(AppError::forbidden("需要权限: monitor:agent 或 monitor:operate"));
+    }
+    license_routes::require_active_license(&state.db).await?;
+    let code = code.trim();
+    let host_id = host_id.trim();
+    if code.is_empty() || host_id.is_empty() {
+        return Err(AppError::bad("实例或主机无效"));
+    }
+    let path = validate_install_path(&body.install_path)?;
+    let hostname = body
+        .hostname
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    let ip = body
+        .ip
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+
+    let result = sqlx::query(
+        "INSERT INTO zbx_host_links (instance_code, host_id, hostname, ip, install_path, synced_at) \
+         VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
+         ON DUPLICATE KEY UPDATE \
+           install_path = VALUES(install_path), \
+           hostname = IF(VALUES(hostname) <> '', VALUES(hostname), hostname), \
+           ip = IF(VALUES(ip) <> '', VALUES(ip), ip), \
+           synced_at = UTC_TIMESTAMP()",
+    )
+    .bind(code)
+    .bind(host_id)
+    .bind(hostname)
+    .bind(ip)
+    .bind(path.as_deref())
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::internal(format!("更新安装路径失败: {e}")))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::bad("更新安装路径失败"));
+    }
+
+    let row = sqlx::query(
+        "SELECT install_path, hostname, ip, ci_id FROM zbx_host_links \
+         WHERE instance_code = ? AND host_id = ?",
+    )
+    .bind(code)
+    .bind(host_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| AppError::internal(format!("读取对照失败: {e}")))?;
+
+    let saved: Option<String> = row.try_get("install_path").ok().flatten();
+    let detail = json!({
+        "instanceCode": code,
+        "hostId": host_id,
+        "installPath": saved,
+    });
+    audit::log_async(
+        &state.db,
+        &auth,
+        "monitor_install_path_update",
+        "zabbix_host",
+        host_id,
+        Some(&detail),
+        "",
+        "success",
+    )
+    .await;
+
+    Ok(Json(json!({
+        "code": 0,
+        "data": {
+            "hostId": host_id,
+            "hostname": row.try_get::<String, _>("hostname").unwrap_or_default(),
+            "ip": row.try_get::<String, _>("ip").unwrap_or_default(),
+            "ciId": row.try_get::<Option<String>, _>("ci_id").ok().flatten(),
+            "installPath": saved,
+        }
+    })))
 }
 
 async fn instances(
