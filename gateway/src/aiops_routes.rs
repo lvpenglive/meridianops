@@ -104,7 +104,7 @@ async fn aiops_overview(
     State(state): State<Arc<AppState>>,
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    auth::require_permission(&auth, "alert:read")?;
+    auth::require_permission(&auth, "aiops:read")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
     // 并行执行所有统计查询，大幅缩短响应时间
@@ -261,7 +261,7 @@ async fn recommend(
     auth: auth::AuthUser,
     Query(q): Query<RecommendQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    auth::require_permission(&auth, "alert:read")?;
+    auth::require_permission(&auth, "aiops:read")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
     // 提取搜索关键词
@@ -395,7 +395,7 @@ async fn anomalies(
     State(state): State<Arc<AppState>>,
     auth: auth::AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    auth::require_permission(&auth, "alert:read")?;
+    auth::require_permission(&auth, "aiops:read")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
     let db = &state.db;
@@ -623,7 +623,7 @@ async fn root_cause_analysis(
     auth: auth::AuthUser,
     Path(alert_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    auth::require_permission(&auth, "alert:read")?;
+    auth::require_permission(&auth, "aiops:read")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
     // 1) 取目标告警
@@ -953,7 +953,7 @@ async fn llm_diagnose(
     headers: axum::http::HeaderMap,
     Json(req): Json<LlmDiagnoseRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    auth::require_permission(&auth, "alert:read")?;
+    auth::require_permission(&auth, "aiops:read")?;
     crate::license_routes::require_active_license(&state.db).await?;
 
     // 读取 LLM 配置

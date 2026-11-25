@@ -24,13 +24,13 @@ const routes = [
         path: 'overview',
         name: 'Overview',
         component: () => import('../views/overview/OverviewPage.vue'),
-        meta: { title: '态势中心', icon: 'Monitor' }
+        meta: { title: '态势中心', icon: 'Monitor', permission: 'overview:read' }
       },
       {
         path: 'assets',
         name: 'Assets',
         component: () => import('../views/assets/AssetsPage.vue'),
-        meta: { title: '资产管理', icon: 'Service' }
+        meta: { title: '资产管理', icon: 'Service', permission: 'asset:read' }
       },
       {
         path: 'assets/:id',
@@ -78,13 +78,13 @@ const routes = [
         path: 'alerts',
         name: 'Alerts',
         component: () => import('../views/alerts/AlertsPage.vue'),
-        meta: { title: '告警中心', icon: 'BellFilled' }
+        meta: { title: '告警中心', icon: 'BellFilled', permission: 'alert:read' }
       },
       {
         path: 'alerts/screen',
         name: 'AlertsScreen',
         component: () => import('../views/alerts/AlertsScreen.vue'),
-        meta: { title: '告警大屏', icon: 'Monitor', fullscreen: true }
+        meta: { title: '告警大屏', icon: 'Monitor', fullscreen: true, permission: 'alert_screen:read' }
       },
       {
         path: 'notification/channels',
@@ -112,7 +112,7 @@ const routes = [
         path: 'notification/logs',
         name: 'NotificationLogs',
         component: () => import('../views/notification/LogsPage.vue'),
-        meta: { title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' }
+        meta: { title: '通知发送日志', icon: 'Tickets', permission: 'notification_log:read' }
       },
       {
         path: 'logs',
@@ -176,13 +176,13 @@ const routes = [
         path: 'aiops',
         name: 'AIOps',
         component: () => import('../views/aiops/AIOpsPage.vue'),
-        meta: { title: 'AIOps运维', icon: 'Cpu' }
+        meta: { title: 'AIOps运维', icon: 'Cpu', permission: 'aiops:read' }
       },
       {
         path: 'jobs',
         name: 'Jobs',
         component: () => import('../views/jobs/JobsPage.vue'),
-        meta: { title: '作业中心', icon: 'Operation' }
+        meta: { title: '作业中心', icon: 'Operation', permission: 'job:read' }
       },
       {
         path: 'ops-tools',
@@ -230,55 +230,55 @@ const routes = [
         path: 'report',
         name: 'ReportIndex',
         component: () => import('../views/report/ReportIndexPage.vue'),
-        meta: { title: '报表中心', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '报表中心', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/login-security',
         name: 'ReportLoginSecurity',
         component: () => import('../views/report/LoginSecurityReport.vue'),
-        meta: { title: '登录安全分析', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '登录安全分析', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/sensitive-ops',
         name: 'ReportSensitiveOps',
         component: () => import('../views/report/SensitiveOpsReport.vue'),
-        meta: { title: '敏感操作审计', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '敏感操作审计', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/compliance-health',
         name: 'ReportComplianceHealth',
         component: () => import('../views/report/ComplianceHealthReport.vue'),
-        meta: { title: '合规健康度', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '合规健康度', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/asset-category',
         name: 'ReportAssetCategory',
         component: () => import('../views/report/AssetCategoryReport.vue'),
-        meta: { title: '资产分类统计', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '资产分类统计', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/job-trend',
         name: 'ReportJobTrend',
         component: () => import('../views/report/JobRunTrendReport.vue'),
-        meta: { title: '作业执行趋势', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '作业执行趋势', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/job-summary',
         name: 'ReportJobSummary',
         component: () => import('../views/report/JobDefSummaryReport.vue'),
-        meta: { title: '作业执行统计', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '作业执行统计', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/knowledge-stats',
         name: 'ReportKnowledgeStats',
         component: () => import('../views/report/KnowledgeCategoryReport.vue'),
-        meta: { title: '知识库分类统计', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '知识库分类统计', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'report/audit-trend',
         name: 'ReportAuditTrend',
         component: () => import('../views/report/AuditTrendReport.vue'),
-        meta: { title: '审计操作趋势', icon: 'TrendCharts', permission: 'audit:read' }
+        meta: { title: '审计操作趋势', icon: 'TrendCharts', permission: 'report:read' }
       },
       {
         path: 'system/users',

@@ -379,14 +379,15 @@ function collectOpeneds(nodes: MenuNode[], out: string[] = []): string[] {
 
 const allMenuGroups: MenuGroup[] = [
   {
+    // 个人工作台不绑权限：无权限跳转与登录后的兜底落地页
     type: 'sub', title: '工作台', icon: 'HomeFilled', children: [
       { type: 'item', path: '/dashboard', title: '个人工作台', icon: 'HomeFilled' },
     ]
   },
   {
     type: 'sub', title: '运营分析', icon: 'DataAnalysis', children: [
-      { type: 'item', path: '/overview', title: '态势中心', icon: 'Monitor' },
-      { type: 'item', path: '/report', title: '报表中心', icon: 'TrendCharts', permission: 'audit:read' },
+      { type: 'item', path: '/overview', title: '态势中心', icon: 'Monitor', permission: 'overview:read' },
+      { type: 'item', path: '/report', title: '报表中心', icon: 'TrendCharts', permission: 'report:read' },
       { type: 'item', path: '/audit', title: '审计中心', icon: 'Notebook', permission: 'audit:read' },
       { type: 'item', path: '/cost', title: '费用中心', icon: 'Money', planned: true },
     ]
@@ -405,14 +406,14 @@ const allMenuGroups: MenuGroup[] = [
   },
   {
     type: 'sub', title: '监控告警', icon: 'Bell', children: [
-      { type: 'item', path: '/alerts', title: '告警中心', icon: 'BellFilled' },
-      { type: 'item', path: '/alerts/screen', title: '告警大屏', icon: 'Monitor' },
+      { type: 'item', path: '/alerts', title: '告警中心', icon: 'BellFilled', permission: 'alert:read' },
+      { type: 'item', path: '/alerts/screen', title: '告警大屏', icon: 'Monitor', permission: 'alert_screen:read' },
       { type: 'item', path: '/notification/channels', title: '通知通道', icon: 'Message', permission: 'notification:read' },
       { type: 'item', path: '/notification/sms-strategies', title: '通知策略', icon: 'BellFilled', permission: 'sms_strategy:read' },
       { type: 'item', path: '/notification/alert-groups', title: '告警组维护', icon: 'UserFilled', permission: 'alert_group:read' },
-      { type: 'item', path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification:read' },
+      { type: 'item', path: '/notification/logs', title: '通知发送日志', icon: 'Tickets', permission: 'notification_log:read' },
       { type: 'item', path: '/logs', title: '日志中心', icon: 'Document', permission: 'log:read' },
-      { type: 'item', path: '/aiops', title: 'AIOps运维', icon: 'Cpu' },
+      { type: 'item', path: '/aiops', title: 'AIOps运维', icon: 'Cpu', permission: 'aiops:read' },
     ]
   },
   {
@@ -425,7 +426,7 @@ const allMenuGroups: MenuGroup[] = [
   },
   {
     type: 'sub', title: '运维流程', icon: 'Operation', children: [
-      { type: 'item', path: '/jobs', title: '作业中心', icon: 'List' },
+      { type: 'item', path: '/jobs', title: '作业中心', icon: 'List', permission: 'job:read' },
       { type: 'item', path: '/ops-tools', title: '运维工具', icon: 'SetUp', permission: 'ops_tool:read' },
       { type: 'item', path: '/system/credentials', title: 'SSH 凭据', icon: 'Key', permission: 'credential:read' },
       { type: 'item', path: '/tickets', title: '工单系统', icon: 'Tickets', permission: 'ticket:read' },
