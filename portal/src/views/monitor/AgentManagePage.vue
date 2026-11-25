@@ -130,9 +130,9 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="IP / 端口" width="160">
+      <el-table-column label="IP / 端口" min-width="180">
         <template #default="{ row }">
-          {{ row.ip || '—' }}<template v-if="row.port">:{{ row.port }}</template>
+          {{ (row.ips || []).length > 1 ? row.ips.join(' / ') : (row.ip || '—') }}<template v-if="row.port">:{{ row.port }}</template>
         </template>
       </el-table-column>
       <el-table-column label="Agent 状态" width="110">

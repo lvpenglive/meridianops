@@ -738,7 +738,7 @@ pub async fn run_job_ssh_executor(
         if ip.trim().is_empty() {
             results.push(SshExecResult::error(
                 aid.clone(),
-                format!("配置项 {} 缺少管理 IP（attributes.ip / mgmt_ip）", name),
+                format!("配置项 {} 缺少运维/业务 IP（attributes.mgmt_ip / ip）", name),
                 0,
             ));
             continue;

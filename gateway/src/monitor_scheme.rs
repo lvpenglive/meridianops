@@ -358,8 +358,9 @@ async fn register_host(
             body["displayName"] = json!(display_name);
         }
         if !has_interfaces && !has_ip {
+            // 建 Zabbix 接口优先业务 IP，没有再退运维 IP
             let ip = attr_str(&ci.attributes, &["ip", "mgmt_ip"])
-                .ok_or_else(|| AppError::bad("配置项没有管理 IP"))?;
+                .ok_or_else(|| AppError::bad("配置项没有业务/运维 IP"))?;
             body["ip"] = json!(ip);
         }
     }
@@ -994,7 +995,7 @@ pub(crate) async fn start_install(
         let ci = load_ci(state, ci_id).await?;
         ensure_ci_visible(state, auth, &ci).await?;
         if attr_str(&ci.attributes, &["ip", "mgmt_ip"]).is_none() {
-            return Err(AppError::bad(&format!("配置项 {} 没有管理 IP", ci.name)));
+            return Err(AppError::bad(&format!("配置项 {} 没有业务/运维 IP", ci.name)));
         }
     }
     let mut payload = json!({

@@ -106,9 +106,10 @@
           <el-input
             v-else
             v-model="form.attributes[attr.code]"
-            :placeholder="`输入${attr.name}`"
+            :placeholder="attrPlaceholder(attr)"
             clearable
           />
+          <div v-if="attrTip(attr.code)" class="attr-tip">{{ attrTip(attr.code) }}</div>
         </el-form-item>
       </div>
     </el-form>
@@ -187,6 +188,18 @@ const modelLabel = computed(() => {
 function userOptionLabel(u: CmdbUserOption) {
   const name = u.displayName?.trim()
   return name && name !== u.username ? `${name}（${u.username}）` : u.username
+}
+
+function attrPlaceholder(attr: CiModelAttr) {
+  if (attr.code === 'ip') return '业务网地址，建议与 Zabbix 主接口一致'
+  if (attr.code === 'mgmt_ip') return '运维网地址，SSH / 安装 / 启停优先走这里'
+  return `输入${attr.name}`
+}
+
+function attrTip(code: string) {
+  if (code === 'ip') return '双网卡时必填业务面；关联资源会与 Zabbix 全部 Agent IP 匹配'
+  if (code === 'mgmt_ip') return '单网卡可留空（回退业务IP）；有值时 SSH 只走运维IP'
+  return ''
 }
 
 function resetForm() {
@@ -334,5 +347,11 @@ watch(
   font-weight: 600;
   color: var(--el-text-color-secondary);
   margin-bottom: 12px;
+}
+.attr-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
 }
 </style>

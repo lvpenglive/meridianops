@@ -445,14 +445,14 @@ async fn execute_job(
         .map(|_| "?")
         .collect::<Vec<_>>()
         .join(",");
-    // 从 JSON attributes 中尽量推断 IP：key 名为 ip/mgmt_ip/bk_host_innerip 之一
+    // SSH 目标 IP：优先运维 IP(mgmt_ip)，再业务 IP(ip) / bk_host_innerip
     // CAST AS CHAR：MySQL JSON_UNQUOTE 结果类型不稳定，sqlx 直接 decode String 会失败得到空 IP
     let sql_str = format!(
         "SELECT i.id, \
                 i.name, \
                 CAST(COALESCE(\
-                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.ip')), 'null'),\
                     NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.mgmt_ip')), 'null'),\
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.ip')), 'null'),\
                     NULLIF(JSON_UNQUOTE(JSON_EXTRACT(i.attributes, '$.bk_host_innerip')), 'null'),\
                     ''\
                 ) AS CHAR) AS primary_ip, \

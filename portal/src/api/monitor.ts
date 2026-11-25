@@ -45,6 +45,8 @@ export interface MonitorHost {
   /** Zabbix status：0 启用 / 1 禁用 */
   status?: string
   ip: string
+  /** Agent 全部接口 IP（双网卡时多于 1 个） */
+  ips?: string[]
   /** Agent 接口端口（Zabbix host interface） */
   port?: string | null
   /** Agent 通断：以 agent.ping 为准 */

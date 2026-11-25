@@ -225,7 +225,12 @@
         <el-table-column type="selection" width="48" />
         <el-table-column prop="displayName" label="名称" min-width="160" />
         <el-table-column prop="hostname" label="主机名" min-width="140" />
-        <el-table-column prop="ip" label="IP" width="140" />
+        <el-table-column label="IP" min-width="160">
+          <template #default="{ row }">
+            <span v-if="(row.ips || []).length > 1">{{ row.ips.join(' / ') }}</span>
+            <span v-else>{{ row.ip || '—' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="端口" width="90">
           <template #default="{ row }">{{ row.port || '-' }}</template>
         </el-table-column>
@@ -288,7 +293,7 @@
           <div>
             <div class="detail-title">{{ selected.displayName || selected.hostname }}</div>
             <div class="detail-sub">
-              {{ selected.hostname }} · {{ selected.ip || '无 IP' }}{{ selected.port ? `:${selected.port}` : '' }}
+              {{ selected.hostname }} · {{ (selected.ips || []).length ? selected.ips.join(' / ') : (selected.ip || '无 IP') }}{{ selected.port ? `:${selected.port}` : '' }}
             </div>
           </div>
         </div>

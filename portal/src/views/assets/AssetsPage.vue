@@ -448,7 +448,7 @@ function keyAttrs(row: CiInstance): Record<string, string> {
   const labels: Record<string, string> = {
     hostname: '主机名', ip: 'IP', system_code: '编码', system_level: '等级',
     mw_type: '类型', version: '版本', db_type: '类型', instance: '实例',
-    device_name: '设备名', mgmt_ip: '管理IP', os: 'OS',
+    device_name: '设备名', ip: '业务IP', mgmt_ip: '运维IP', os: 'OS',
   }
   for (const [k, v] of Object.entries(attrs)) {
     if (v !== null && v !== '' && v !== undefined && labels[k]) {
