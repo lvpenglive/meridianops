@@ -272,6 +272,11 @@
             <el-tag v-else type="info" size="small">未关联</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click.stop="openHostInZabbix(row)">在 Zabbix 打开</el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <div v-if="instanceCode" class="pager">
         <el-pagination
@@ -293,8 +298,28 @@
           <div>
             <div class="detail-title">{{ selected.displayName || selected.hostname }}</div>
             <div class="detail-sub">
-              {{ selected.hostname }} · {{ (selected.ips || []).length ? selected.ips.join(' / ') : (selected.ip || '无 IP') }}{{ selected.port ? `:${selected.port}` : '' }}
+              {{ selected.hostname }} · {{ (selected.ips && selected.ips.length) ? selected.ips.join(' / ') : (selected.ip || '无 IP') }}{{ selected.port ? `:${selected.port}` : '' }}
             </div>
+          </div>
+          <div class="detail-actions">
+            <el-dropdown
+              v-if="currentFrontendUrl"
+              trigger="click"
+              @command="(k: string) => openHostInZabbix(selected!, k as 'dashboard' | 'problems' | 'edit')"
+            >
+              <el-button type="primary" plain>
+                在 Zabbix 打开
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="dashboard">主机仪表盘</el-dropdown-item>
+                  <el-dropdown-item command="problems">当前问题</el-dropdown-item>
+                  <el-dropdown-item command="edit">主机配置</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-button v-else type="primary" plain @click="openHostInZabbix(selected!)">在 Zabbix 打开</el-button>
           </div>
         </div>
       </template>
@@ -1085,6 +1110,7 @@ import {
   type UpdateMonitorHostInput,
 } from '../../api/monitor'
 import HostAvailabilityCell from './HostAvailabilityCell.vue'
+import { openZabbixHost, type ZabbixHostDeepLinkKind } from '../../utils/zabbixFrontend'
 
 const router = useRouter()
 const route = useRoute()
@@ -1226,6 +1252,25 @@ const schemeBlockedReason = computed(() => {
 
 const instances = ref<MonitorInstance[]>([])
 const instanceCode = ref('')
+const currentFrontendUrl = computed(() => {
+  const inst = instances.value.find((i) => i.code === instanceCode.value)
+  const url = inst?.frontendUrl?.trim()
+  return url || ''
+})
+
+function openHostInZabbix(row: MonitorHost, kind: ZabbixHostDeepLinkKind | string = 'dashboard') {
+  if (!row?.hostId) return
+  if (!currentFrontendUrl.value) {
+    ElMessage.warning('请先在 zabbix-ctl.toml 的该实例下配置 frontend_url（Zabbix 前端根地址）')
+    return
+  }
+  const linkKind: ZabbixHostDeepLinkKind =
+    kind === 'problems' || kind === 'edit' ? kind : 'dashboard'
+  if (!openZabbixHost(currentFrontendUrl.value, row.hostId, linkKind)) {
+    ElMessage.warning('无法打开 Zabbix：缺少前端地址或主机 ID')
+  }
+}
+
 const search = ref('')
 const hostFilter = ref('')
 const groupId = ref('')
@@ -2391,8 +2436,12 @@ async function refreshTask(id: string) {
 }
 .detail-head {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  align-items: center;
+  gap: 12px;
+}
+.detail-actions {
+  flex-shrink: 0;
 }
 .detail-title {
   font-size: 16px;

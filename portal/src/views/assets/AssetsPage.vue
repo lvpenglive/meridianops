@@ -321,7 +321,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadFiles, type UploadInstance } from 'element-plus'
-import { Plus, Search, Refresh, Grid, Monitor, Cpu, Coin, Connection, Upload, UploadFilled, View, Download } from '@element-plus/icons-vue'
+import { Plus, Search, Refresh, Grid, Monitor, Cpu, Coin, Connection, Service, Upload, UploadFilled, View, Download } from '@element-plus/icons-vue'
 import { exportSheetsToExcel, exportToCsv, parseSpreadsheet } from '../../utils/export'
 import {
   listCiModels,
@@ -373,6 +373,7 @@ function modelTagType(id: string): string {
   const code = models.value.find(m => m.id === id)?.code ?? ''
   const map: Record<string, string> = {
     business_system: 'warning',
+    service: '',
     host: 'info',
     middleware: 'success',
     database: 'danger',
@@ -446,9 +447,20 @@ function keyAttrs(row: CiInstance): Record<string, string> {
   const attrs = row.attributes || {}
   const result: Record<string, string> = {}
   const labels: Record<string, string> = {
-    hostname: '主机名', ip: 'IP', system_code: '编码', system_level: '等级',
-    mw_type: '类型', version: '版本', db_type: '类型', instance: '实例',
-    device_name: '设备名', ip: '业务IP', mgmt_ip: '运维IP', os: 'OS',
+    hostname: '主机名',
+    ip: '业务IP',
+    mgmt_ip: '运维IP',
+    system_code: '编码',
+    system_level: '等级',
+    service_code: '服务编码',
+    service_type: '服务类型',
+    deploy_env: '环境',
+    mw_type: '类型',
+    version: '版本',
+    db_type: '类型',
+    instance: '实例',
+    device_name: '设备名',
+    os: 'OS',
   }
   for (const [k, v] of Object.entries(attrs)) {
     if (v !== null && v !== '' && v !== undefined && labels[k]) {
@@ -481,7 +493,7 @@ function ownerText(row: CiInstance): string {
 
 // ---- 图标 ----
 const iconMap: Record<string, any> = {
-  Grid, Monitor, Cpu, Coin, Connection,
+  Grid, Monitor, Cpu, Coin, Connection, Service,
 }
 function iconComp(name: string) {
   return iconMap[name] || Monitor
@@ -489,6 +501,7 @@ function iconComp(name: string) {
 function iconStyle(code: string): Record<string, string> {
   const map: Record<string, string> = {
     business_system: 'linear-gradient(135deg, #f093fb, #f5576c)',
+    service: 'linear-gradient(135deg, #5b86e5, #36d1dc)',
     host: 'linear-gradient(135deg, #4facfe, #00f2fe)',
     middleware: 'linear-gradient(135deg, #43e97b, #38f9d7)',
     database: 'linear-gradient(135deg, #fa709a, #fee140)',

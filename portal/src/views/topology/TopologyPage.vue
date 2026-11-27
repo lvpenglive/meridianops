@@ -4,7 +4,7 @@
       <div class="page-title">
         <el-icon><Share /></el-icon>
         <span>拓扑视图</span>
-        <span class="page-sub">基于 CI 关系的资产依赖图：业务系统 → 主机 → 中间件 → 数据库</span>
+        <span class="page-sub">基于 CI 关系的资产依赖图：业务系统 → 服务 → 主机 → 中间件 / 数据库</span>
       </div>
       <div class="header-actions">
         <el-select
@@ -111,6 +111,7 @@ const chartHeight = ref(560)
 // 模型分类（颜色 + 名称），按 modelCode 映射
 const modelColorMap: Record<string, string> = {
   business_system: '#f5576c',
+  service: '#5b86e5',
   host: '#4facfe',
   middleware: '#43e97b',
   database: '#fa709a',

@@ -28,6 +28,20 @@
       </div>
       <div class="header-right">
         <el-button
+          v-if="hasPermission('asset:update') && modelCode === 'business_system'"
+          type="success"
+          plain
+          :icon="Plus"
+          @click="openCreateService"
+        >新建下属服务</el-button>
+        <el-button
+          v-if="hasPermission('asset:update') && modelCode === 'service'"
+          type="success"
+          plain
+          :icon="Plus"
+          @click="openLinkHost"
+        >关联主机</el-button>
+        <el-button
           v-if="hasPermission('asset:update')"
           type="primary"
           :icon="Edit"
@@ -114,13 +128,17 @@
         <!-- 关系 -->
         <el-tab-pane :label="`关系（${relations.length}）`" name="relations">
           <div class="tab-toolbar">
-            <span class="tab-tip">该资产的所有依赖关系（作为源或目标）</span>
+            <span class="tab-tip">
+              <template v-if="modelCode === 'business_system'">建议：业务系统「包含」应用服务；服务再挂主机 / 中间件</template>
+              <template v-else-if="modelCode === 'service'">建议：服务「运行于」主机；「依赖」中间件或数据库</template>
+              <template v-else>该资产的所有依赖关系（作为源或目标）</template>
+            </span>
             <el-button
               v-if="hasPermission('asset:update')"
               size="small"
               type="primary"
               :icon="Plus"
-              @click="relationDialogVisible = true"
+              @click="openAddRelation()"
             >添加关系</el-button>
           </div>
           <el-table :data="relations" v-loading="loadingRelations" stripe size="default">
@@ -260,6 +278,14 @@
       @saved="fetchInstance"
     />
 
+    <AssetFormDialog
+      v-model="createServiceVisible"
+      mode="create"
+      :models="serviceModelsForForm"
+      :default-model-id="serviceModelId"
+      @saved="onServiceCreated"
+    />
+
     <!-- 添加关系对话框 -->
     <el-dialog v-model="relationDialogVisible" title="添加关系" width="520px">
       <el-form :model="relForm" label-width="90px">
@@ -311,10 +337,11 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Edit, Plus, Refresh, Monitor, Cpu, Coin, Connection, Grid } from '@element-plus/icons-vue'
+import { ArrowLeft, Edit, Plus, Refresh, Monitor, Cpu, Coin, Connection, Grid, Service } from '@element-plus/icons-vue'
 import {
   getCiInstance,
   getCiModel,
+  listCiModels,
   listCiRelations,
   createCiRelation,
   deleteCiRelation,
@@ -340,15 +367,31 @@ const loading = ref(true)
 const instance = ref<CiInstance | null>(null)
 const modelAttrs = ref<CiModelAttr[]>([])
 const modelName = ref('')
+const modelCode = ref('')
+const modelIcon = ref('')
 
 const activeTab = ref('info')
+const createServiceVisible = ref(false)
+const serviceModelId = ref('')
+const allModels = ref<CiModel[]>([])
+
+const serviceModelsForForm = computed(() =>
+  allModels.value.filter((m) => m.code === 'service' && m.enabled),
+)
 
 // 模型图标
-const iconMap: Record<string, any> = { Monitor, Cpu, Coin, Connection, Grid }
-const iconComp = computed(() => iconMap['Monitor'])
+const iconMap: Record<string, any> = { Monitor, Cpu, Coin, Connection, Grid, Service }
+const iconComp = computed(() => iconMap[modelIcon.value] || iconMap[modelCode.value === 'service' ? 'Service' : 'Monitor'] || Monitor)
 const iconStyle = computed(() => {
-  // 通过模型 code 匹配颜色（instance 没有 modelCode，需从属性推断；这里用 modelAttrs 的 modelId 无法直接拿 code，简化用默认色）
-  return { background: 'linear-gradient(135deg, #4facfe, #00f2fe)' }
+  const map: Record<string, string> = {
+    business_system: 'linear-gradient(135deg, #f093fb, #f5576c)',
+    service: 'linear-gradient(135deg, #5b86e5, #36d1dc)',
+    host: 'linear-gradient(135deg, #4facfe, #00f2fe)',
+    middleware: 'linear-gradient(135deg, #43e97b, #38f9d7)',
+    database: 'linear-gradient(135deg, #fa709a, #fee140)',
+    network_device: 'linear-gradient(135deg, #a8edea, #fed6e3)',
+  }
+  return { background: map[modelCode.value] || 'linear-gradient(135deg, #667eea, #764ba2)' }
 })
 
 // ---- 基本信息 ----
@@ -408,17 +451,57 @@ async function fetchInstance() {
   try {
     instance.value = await getCiInstance(instanceId.value)
     if (instance.value) {
-      // 加载模型属性定义
       try {
         const detail = await getCiModel(instance.value.modelId)
         modelAttrs.value = detail.attributes
         modelName.value = detail.model.name
+        modelCode.value = detail.model.code || ''
+        modelIcon.value = detail.model.icon || ''
       } catch { /* ignore */ }
     }
   } catch (e: any) {
     ElMessage.error(e?.message || '加载资产失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function ensureModels() {
+  if (allModels.value.length) return
+  try {
+    allModels.value = await listCiModels()
+  } catch {
+    allModels.value = []
+  }
+  const svc = allModels.value.find((m) => m.code === 'service' && m.enabled)
+  serviceModelId.value = svc?.id || ''
+}
+
+async function openCreateService() {
+  await ensureModels()
+  if (!serviceModelId.value) {
+    ElMessage.warning('未找到「应用服务」模型，请先执行 CMDB 服务化迁移')
+    return
+  }
+  createServiceVisible.value = true
+}
+
+async function onServiceCreated(created?: CiInstance) {
+  await fetchInstance()
+  if (!created?.id || !instance.value) return
+  try {
+    await createCiRelation({
+      sourceId: instance.value.id,
+      targetId: created.id,
+      relationType: 'contains',
+    })
+    ElMessage.success('已自动建立「业务系统 → 包含 → 服务」关系')
+    loadedTabs.value.add('relations')
+    await fetchRelations()
+    activeTab.value = 'relations'
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '自动建关系失败，请在关系页手工添加 contains'
+    ElMessage.warning(msg)
   }
 }
 
@@ -549,6 +632,29 @@ const relForm = reactive({
   relationType: 'depends_on',
 })
 
+function openAddRelation(preset?: { relationType?: string; direction?: 'out' | 'in' }) {
+  relForm.direction = preset?.direction || 'out'
+  relForm.peerId = ''
+  if (preset?.relationType) {
+    relForm.relationType = preset.relationType
+  } else if (modelCode.value === 'service') {
+    relForm.relationType = 'runs_on'
+  } else if (modelCode.value === 'business_system') {
+    relForm.relationType = 'contains'
+  } else {
+    const enabled = relationTypes.value.filter((t) => t.enabled)
+    relForm.relationType = enabled.length ? enabled[0].code : 'depends_on'
+  }
+  relationDialogVisible.value = true
+}
+
+function openLinkHost() {
+  openAddRelation({ relationType: 'runs_on', direction: 'out' })
+  activeTab.value = 'relations'
+  loadedTabs.value.add('relations')
+  void fetchRelations()
+}
+
 async function searchAssets(query: string) {
   if (!query) {
     assetOptions.value = []
@@ -640,6 +746,7 @@ function formatTime(t: string): string {
 
 onMounted(async () => {
   await dicts.load('cmdb_action', 'sync_source_type')
+  void ensureModels()
   fetchInstance()
   fetchRelationTypes()
   fetchRelations()

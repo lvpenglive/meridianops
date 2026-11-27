@@ -5,6 +5,8 @@ export interface MonitorInstance {
   name: string
   tokenConfigured: boolean
   protected?: boolean
+  /** Zabbix 前端根地址；未配置时无法深链打开 */
+  frontendUrl?: string | null
 }
 
 export interface MonitorGroupRef {

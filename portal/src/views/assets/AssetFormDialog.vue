@@ -153,7 +153,8 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   'update:modelValue': [boolean]
-  saved: []
+  /** 创建成功时带回新实例，便于父页自动建关系 */
+  saved: [instance?: CiInstance]
 }>()
 
 const formRef = ref<FormInstance>()
@@ -297,8 +298,10 @@ async function onSubmit() {
       if (props.mode === 'edit') {
         await updateCiInstance(form.id, payload)
         ElMessage.success('更新成功')
+        emit('update:modelValue', false)
+        emit('saved')
       } else {
-        const created = await createCiInstance({
+        let created = await createCiInstance({
           modelId: form.modelId,
           name: payload.name,
           status: payload.status,
@@ -307,7 +310,7 @@ async function onSubmit() {
           attributes: payload.attributes,
         })
         if ((form.sshCredentialId != null || form.sshExecMode === 'direct') && created?.id) {
-          await updateCiInstance(created.id, {
+          created = await updateCiInstance(created.id, {
             name: payload.name,
             status: payload.status,
             tags: payload.tags,
@@ -318,9 +321,9 @@ async function onSubmit() {
           })
         }
         ElMessage.success('创建成功')
+        emit('update:modelValue', false)
+        emit('saved', created)
       }
-      emit('update:modelValue', false)
-      emit('saved')
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '操作失败'
       ElMessage.error(msg)

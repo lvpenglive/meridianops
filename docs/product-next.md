@@ -34,7 +34,7 @@
 
 ## Next（约 2～4 周）— CMDB 服务化 / 云抽象
 
-- [ ] 新增或扩展 CI 模型：`service`（或应用）挂在业务系统下
+- [x] 新增或扩展 CI 模型：`service`（应用服务）挂在业务系统下（`contains` / `runs_on` / `depends_on`）
 - [ ] 云公共字段约定：`provider`、`region`、`external_id`、`cloud_account`（可落在 host/database 扩展属性或独立抽象模型）
 - [ ] 按需增加轻量模型：`cloud_rdb` / `cloud_lb` / `cloud_object_storage` / `vpc`（或统一 `cloud_resource` + `resource_type`）
 - [ ] 告警/拓扑优先展示「服务」关联，主机为下层
