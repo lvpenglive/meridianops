@@ -41,6 +41,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/monitor/instances/:code/hosts/:host_id/install-path",
             put(update_install_path),
         )
+        .route(
+            "/api/monitor/instances/:code/hosts/:host_id/ci-link",
+            put(update_ci_link),
+        )
         .route("/api/monitor/instances/:code/sync", post(sync_hosts))
         .route("/api/monitor/instances/:code/governance", get(governance))
         .route("/api/monitor/instances/:code/proxies", get(proxies))
@@ -161,6 +165,106 @@ async fn update_install_path(
             "ip": row.try_get::<String, _>("ip").unwrap_or_default(),
             "ciId": row.try_get::<Option<String>, _>("ci_id").ok().flatten(),
             "installPath": saved,
+        }
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCiLinkBody {
+    /// 空字符串表示解除关联
+    ci_id: String,
+    #[serde(default)]
+    hostname: Option<String>,
+    #[serde(default)]
+    ip: Option<String>,
+}
+
+/// 手工绑定/改绑/解除主机与配置项对照。同步不会覆盖已有关联，冲突需走此接口。
+async fn update_ci_link(
+    State(state): State<Arc<AppState>>,
+    auth: auth::AuthUser,
+    Path((code, host_id)): Path<(String, String)>,
+    Json(body): Json<UpdateCiLinkBody>,
+) -> Result<Json<Value>, AppError> {
+    if !auth.has_permission("monitor:operate") && !auth.has_permission("monitor:agent") {
+        return Err(AppError::forbidden("需要权限: monitor:operate 或 monitor:agent"));
+    }
+    license_routes::require_active_license(&state.db).await?;
+    let code = code.trim();
+    let host_id = host_id.trim();
+    if code.is_empty() || host_id.is_empty() {
+        return Err(AppError::bad("实例或主机无效"));
+    }
+    let ci_raw = body.ci_id.trim();
+    let ci_id: Option<String> = if ci_raw.is_empty() {
+        None
+    } else {
+        let exists: Option<String> =
+            sqlx::query_scalar("SELECT id FROM ci_instances WHERE id = ?")
+                .bind(ci_raw)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| AppError::internal(format!("查询配置项失败: {e}")))?;
+        if exists.is_none() {
+            return Err(AppError::bad("配置项不存在"));
+        }
+        Some(ci_raw.to_string())
+    };
+    let hostname = body
+        .hostname
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    let ip = body
+        .ip
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+
+    sqlx::query(
+        "INSERT INTO zbx_host_links (instance_code, host_id, hostname, ip, ci_id, synced_at) \
+         VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP()) \
+         ON DUPLICATE KEY UPDATE \
+           ci_id = VALUES(ci_id), \
+           hostname = IF(VALUES(hostname) <> '', VALUES(hostname), hostname), \
+           ip = IF(VALUES(ip) <> '', VALUES(ip), ip), \
+           synced_at = UTC_TIMESTAMP()",
+    )
+    .bind(code)
+    .bind(host_id)
+    .bind(hostname)
+    .bind(ip)
+    .bind(ci_id.as_deref())
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::internal(format!("更新关联失败: {e}")))?;
+
+    let detail = json!({
+        "instanceCode": code,
+        "hostId": host_id,
+        "ciId": ci_id,
+    });
+    audit::log_async(
+        &state.db,
+        &auth,
+        "monitor_ci_link_update",
+        "zabbix_host",
+        host_id,
+        Some(&detail),
+        "",
+        "success",
+    )
+    .await;
+
+    Ok(Json(json!({
+        "code": 0,
+        "data": {
+            "hostId": host_id,
+            "ciId": ci_id,
+            "cmdbLinked": ci_id.is_some(),
         }
     })))
 }

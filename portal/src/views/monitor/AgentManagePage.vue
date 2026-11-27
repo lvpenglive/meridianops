@@ -383,7 +383,11 @@ async function doSync() {
   syncing.value = true
   try {
     const res = await syncHosts(instanceCode.value)
-    ElMessage.success(`已同步 ${res.synced} 台主机对照（含 Proxy 通道）`)
+    const conflicts = res.conflictCount ?? res.conflicts?.length ?? 0
+    ElMessage.success(
+      `已同步 ${res.synced} 台：新关联 ${res.linked ?? 0}，保留 ${res.preserved ?? 0}` +
+        (conflicts ? `，冲突 ${conflicts}（请到名册处理）` : ''),
+    )
     await loadHosts()
   } catch {
     /* request 已提示 */

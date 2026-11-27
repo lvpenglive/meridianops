@@ -328,6 +328,13 @@
           >已关联</el-tag>
           <el-tag v-else-if="selected.cmdbLinked" type="success" size="small">已关联</el-tag>
           <el-tag v-else type="info" size="small">未关联</el-tag>
+          <el-button
+            v-if="canEditInstallPath"
+            link
+            type="primary"
+            size="small"
+            @click="openBindCi(selected)"
+          >{{ selected.cmdbLinked ? '改绑' : '绑定' }}</el-button>
         </div>
         <div class="status-item">
           <span class="status-label">安装目录</span>
@@ -971,6 +978,53 @@
         <el-button type="primary" :loading="massSaving" @click="submitMassUpdate">更新</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="conflictVisible"
+      title="关联冲突（未自动绑定）"
+      width="780px"
+      destroy-on-close
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="以下主机的 IP 命中多台配置项，已跳过自动关联。请选择正确配置项后绑定；已有关联的主机不会被同步改绑。"
+        class="scheme-alert"
+      />
+      <el-table :data="syncConflicts" size="small" max-height="420">
+        <el-table-column prop="hostname" label="主机" min-width="140" />
+        <el-table-column prop="ip" label="主 IP" width="130" />
+        <el-table-column label="候选配置项" min-width="260">
+          <template #default="{ row }">
+            <el-select v-model="conflictPick[row.hostId]" filterable placeholder="选择配置项" style="width: 100%">
+              <el-option
+                v-for="c in row.candidates"
+                :key="c.ciId"
+                :label="`${c.name}（${c.matchedIp}）`"
+                :value="c.ciId"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="100" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              :disabled="!conflictPick[row.hostId]"
+              :loading="conflictBinding === row.hostId"
+              @click="bindConflictCi(row)"
+            >
+              绑定
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button type="primary" @click="conflictVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1009,7 +1063,9 @@ import {
   syncHosts,
   getAgentInstallDefaults,
   updateHostInstallPath,
+  updateHostCiLink,
   type AgentPackage,
+  type SyncCiConflict,
   type CreateMonitorHostInput,
   type GovernanceData,
   type HostItem,
@@ -1469,13 +1525,99 @@ function goAsset(ciId: string) {
   router.push(`/assets/${ciId}`)
 }
 
+const conflictVisible = ref(false)
+const syncConflicts = ref<SyncCiConflict[]>([])
+const conflictPick = reactive<Record<string, string>>({})
+const conflictBinding = ref('')
+
+function showSyncResult(res: {
+  synced: number
+  linked?: number
+  preserved?: number
+  conflictCount?: number
+  conflicts?: SyncCiConflict[]
+}, scoped: boolean) {
+  const linked = res.linked ?? 0
+  const preserved = res.preserved ?? 0
+  const conflicts = res.conflicts ?? []
+  const parts = [
+    `对照 ${res.synced} 台`,
+    `新关联 ${linked}`,
+    `保留已有 ${preserved}`,
+  ]
+  if (conflicts.length) {
+    parts.push(`冲突 ${conflicts.length}`)
+  }
+  ElMessage.success(`${scoped ? '勾选同步' : '全量同步'}完成：${parts.join('，')}`)
+  if (conflicts.length) {
+    syncConflicts.value = conflicts
+    for (const c of conflicts) {
+      conflictPick[c.hostId] = c.candidates.length === 1 ? c.candidates[0].ciId : ''
+    }
+    conflictVisible.value = true
+  }
+}
+
+async function bindConflictCi(row: SyncCiConflict) {
+  if (!instanceCode.value) return
+  const ciId = conflictPick[row.hostId]
+  if (!ciId) return
+  conflictBinding.value = row.hostId
+  try {
+    await updateHostCiLink(instanceCode.value, row.hostId, {
+      ciId,
+      hostname: row.hostname,
+      ip: row.ip,
+    })
+    ElMessage.success(`已绑定 ${row.hostname || row.hostId}`)
+    syncConflicts.value = syncConflicts.value.filter((c) => c.hostId !== row.hostId)
+    if (!syncConflicts.value.length) conflictVisible.value = false
+    await loadHosts()
+  } catch {
+    // 拦截器已提示
+  } finally {
+    conflictBinding.value = ''
+  }
+}
+
+async function openBindCi(row: MonitorHost) {
+  if (!instanceCode.value || !row?.hostId) return
+  try {
+    const page = await listCiInstances({ page: 1, pageSize: 200, keyword: row.ip || row.hostname || '' })
+    const items = page.items || []
+    if (!items.length) {
+      ElMessage.warning('未找到可绑定的配置项，请先在资产中维护业务IP/运维IP')
+      return
+    }
+    syncConflicts.value = [{
+      hostId: row.hostId,
+      hostname: row.hostname,
+      ip: row.ip || '',
+      matchIps: row.ips || [],
+      candidates: items.slice(0, 50).map((it) => {
+        const biz = String(it.attributes?.ip ?? '')
+        const ops = String(it.attributes?.mgmt_ip ?? '')
+        return {
+          ciId: it.id,
+          name: it.name,
+          matchedIp: biz || ops || '',
+        }
+      }),
+    }]
+    conflictPick[row.hostId] = row.ciId || ''
+    conflictVisible.value = true
+  } catch {
+    // 拦截器已提示
+  }
+}
+
 async function doSync() {
   if (!instanceCode.value) return
   const ids = selectedIds.value.filter(Boolean)
   if (!ids.length) {
     try {
       await ElMessageBox.confirm(
-        '未勾选主机时将同步本实例全部启用主机并按 IP 关联配置项，主机量大时可能较慢。建议先勾选需要关联的主机。是否继续全量同步？',
+        '未勾选主机时将同步本实例全部启用主机并按 IP 关联配置项。已有关联不会被改绑；IP 命中多台配置项时跳过并列出冲突。主机量大时可能较慢。是否继续全量同步？',
         '全量关联资源',
         { type: 'warning', confirmButtonText: '继续全量', cancelButtonText: '取消' },
       )
@@ -1486,11 +1628,7 @@ async function doSync() {
   syncing.value = true
   try {
     const res = await syncHosts(instanceCode.value, ids.length ? ids : undefined)
-    ElMessage.success(
-      ids.length
-        ? `已按 IP 关联勾选的 ${res.synced} 台主机与配置项`
-        : `已按 IP 关联 ${res.synced} 台主机与配置项（全量）`,
-    )
+    showSyncResult(res, !!ids.length)
     await loadHosts()
   } finally {
     syncing.value = false

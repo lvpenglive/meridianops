@@ -220,13 +220,46 @@ export function hostTriggers(code: string, hostId: string): Promise<HostTrigger[
   return request.get(`/monitor/instances/${code}/hosts/${hostId}/triggers`)
 }
 
-export function syncHosts(code: string, hostIds?: string[]): Promise<{ synced: number }> {
+export interface SyncCiCandidate {
+  ciId: string
+  name: string
+  matchedIp: string
+}
+
+export interface SyncCiConflict {
+  hostId: string
+  hostname: string
+  ip: string
+  matchIps?: string[]
+  candidates: SyncCiCandidate[]
+}
+
+export interface SyncHostsResult {
+  synced: number
+  /** 本次新自动关联数 */
+  linked?: number
+  /** 已有关联被保留、未改绑 */
+  preserved?: number
+  conflictCount?: number
+  conflicts?: SyncCiConflict[]
+}
+
+export function syncHosts(code: string, hostIds?: string[]): Promise<SyncHostsResult> {
   // 全量对照可能较慢；传 hostIds 时只同步勾选主机
   return request.post(
     `/monitor/instances/${code}/sync`,
     hostIds?.length ? { hostIds } : {},
     { timeout: 300000 },
   )
+}
+
+/** 手工绑定/改绑/解除主机与配置项（空 ciId 解除）。同步不会覆盖已有关联。 */
+export function updateHostCiLink(
+  code: string,
+  hostId: string,
+  data: { ciId: string; hostname?: string; ip?: string },
+): Promise<{ hostId: string; ciId?: string | null; cmdbLinked: boolean }> {
+  return request.put(`/monitor/instances/${code}/hosts/${hostId}/ci-link`, data)
 }
 
 export interface GovernanceProxy {
